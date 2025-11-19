@@ -162,9 +162,9 @@ services:
       - "4665:4665/udp"
       - "4672:4672/udp"
     volumes:
-      - ./config:/home/amule/.aMule
-      - ./incoming:/incoming
-      - ./temp:/temp
+      - ./data/config:/home/amule/.aMule
+      - ./data/incoming:/incoming
+      - ./data/temp:/temp
     environment:
       - GUI_PWD=your_password
     restart: unless-stopped

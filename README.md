@@ -57,11 +57,11 @@ AMULE_PASSWORD=your_ec_password
 
 3. **Build and run**
 ```bash
-# With included aMule container
-docker-compose up -d
-
-# OR, with aMule running on your host machine
+# if you have an aMule istance already running on your host
 docker-compose -f docker-compose.standalone.yml up -d
+
+# OR, if you want to use the included aMule container
+docker-compose up -d
 ```
 
 The web interface will be available at `http://localhost:4000`

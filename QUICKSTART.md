@@ -29,11 +29,11 @@ AMULE_PASSWORD=your_password
 
 3. **Start**
 ```bash
-# With included aMule container
-docker-compose up -d
-
-# OR, if you have aMule elsewhere
+# if you have an aMule istance already running on your host
 docker-compose -f docker-compose.standalone.yml up -d
+
+# OR, if you want to use the included aMule container
+docker-compose up -d
 ```
 
 4. **Access**

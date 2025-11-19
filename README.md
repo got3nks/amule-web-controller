@@ -49,12 +49,11 @@ Edit `.env` and configure your aMule connection:
 ```env
 NODE_ENV=production
 PORT=4000
-AMULE_HOST=amule  # Use 'amule' for included container, 'host.docker.internal' to connect to aMule on your host machine (standalone mode)
 AMULE_PORT=4712
 AMULE_PASSWORD=your_ec_password
 ```
 
-**Note:** If using the standalone configuration (aMule on your host), `host.docker.internal` is already set as the default.
+**Note:** You should not set the `AMULE_HOST` variable as it's already configured in the Docker Compose files.
 
 3. **Build and run**
 ```bash

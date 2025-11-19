@@ -39,5 +39,5 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./logs:/usr/src/app/logs
+      - ./logs:/usr/src/app/server/logs
     restart: unless-stopped

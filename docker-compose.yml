@@ -16,7 +16,7 @@ services:
       - PUID=1000
       - PGID=1000
       - TZ=Europe/Rome
-      - WEBUI_PWD=${AMULE_PASSWORD:-admin}
+      - GUI_PWD=${AMULE_PASSWORD:-admin}
     stop_grace_period: 30s
     restart: unless-stopped
 

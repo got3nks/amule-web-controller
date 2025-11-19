@@ -21,7 +21,6 @@ cp .env.example .env
 ```bash
 # Use 'amule' if using docker-compose.yml with included aMule container
 # Use 'host.docker.internal' to connect to aMule on your host machine (standalone mode)
-# Use IP address or hostname for remote aMule instances
 AMULE_HOST=host.docker.internal
 AMULE_PORT=4712
 AMULE_PASSWORD=your_password

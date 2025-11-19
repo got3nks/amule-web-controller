@@ -49,7 +49,7 @@ Edit `.env` and configure your aMule connection:
 ```env
 NODE_ENV=production
 PORT=4000
-AMULE_HOST=amule  # Use 'amule' for included container, 'host.docker.internal' for host aMule
+AMULE_HOST=amule  # Use 'amule' for included container, 'host.docker.internal' to connect to aMule on your host machine (standalone mode)
 AMULE_PORT=4712
 AMULE_PASSWORD=your_ec_password
 ```

@@ -133,56 +133,6 @@ The web interface will be available at `http://localhost:4000`
 | `AMULE_PASSWORD` | `admin` | aMule EC password |
 | `NODE_ENV` | `development` | Node environment |
 
-## Docker Compose Examples
-
-### Basic Setup
-```yaml
-version: '3.8'
-services:
-  amule-web:
-    image: amule-web-controller:latest
-    build: .
-    ports:
-      - "4000:4000"
-    environment:
-      - AMULE_HOST=your-amule-host
-      - AMULE_PORT=4712
-      - AMULE_PASSWORD=your_password
-    restart: unless-stopped
-```
-
-### With aMule Container
-```yaml
-version: '3.8'
-services:
-  amule:
-    image: ngosang/amule:latest
-    ports:
-      - "4662:4662"
-      - "4665:4665/udp"
-      - "4672:4672/udp"
-    volumes:
-      - ./data/config:/home/amule/.aMule
-      - ./data/incoming:/incoming
-      - ./data/temp:/temp
-    environment:
-      - GUI_PWD=your_password
-    restart: unless-stopped
-
-  amule-web:
-    image: amule-web-controller:latest
-    build: .
-    depends_on:
-      - amule
-    ports:
-      - "4000:4000"
-    environment:
-      - AMULE_HOST=amule
-      - AMULE_PORT=4712
-      - AMULE_PASSWORD=your_password
-    restart: unless-stopped
-```
-
 ## Development
 
 ### Frontend Development

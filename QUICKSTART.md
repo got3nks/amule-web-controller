@@ -67,6 +67,7 @@ npm install && npm run build:css
 export AMULE_HOST=127.0.0.1
 export AMULE_PORT=4712
 export AMULE_PASSWORD=your_password
+export PORT=4000
 
 # Start
 node server/server.js

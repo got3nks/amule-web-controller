@@ -166,7 +166,7 @@ services:
       - ./incoming:/incoming
       - ./temp:/temp
     environment:
-      - WEBUI_PWD=your_password
+      - GUI_PWD=your_password
     restart: unless-stopped
 
   amule-web:

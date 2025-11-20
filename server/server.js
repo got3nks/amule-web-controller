@@ -3,7 +3,7 @@ const http = require('http');
 const WebSocket = require('ws');
 const path = require('path');
 const fs = require('fs');
-const AmuleClient = require('amule-ec-node');
+const AmuleClient = require('./AmuleClient');
 
 // Configuration
 const PORT = process.env.PORT || 4000;
@@ -108,9 +108,13 @@ wss.on('connection', (ws, req) => {
     const timestamp = new Date().toISOString();
     const logParts = [];
     const consoleParts = [];
-
     args.forEach(arg => {
-      if (typeof arg === 'object') {
+      if (arg instanceof Error) {
+        // Special handling for Error objects
+        const errorString = `${arg.name}: ${arg.message}\n${arg.stack}`;
+        consoleParts.push(errorString);
+        logParts.push(`${arg.name}: ${arg.message}`);
+      } else if (typeof arg === 'object' && arg !== null) {
         // Console: full object as JSON in one line
         try {
           consoleParts.push(JSON.stringify(arg));
@@ -124,10 +128,8 @@ wss.on('connection', (ws, req) => {
         consoleParts.push(String(arg));
       }
     });
-
     const logMessage = `[${timestamp} (${username}, ${nickname})] ${logParts.join(' ')}`;
     const consoleMessage = `[${timestamp} (${username}, ${nickname})] ${consoleParts.join(' ')}`;
-
     console.log(consoleMessage);
     logStream.write(logMessage + '\n');
   }
@@ -148,6 +150,8 @@ wss.on('connection', (ws, req) => {
         case 'getPreviousSearchResults': await handleGetPreviousSearchResults(ws); break;
         case 'getDownloads': await handleGetDownloads(ws); break;
         case 'getShared': await handleGetShared(ws); break;
+        case 'getServersList': await handleGetServersList(ws); break;
+        case 'serverDoAction': await handleServerDoAction(ws, data); break;
         case 'getStats': await handleGetStats(ws); break;
         case 'getStatsTree': await handleGetStatsTree(ws); break;
         case 'getServerInfo': await handleGetServerInfo(ws); break;
@@ -222,6 +226,49 @@ wss.on('connection', (ws, req) => {
     } catch (err) {
       clientLog('Get shared error:', err);
       ws.send(JSON.stringify({ type: 'error', message: 'Failed to fetch shared files: ' + err.message }));
+    }
+  }
+
+  async function handleGetServersList(ws) {
+    try {
+      const servers = await enqueueAmuleCall(() => amuleClient.getServerList());
+      ws.send(JSON.stringify({ type: 'servers-update', data: servers }));
+      clientLog('Servers list fetched successfully');
+    } catch (err) {
+      clientLog('Get servers list error:', err);
+      ws.send(JSON.stringify({ type: 'error', message: 'Failed to fetch servers list: ' + err.message }));
+    }
+  }
+
+  async function handleServerDoAction(ws, data) {
+    try {
+      const { ip, port, serverAction } = data;
+      if (!ip || !port || !serverAction) {
+        throw new Error('Missing required parameters: ip, port, or serverAction');
+      }
+
+      let success;
+      
+      switch (serverAction) {
+        case 'connect':
+          success = await enqueueAmuleCall(() => amuleClient.connectServer(ip, port));
+          break;
+        case 'disconnect':
+          success = await enqueueAmuleCall(() => amuleClient.disconnectServer(ip, port));
+          break;
+        case 'remove':
+          success = await enqueueAmuleCall(() => amuleClient.removeServer(ip, port));
+          break;
+        default:
+          throw new Error(`Unknown action: ${serverAction}`);
+      }
+
+      ws.send(JSON.stringify({ type: 'server-action', data: success }));
+      clientLog(`Action ${serverAction} on server ${ip}:${port} ${success ? 'completed successfully' : 'failed'}`);
+    } catch (err) {
+      console.dir(err);
+      clientLog('Server action error:', err);
+      ws.send(JSON.stringify({ type: 'error', message: `Failed to perform action on server: ${err.message}` }));
     }
   }
 

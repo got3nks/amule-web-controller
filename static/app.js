@@ -24,7 +24,12 @@ const Icon = ({ name, size = 20, className = '' }) => {
     sun: '<circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>',
     moon: '<path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>',
     chartBar: '<path d="M3 3v18h18M7 16V9m4 7V6m4 10v-3m4 3V9"/>',
-    fileText: '<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8m8 4H8m2-8H8"/>'
+    fileText: '<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8m8 4H8m2-8H8"/>',
+    server: '<rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>',
+    plugConnect: '<path d="M12 2v4m0 0a4 4 0 014 4v4m-4-8a4 4 0 00-4 4v4m8 4v4m-8-4v4m4-4a4 4 0 01-4 4m4-4a4 4 0 004 4"/>',
+    disconnect: '<path d="M18.36 6.64a9 9 0 11-12.73 0M12 2v10"/>',
+    check: '<polyline points="20 6 9 17 4 12"/>',
+    power: '<path d="M18.36 6.64a9 9 0 11-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>'
   };
   
   return h('svg', {
@@ -45,13 +50,13 @@ const Icon = ({ name, size = 20, className = '' }) => {
 const NavButton = React.memo(({ icon, label, view, active, onNavigate }) => {
   return h('button', {
     onClick: () => onNavigate(view),
-    className: `flex items-center gap-2 sm:gap-2.5 px-3 sm:px-3 py-2 sm:py-2.5 rounded-lg transition-all text-sm sm:text-base font-medium ${
+    className: `flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-3 rounded-lg transition-all text-base sm:text-lg font-medium ${
       active
         ? 'bg-blue-600 text-white shadow-lg'
         : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
     }`
   },
-    h(Icon, { name: icon, size: 18 }),
+    h(Icon, { name: icon, size: 20 }),
     h('span', null, label)
   );
 });
@@ -66,6 +71,8 @@ const AmuleWebApp = () => {
   const [downloads, setDownloads] = useState([]);
   const [shared, setShared] = useState([]);
   const [uploads, setUploads] = useState([]);
+  const [servers, setServers] = useState([]);
+  const [downloadedFiles, setDownloadedFiles] = useState(new Set());
   const [stats, setStats] = useState(null);
   const [logs, setLogs] = useState('');
   const [serverInfo, setServerInfo] = useState('');
@@ -76,12 +83,13 @@ const AmuleWebApp = () => {
     'search-results': { sortBy: 'sourceCount', sortDirection: 'desc' },
     'downloads': { sortBy: 'EC_TAG_PARTFILE_NAME', sortDirection: 'asc' },
     'uploads': { sortBy: 'EC_TAG_PARTFILE_NAME', sortDirection: 'asc' },
-    'shared': { sortBy: 'transferred', sortDirection: 'desc' }
+    'shared': { sortBy: 'transferred', sortDirection: 'desc' },
+    'servers': { sortBy: 'EC_TAG_SERVER_USERS', sortDirection: 'desc' }
   });
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [error, setError] = useState('');
+  const [deleteModal, setDeleteModal] = useState({ show: false, fileHash: null, fileName: '', isServer: false, serverAddress: null });
   const hasUserInteracted = useRef(false);
   const [theme, setTheme] = useState(() => {
     // Check device preference, default to dark
@@ -222,6 +230,11 @@ const AmuleWebApp = () => {
         setStats(data.data);
       } else if (data.type === 'uploads-update') {
         setUploads(data.data || []);
+      } else if (data.type === 'servers-update') {
+        setServers(data.data?.EC_TAG_SERVER || []);
+      } else if (data.type === 'server-action') {
+        // Refresh server list after action
+        websocket.send(JSON.stringify({ action: 'getServersList' }));
       } else if (data.type === 'log-update') {
         setLogs(data.data?.EC_TAG_STRING || '');
       } else if (data.type === 'server-info-update') {
@@ -289,6 +302,12 @@ const AmuleWebApp = () => {
     if (currentView === 'logs') {
       fetchLogs();
       fetchServerInfo();
+    }
+  }, [currentView]);
+
+  useEffect(() => {
+    if (currentView === 'servers') {
+      fetchServers();
     }
   }, [currentView]);
 
@@ -370,6 +389,30 @@ const AmuleWebApp = () => {
     setTimeout(() => setLoading(false), 1000);
   };
 
+  const fetchServers = () => {
+    setLoading(true);
+    sendWsMessage({ action: 'getServersList' });
+    setTimeout(() => setLoading(false), 1000);
+  };
+
+  const handleServerAction = (ipPort, action) => {
+    if (action === 'remove') {
+      // Extract server name from servers array
+      const server = servers.find(s => s._value === ipPort);
+      const serverName = server?.EC_TAG_SERVER_NAME || ipPort;
+      setDeleteModal({ show: true, fileHash: null, fileName: serverName, isServer: true, serverAddress: ipPort });
+      return;
+    }
+
+    const [ip, port] = ipPort.split(':');
+    sendWsMessage({ 
+      action: 'serverDoAction',
+      ip,
+      port: parseInt(port),
+      serverAction: action
+    });
+  };
+
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
     setLoading(true);
@@ -403,19 +446,43 @@ const AmuleWebApp = () => {
 
   const handleDownload = (fileHash) => {
     sendWsMessage({ action: 'download', fileHash });
-    alert('Download started successfully');
+    setDownloadedFiles(prev => new Set(prev).add(fileHash));
   };
 
   const handleDelete = (fileHash, fileName) => {
-    if (!confirm(`Are you sure you want to delete "${fileName}"?`)) return;
-    
-    sendWsMessage({ action: 'delete', fileHash });
-    alert('File deleted successfully');
-    
-    setTimeout(() => {
-      if (currentView === 'downloads') fetchDownloads();
-      if (currentView === 'shared') fetchShared();
-    }, 500);
+    setDeleteModal({ show: true, fileHash, fileName });
+  };
+
+  const confirmDelete = () => {
+    if (deleteModal.isServer) {
+      // Handle server removal
+      const [ip, port] = deleteModal.serverAddress.split(':');
+      sendWsMessage({ 
+        action: 'serverDoAction',
+        ip,
+        port: parseInt(port),
+        serverAction: 'remove'
+      });
+      setDeleteModal({ show: false, fileHash: null, fileName: '', isServer: false, serverAddress: null });
+      
+      setTimeout(() => {
+        fetchServers();
+      }, 500);
+    } else {
+      // Handle file deletion
+      const { fileHash } = deleteModal;
+      sendWsMessage({ action: 'delete', fileHash });
+      setDeleteModal({ show: false, fileHash: null, fileName: '', isServer: false, serverAddress: null });
+      
+      setTimeout(() => {
+        if (currentView === 'downloads') fetchDownloads();
+        if (currentView === 'shared') fetchShared();
+      }, 500);
+    }
+  };
+
+  const cancelDelete = () => {
+    setDeleteModal({ show: false, fileHash: null, fileName: '', isServer: false, serverAddress: null });
   };
 
   const formatBytes = (bytes) => {
@@ -455,6 +522,12 @@ const AmuleWebApp = () => {
       else if (sortBy === 'EC_TAG_CLIENT_UPLOAD_TOTAL') result = (a.EC_TAG_CLIENT_UPLOAD_TOTAL || 0) - (b.EC_TAG_CLIENT_UPLOAD_TOTAL || 0);
       else if (sortBy === 'EC_TAG_CLIENT_NAME') result = (a.EC_TAG_CLIENT_NAME || '').localeCompare(b.EC_TAG_CLIENT_NAME || '');
       else if (sortBy === 'EC_TAG_PARTFILE_NAME') result = (a.EC_TAG_PARTFILE_NAME || '').localeCompare(b.EC_TAG_PARTFILE_NAME || '');
+      // Server fields
+      else if (sortBy === 'EC_TAG_SERVER_NAME') result = (a.EC_TAG_SERVER_NAME || '').localeCompare(b.EC_TAG_SERVER_NAME || '');
+      else if (sortBy === 'EC_TAG_SERVER_USERS') result = (a.EC_TAG_SERVER_USERS || 0) - (b.EC_TAG_SERVER_USERS || 0);
+      else if (sortBy === 'EC_TAG_SERVER_FILES') result = (a.EC_TAG_SERVER_FILES || 0) - (b.EC_TAG_SERVER_FILES || 0);
+      else if (sortBy === 'EC_TAG_SERVER_PING') result = (a.EC_TAG_SERVER_PING || 0) - (b.EC_TAG_SERVER_PING || 0);
+      else if (sortBy === '_value') result = (a._value || '').localeCompare(b._value || '');
       else result = (a.fileName || '').localeCompare(b.fileName || '');
 
       return sortDirection === 'asc' ? result : -result;
@@ -488,7 +561,7 @@ const AmuleWebApp = () => {
     const downloadSpeed = formatSpeed(stats.EC_TAG_STATS_DL_SPEED || 0);
 
     return h('footer', { className: 'bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-1.5 px-2 sm:px-3 flex-none md:sticky md:bottom-0 z-40' },
-      h('div', { className: 'mx-auto' },
+      h('div', { },
         
         // Mobile view
         h('div', { className: 'md:hidden flex flex-col gap-1.5 text-xs' },
@@ -595,15 +668,20 @@ const AmuleWebApp = () => {
 
       // Mobile card view
       h('div', { className: 'block md:hidden space-y-2' },
-        paginatedData.map((item, idx) =>
-          h('div', {
-            key: item.fileHash || item.EC_TAG_CLIENT_HASH || idx,
+        paginatedData.map((item, idx) => {
+          // Determina il titolo in base al tipo di item
+          const title = item.EC_TAG_SERVER_NAME || item.fileName || item.EC_TAG_PARTFILE_NAME || 'N/A';
+          
+          return h('div', {
+            key: item.fileHash || item.EC_TAG_CLIENT_HASH || item._value || idx,
             className: `p-2 sm:p-3 rounded-lg ${idx % 2 === 0 ? 'bg-gray-50 dark:bg-gray-700/50' : 'bg-white dark:bg-gray-800/50'} border border-gray-200 dark:border-gray-700`
           },
-            h('div', { className: 'font-medium text-xs sm:text-sm mb-1.5 break-words text-gray-900 dark:text-gray-100' }, item.fileName || item.EC_TAG_PARTFILE_NAME || 'N/A'),
+            h('div', { 
+              className: 'font-medium text-xs sm:text-sm mb-1.5 break-words text-gray-900 dark:text-gray-100' 
+            }, title),
             h('div', { className: 'space-y-1 text-xs' },
               columns.map((col, cidx) => {
-                if (col.key === 'fileName' || col.key === 'EC_TAG_PARTFILE_NAME') return null;
+                if (col.key === 'fileName' || col.key === 'EC_TAG_PARTFILE_NAME' || col.key === 'EC_TAG_SERVER_NAME') return null;
                 return h('div', {
                   key: cidx,
                   className: 'flex justify-between items-center'
@@ -618,8 +696,8 @@ const AmuleWebApp = () => {
             actions && h('div', { className: 'flex gap-1.5 mt-2 pt-2 border-t border-gray-200 dark:border-gray-700' },
               actions(item)
             )
-          )
-        )
+          );
+        })
       ),
 
       // Desktop table view
@@ -702,56 +780,152 @@ const AmuleWebApp = () => {
   };
 
   const renderHome = () => {
-    return h('div', { className: 'text-center py-4 sm:py-8 px-2 sm:px-4' },
-      h('img', { 
-        src: '/static/logo-brax.png', 
-        alt: 'aMule', 
-        className: 'w-16 h-16 sm:w-24 sm:h-24 mx-auto mb-3 sm:mb-4 object-contain'
-      }),
-      h('h1', { className: 'text-lg sm:text-2xl font-bold text-gray-800 dark:text-gray-100 mb-2 sm:mb-3' }, 'Welcome to aMule Controller'),
-      h('p', { className: 'text-xs sm:text-sm text-gray-600 dark:text-gray-400 mb-4 sm:mb-6' }, 'Select an option from the menu to get started'),
-      h('div', { className: 'grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3 max-w-4xl mx-auto' },
+    return h('div', { className: 'py-4 sm:py-8 px-2 sm:px-4' },
+      // Logo and title only on desktop
+      h('div', { className: 'hidden sm:block text-center mb-6' },
+        h('img', { 
+          src: '/static/logo-brax.png', 
+          alt: 'aMule', 
+          className: 'w-24 h-24 mx-auto mb-4 object-contain'
+        }),
+        h('h1', { className: 'text-2xl font-bold text-gray-800 dark:text-gray-100 mb-3' }, 'Welcome to aMule Controller'),
+        h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, 'Select an option from the menu to get started')
+      ),
+      
+      // Desktop: 3 columns grid with last row centered
+      h('div', { className: 'hidden sm:grid grid-cols-3 gap-3 max-w-4xl mx-auto' },
+        // Row 1
+        h('button', {
+          onClick: () => setCurrentView('home'),
+          className: 'p-4 bg-teal-50 dark:bg-teal-900/20 rounded-lg hover:bg-teal-100 dark:hover:bg-teal-900/30 transition-colors active:scale-95 border border-teal-200 dark:border-teal-800'
+        },
+          h(Icon, { name: 'home', size: 24, className: 'mx-auto mb-1 text-teal-600 dark:text-teal-400' }),
+          h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Home')
+        ),
         h('button', {
           onClick: () => setCurrentView('search'),
-          className: 'p-2 sm:p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors active:scale-95 border border-blue-200 dark:border-blue-800'
+          className: 'p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors active:scale-95 border border-blue-200 dark:border-blue-800'
         },
-          h(Icon, { name: 'search', size: 20, className: 'mx-auto mb-1 text-blue-600 dark:text-blue-400 sm:w-6 sm:h-6' }),
-          h('h3', { className: 'font-semibold text-xs sm:text-sm text-gray-800 dark:text-gray-200' }, 'Search Files')
+          h(Icon, { name: 'search', size: 24, className: 'mx-auto mb-1 text-blue-600 dark:text-blue-400' }),
+          h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Search Files')
         ),
         h('button', {
           onClick: () => setCurrentView('downloads'),
-          className: 'p-2 sm:p-4 bg-green-50 dark:bg-green-900/20 rounded-lg hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors active:scale-95 border border-green-200 dark:border-green-800'
+          className: 'p-4 bg-green-50 dark:bg-green-900/20 rounded-lg hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors active:scale-95 border border-green-200 dark:border-green-800'
         },
-          h(Icon, { name: 'download', size: 20, className: 'mx-auto mb-1 text-green-600 dark:text-green-400 sm:w-6 sm:h-6' }),
-          h('h3', { className: 'font-semibold text-xs sm:text-sm text-gray-800 dark:text-gray-200' }, 'Downloads')
+          h(Icon, { name: 'download', size: 24, className: 'mx-auto mb-1 text-green-600 dark:text-green-400' }),
+          h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Downloads')
         ),
+        
+        // Row 2
         h('button', {
           onClick: () => setCurrentView('uploads'),
-          className: 'p-2 sm:p-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg hover:bg-orange-100 dark:hover:bg-orange-900/30 transition-colors active:scale-95 border border-orange-200 dark:border-orange-800'
+          className: 'p-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg hover:bg-orange-100 dark:hover:bg-orange-900/30 transition-colors active:scale-95 border border-orange-200 dark:border-orange-800'
         },
-          h(Icon, { name: 'upload', size: 20, className: 'mx-auto mb-1 text-orange-600 dark:text-orange-400 sm:w-6 sm:h-6' }),
-          h('h3', { className: 'font-semibold text-xs sm:text-sm text-gray-800 dark:text-gray-200' }, 'Uploads')
+          h(Icon, { name: 'upload', size: 24, className: 'mx-auto mb-1 text-orange-600 dark:text-orange-400' }),
+          h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Uploads')
         ),
         h('button', {
           onClick: () => setCurrentView('shared'),
-          className: 'p-2 sm:p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg hover:bg-purple-100 dark:hover:bg-purple-900/30 transition-colors active:scale-95 border border-purple-200 dark:border-purple-800'
+          className: 'p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg hover:bg-purple-100 dark:hover:bg-purple-900/30 transition-colors active:scale-95 border border-purple-200 dark:border-purple-800'
         },
-          h(Icon, { name: 'share', size: 20, className: 'mx-auto mb-1 text-purple-600 dark:text-purple-400 sm:w-6 sm:h-6' }),
-          h('h3', { className: 'font-semibold text-xs sm:text-sm text-gray-800 dark:text-gray-200' }, 'Shared Files')
+          h(Icon, { name: 'share', size: 24, className: 'mx-auto mb-1 text-purple-600 dark:text-purple-400' }),
+          h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Shared Files')
+        ),
+        h('button', {
+          onClick: () => setCurrentView('servers'),
+          className: 'p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/30 transition-colors active:scale-95 border border-indigo-200 dark:border-indigo-800'
+        },
+          h(Icon, { name: 'server', size: 24, className: 'mx-auto mb-1 text-indigo-600 dark:text-indigo-400' }),
+          h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Servers')
+        ),
+        
+        // Row 3 - centered (2 buttons in middle)
+        h('div', { className: 'col-span-3 flex justify-center gap-3' },
+          h('button', {
+            onClick: () => setCurrentView('logs'),
+            className: 'p-4 bg-cyan-50 dark:bg-cyan-900/20 rounded-lg hover:bg-cyan-100 dark:hover:bg-cyan-900/30 transition-colors active:scale-95 border border-cyan-200 dark:border-cyan-800 w-full max-w-[calc(33.333%-0.5rem)]'
+          },
+            h(Icon, { name: 'fileText', size: 24, className: 'mx-auto mb-1 text-cyan-600 dark:text-cyan-400' }),
+            h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Logs')
+          ),
+          h('button', {
+            onClick: () => setCurrentView('statistics'),
+            className: 'p-4 bg-pink-50 dark:bg-pink-900/20 rounded-lg hover:bg-pink-100 dark:hover:bg-pink-900/30 transition-colors active:scale-95 border border-pink-200 dark:border-pink-800 w-full max-w-[calc(33.333%-0.5rem)]'
+          },
+            h(Icon, { name: 'chartBar', size: 24, className: 'mx-auto mb-1 text-pink-600 dark:text-pink-400' }),
+            h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Statistics')
+          )
+        )
+      ),
+      
+      // Mobile: single column, all buttons including logs
+      h('div', { className: 'sm:hidden flex flex-col gap-3' },
+        // Logo and Welcome text for mobile
+        h('div', { className: 'flex items-center justify-center gap-3 mb-2 px-2' },
+          h('img', { 
+            src: '/static/logo-brax.png', 
+            alt: 'aMule', 
+            className: 'w-12 h-12 object-contain'
+          }),
+          h('h2', { className: 'text-lg font-bold text-gray-800 dark:text-gray-100 text-center' }, 'Welcome')
+        ),
+        // Buttons
+        h('button', {
+          onClick: () => setCurrentView('home'),
+          className: 'p-4 bg-teal-50 dark:bg-teal-900/20 rounded-lg hover:bg-teal-100 dark:hover:bg-teal-900/30 transition-colors active:scale-95 border border-teal-200 dark:border-teal-800 flex items-center gap-3'
+        },
+          h(Icon, { name: 'home', size: 24, className: 'text-teal-600 dark:text-teal-400' }),
+          h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Home')
+        ),
+        h('button', {
+          onClick: () => setCurrentView('search'),
+          className: 'p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors active:scale-95 border border-blue-200 dark:border-blue-800 flex items-center gap-3'
+        },
+          h(Icon, { name: 'search', size: 24, className: 'text-blue-600 dark:text-blue-400' }),
+          h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Search Files')
+        ),
+        h('button', {
+          onClick: () => setCurrentView('downloads'),
+          className: 'p-4 bg-green-50 dark:bg-green-900/20 rounded-lg hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors active:scale-95 border border-green-200 dark:border-green-800 flex items-center gap-3'
+        },
+          h(Icon, { name: 'download', size: 24, className: 'text-green-600 dark:text-green-400' }),
+          h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Downloads')
+        ),
+        h('button', {
+          onClick: () => setCurrentView('uploads'),
+          className: 'p-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg hover:bg-orange-100 dark:hover:bg-orange-900/30 transition-colors active:scale-95 border border-orange-200 dark:border-orange-800 flex items-center gap-3'
+        },
+          h(Icon, { name: 'upload', size: 24, className: 'text-orange-600 dark:text-orange-400' }),
+          h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Uploads')
+        ),
+        h('button', {
+          onClick: () => setCurrentView('shared'),
+          className: 'p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg hover:bg-purple-100 dark:hover:bg-purple-900/30 transition-colors active:scale-95 border border-purple-200 dark:border-purple-800 flex items-center gap-3'
+        },
+          h(Icon, { name: 'share', size: 24, className: 'text-purple-600 dark:text-purple-400' }),
+          h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Shared Files')
+        ),
+        h('button', {
+          onClick: () => setCurrentView('servers'),
+          className: 'p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/30 transition-colors active:scale-95 border border-indigo-200 dark:border-indigo-800 flex items-center gap-3'
+        },
+          h(Icon, { name: 'server', size: 24, className: 'text-indigo-600 dark:text-indigo-400' }),
+          h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Servers')
         ),
         h('button', {
           onClick: () => setCurrentView('logs'),
-          className: 'p-2 sm:p-4 bg-cyan-50 dark:bg-cyan-900/20 rounded-lg hover:bg-cyan-100 dark:hover:bg-cyan-900/30 transition-colors active:scale-95 border border-cyan-200 dark:border-cyan-800'
+          className: 'p-4 bg-cyan-50 dark:bg-cyan-900/20 rounded-lg hover:bg-cyan-100 dark:hover:bg-cyan-900/30 transition-colors active:scale-95 border border-cyan-200 dark:border-cyan-800 flex items-center gap-3'
         },
-          h(Icon, { name: 'fileText', size: 20, className: 'mx-auto mb-1 text-cyan-600 dark:text-cyan-400 sm:w-6 sm:h-6' }),
-          h('h3', { className: 'font-semibold text-xs sm:text-sm text-gray-800 dark:text-gray-200' }, 'Logs')
+          h(Icon, { name: 'fileText', size: 24, className: 'text-cyan-600 dark:text-cyan-400' }),
+          h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Logs')
         ),
         h('button', {
           onClick: () => setCurrentView('statistics'),
-          className: 'p-2 sm:p-4 bg-pink-50 dark:bg-pink-900/20 rounded-lg hover:bg-pink-100 dark:hover:bg-pink-900/30 transition-colors active:scale-95 border border-pink-200 dark:border-pink-800'
+          className: 'p-4 bg-pink-50 dark:bg-pink-900/20 rounded-lg hover:bg-pink-100 dark:hover:bg-pink-900/30 transition-colors active:scale-95 border border-pink-200 dark:border-pink-800 flex items-center gap-3'
         },
-          h(Icon, { name: 'chartBar', size: 20, className: 'mx-auto mb-1 text-pink-600 dark:text-pink-400 sm:w-6 sm:h-6' }),
-          h('h3', { className: 'font-semibold text-xs sm:text-sm text-gray-800 dark:text-gray-200' }, 'Statistics')
+          h(Icon, { name: 'chartBar', size: 24, className: 'text-pink-600 dark:text-pink-400' }),
+          h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Statistics')
         )
       )
     );
@@ -842,12 +1016,23 @@ const AmuleWebApp = () => {
           h('h2', { className: 'text-base sm:text-lg font-bold text-gray-800 dark:text-gray-100' }, 'Previous Search Results'),
           h('span', { className: 'text-sm text-gray-500 dark:text-gray-400' }, `(${previousResults.length} cached results)`)
         ),
-        renderTable(previousResults, previousResultsColumns, (item) =>
-          h('button', {
-            onClick: () => handleDownload(item.fileHash),
-            className: 'flex-1 px-2 py-1 text-xs sm:text-sm bg-green-600 text-white rounded hover:bg-green-700 text-sm transition-all active:scale-95'
-          }, 'Download')
-        , currentSort.sortBy, currentSort.sortDirection, handleSortChange)
+        renderTable(previousResults, previousResultsColumns, (item) => {
+          const isDownloaded = downloadedFiles.has(item.fileHash);
+          return h('button', {
+            onClick: () => !isDownloaded && handleDownload(item.fileHash),
+            disabled: isDownloaded,
+            className: `flex-1 px-2 py-1 text-xs sm:text-sm rounded transition-all ${
+              isDownloaded 
+                ? 'bg-gray-400 text-white cursor-not-allowed' 
+                : 'bg-green-600 text-white hover:bg-green-700 active:scale-95'
+            }`
+          }, 
+            h('span', { className: 'flex items-center justify-center gap-1' },
+              h(Icon, { name: isDownloaded ? 'check' : 'download', size: 14 }),
+              isDownloaded ? 'Downloading' : 'Download'
+            )
+          );
+        }, currentSort.sortBy, currentSort.sortDirection, handleSortChange)
       )
     );
   };
@@ -898,12 +1083,23 @@ const AmuleWebApp = () => {
         }, 'New Search')
       ),
       searchResults.length === 0 ? h('div', { className: 'text-center py-6 text-xs sm:text-sm text-gray-500 dark:text-gray-400' }, 'No results found') :
-        renderTable(searchResults, columns, (item) =>
-          h('button', {
-            onClick: () => handleDownload(item.fileHash),
-            className: 'flex-1 px-2 py-1 text-xs sm:text-sm bg-green-600 text-white rounded hover:bg-green-700 text-sm transition-all active:scale-95'
-          }, 'Download')
-        , currentSort.sortBy, currentSort.sortDirection, handleSortChange)
+        renderTable(searchResults, columns, (item) => {
+          const isDownloaded = downloadedFiles.has(item.fileHash);
+          return h('button', {
+            onClick: () => !isDownloaded && handleDownload(item.fileHash),
+            disabled: isDownloaded,
+            className: `flex-1 px-2 py-1 text-xs sm:text-sm rounded transition-all ${
+              isDownloaded 
+                ? 'bg-gray-400 text-white cursor-not-allowed' 
+                : 'bg-green-600 text-white hover:bg-green-700 active:scale-95'
+            }`
+          }, 
+            h('span', { className: 'flex items-center justify-center gap-1' },
+              h(Icon, { name: isDownloaded ? 'check' : 'download', size: 14 }),
+              isDownloaded ? 'Downloading' : 'Download'
+            )
+          );
+        }, currentSort.sortBy, currentSort.sortDirection, handleSortChange)
     );
   };
 
@@ -1220,6 +1416,123 @@ const AmuleWebApp = () => {
     );
   };
 
+  const renderServers = () => {
+    const currentSort = sortConfig['servers'];
+    const handleSortChange = (newSortBy, newSortDirection) => {
+      setSortConfig(prev => ({
+        ...prev,
+        'servers': { sortBy: newSortBy, sortDirection: newSortDirection }
+      }));
+    };
+
+    const columns = [
+      {
+        label: 'Server Name',
+        key: 'EC_TAG_SERVER_NAME',
+        sortable: true,
+        width: 'auto',
+        render: (item) =>
+          h('div', { className: 'max-w-xs' },
+            h('div', { className: 'font-medium text-sm break-words' }, item.EC_TAG_SERVER_NAME || 'Unknown'),
+            h('div', { className: 'text-xs text-gray-500 dark:text-gray-400' }, item.EC_TAG_SERVER_DESC || '')
+          )
+      },
+      {
+        label: 'Address',
+        key: '_value',
+        sortable: true,
+        width: '140px',
+        render: (item) => h('span', { className: 'font-mono text-xs' }, item._value || 'N/A')
+      },
+      {
+        label: 'Users',
+        key: 'EC_TAG_SERVER_USERS',
+        sortable: true,
+        width: '120px',
+        render: (item) => {
+          const users = item.EC_TAG_SERVER_USERS || 0;
+          const maxUsers = item.EC_TAG_SERVER_USERS_MAX || 0;
+          return h('div', { className: 'text-sm' },
+            h('div', null, users.toLocaleString()),
+            h('div', { className: 'text-xs text-gray-500 dark:text-gray-400' }, `/ ${maxUsers.toLocaleString()}`)
+          );
+        }
+      },
+      {
+        label: 'Files',
+        key: 'EC_TAG_SERVER_FILES',
+        sortable: true,
+        width: '100px',
+        render: (item) => (item.EC_TAG_SERVER_FILES || 0).toLocaleString()
+      },
+      {
+        label: 'Ping',
+        key: 'EC_TAG_SERVER_PING',
+        sortable: true,
+        width: '80px',
+        render: (item) => item.EC_TAG_SERVER_PING ? `${item.EC_TAG_SERVER_PING} ms` : '-'
+      },
+      {
+        label: 'Version',
+        key: 'EC_TAG_SERVER_VERSION',
+        width: '80px',
+        render: (item) => item.EC_TAG_SERVER_VERSION || '-'
+      }
+    ];
+
+    return h('div', { className: 'space-y-2 sm:space-y-3' },
+      h('div', { className: 'flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3' },
+        h('h2', { className: 'text-base sm:text-lg font-bold text-gray-800 dark:text-gray-100' }, `Servers (${servers.length})`),
+        h('button', {
+          onClick: fetchServers,
+          disabled: loading,
+          className: 'px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 transition-all active:scale-95 text-sm sm:text-base w-full sm:w-auto'
+        },
+          loading ? h('span', { className: 'flex items-center justify-center gap-2' },
+            h('div', { className: 'loader' }),
+            'Loading...'
+          ) : h('span', null,
+            h(Icon, { name: 'refresh', size: 16, className: 'inline mr-1' }),
+            'Refresh'
+          )
+        )
+      ),
+      servers.length === 0 ? h('div', { className: 'text-center py-6 text-xs sm:text-sm text-gray-500 dark:text-gray-400' },
+        loading ? 'Loading servers...' : 'No servers available'
+      ) : renderTable(servers, columns, (item) =>
+        h('div', { className: 'flex gap-1.5' },
+          h('button', {
+            onClick: () => handleServerAction(item._value, 'connect'),
+            className: 'flex-1 px-2 py-1 text-xs sm:text-sm bg-green-600 text-white rounded hover:bg-green-700 transition-all active:scale-95'
+          }, 
+            h('span', { className: 'flex items-center justify-center gap-1' },
+              h(Icon, { name: 'power', size: 14 }),
+              'Connect'
+            )
+          ),
+          h('button', {
+            onClick: () => handleServerAction(item._value, 'disconnect'),
+            className: 'flex-1 px-2 py-1 text-xs sm:text-sm bg-orange-600 text-white rounded hover:bg-orange-700 transition-all active:scale-95'
+          }, 
+            h('span', { className: 'flex items-center justify-center gap-1' },
+              h(Icon, { name: 'disconnect', size: 14 }),
+              'Disconnect'
+            )
+          ),
+          h('button', {
+            onClick: () => handleServerAction(item._value, 'remove'),
+            className: 'flex-1 px-2 py-1 text-xs sm:text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-all active:scale-95'
+          }, 
+            h('span', { className: 'flex items-center justify-center gap-1' },
+              h(Icon, { name: 'trash', size: 14 }),
+              'Remove'
+            )
+          )
+        )
+      , currentSort.sortBy, currentSort.sortDirection, handleSortChange)
+    );
+  };
+
   const formatStatsValue = (value) => {
     if (value === null || value === undefined) return '';
     if (typeof value === 'object' && value._value !== undefined) {
@@ -1362,7 +1675,49 @@ const AmuleWebApp = () => {
   const handleNavigate = (view) => {
     setCurrentView(view);
     setPage(0);
-    setMobileMenuOpen(false);
+  };
+
+  const renderDeleteModal = () => {
+    if (!deleteModal.show) return null;
+
+    const isServer = deleteModal.isServer;
+    const itemType = isServer ? 'Server' : 'File';
+    const actionWord = isServer ? 'remove' : 'delete';
+
+    return h('div', {
+      className: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4',
+      onClick: cancelDelete
+    },
+      h('div', {
+        className: 'bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6 transform transition-all',
+        onClick: (e) => e.stopPropagation()
+      },
+        h('div', { className: 'flex items-center gap-3 mb-4' },
+          h('div', { className: 'flex-shrink-0 w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center' },
+            h(Icon, { name: 'trash', size: 24, className: 'text-red-600 dark:text-red-400' })
+          ),
+          h('div', null,
+            h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100' }, `${isServer ? 'Remove' : 'Delete'} ${itemType}`),
+            h('p', { className: 'text-sm text-gray-500 dark:text-gray-400' }, 'This action cannot be undone')
+          )
+        ),
+        h('p', { className: 'text-gray-700 dark:text-gray-300 mb-6' },
+          `Are you sure you want to ${actionWord} `,
+          h('span', { className: 'font-semibold' }, `"${deleteModal.fileName}"`),
+          '?'
+        ),
+        h('div', { className: 'flex gap-3 justify-end' },
+          h('button', {
+            onClick: cancelDelete,
+            className: 'px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors'
+          }, 'Cancel'),
+          h('button', {
+            onClick: confirmDelete,
+            className: 'px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors'
+          }, isServer ? 'Remove' : 'Delete')
+        )
+      )
+    );
   };
 
   // Render app
@@ -1378,14 +1733,14 @@ const AmuleWebApp = () => {
         )
       : null,
 
-    h('div', { className: `flex-1 ${wsConnected ? '' : 'pointer-events-none opacity-50'}` },
+    h('div', { className: `flex-1 flex flex-col ${wsConnected ? '' : 'pointer-events-none opacity-50'}` },
       
       // Header
       h('header', { className: 'bg-white dark:bg-gray-800 shadow-md sticky top-0 z-50 border-b border-gray-200 dark:border-gray-700' },
         h('div', { className: 'mx-auto px-2 sm:px-3 py-1.5 sm:py-2 flex items-center justify-between' },
-          h('div', { className: 'flex items-center gap-1.5 sm:gap-2' },
-            h('img', { src: '/static/logo-brax.png', alt: 'aMule', className: 'w-6 h-6 sm:w-8 sm:h-8 object-contain' }),
-            h('h1', { className: 'text-sm sm:text-base font-bold text-gray-800 dark:text-gray-100' }, 'aMule Controller')
+          h('div', { className: 'flex items-center gap-1.5 sm:gap-3' },
+            h('img', { src: '/static/logo-brax.png', alt: 'aMule', className: 'w-6 h-6 sm:w-10 sm:h-10 object-contain' }),
+            h('h1', { className: 'text-sm sm:text-xl font-bold text-gray-800 dark:text-gray-100' }, 'aMule Controller')
           ),
           h('div', { className: 'flex items-center gap-1' },
             h('button', {
@@ -1394,25 +1749,20 @@ const AmuleWebApp = () => {
               title: theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
             }, h(Icon, { name: theme === 'dark' ? 'sun' : 'moon', size: 18, className: 'text-gray-600 dark:text-gray-300' })),
             h('button', {
-              onClick: () => setMobileMenuOpen(!mobileMenuOpen),
-              className: 'md:hidden p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors'
-            }, h(Icon, { name: mobileMenuOpen ? 'x' : 'menu', size: 20, className: 'text-gray-600 dark:text-gray-300' }))
+              onClick: () => handleNavigate('home'),
+              className: 'md:hidden p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors',
+              title: 'Go to Home'
+            }, h(Icon, { name: 'home', size: 20, className: 'text-gray-600 dark:text-gray-300' }))
           )
         )
       ),
 
       // Main layout
-      h('div', { className: 'mx-auto px-2 sm:px-3 py-2 sm:py-3 flex flex-col md:flex-row gap-2 sm:gap-3' },
+      h('div', { className: 'px-2 sm:px-3 py-2 sm:py-3 flex flex-col md:flex-row gap-2 sm:gap-3 flex-1' },
         
-        // Overlay menu mobile
-        mobileMenuOpen && h('div', {
-          className: 'fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden',
-          onClick: () => setMobileMenuOpen(false)
-        }),
-
-        // Sidebar
+        // Sidebar (hidden on mobile)
         h('aside', {
-          className: `fixed md:relative left-0 z-50 md:z-0 w-56 md:w-56 bg-white dark:bg-gray-800 p-3 sm:p-3 rounded-lg shadow-lg md:shadow transform transition-transform duration-300 ease-in-out border border-gray-200 dark:border-gray-700 ${mobileMenuOpen ? 'translate-x-0 top-16' : '-translate-x-full top-0 md:translate-x-0'} ${mobileMenuOpen ? 'bottom-0' : 'inset-y-0 md:inset-y-auto'}`
+          className: 'hidden md:flex md:flex-col w-56 bg-white dark:bg-gray-800 p-3 rounded-lg shadow border border-gray-200 dark:border-gray-700'
         },
           h('div', { className: 'space-y-2' },
             h(NavButton, { icon: 'home', label: 'Home', view: 'home', active: currentView === 'home', onNavigate: handleNavigate }),
@@ -1420,6 +1770,7 @@ const AmuleWebApp = () => {
             h(NavButton, { icon: 'download', label: 'Downloads', view: 'downloads', active: currentView === 'downloads', onNavigate: handleNavigate }),
             h(NavButton, { icon: 'upload', label: 'Uploads', view: 'uploads', active: currentView === 'uploads', onNavigate: handleNavigate }),
             h(NavButton, { icon: 'share', label: 'Shared Files', view: 'shared', active: currentView === 'shared', onNavigate: handleNavigate }),
+            h(NavButton, { icon: 'server', label: 'Servers', view: 'servers', active: currentView === 'servers', onNavigate: handleNavigate }),
             h(NavButton, { icon: 'fileText', label: 'Logs', view: 'logs', active: currentView === 'logs', onNavigate: handleNavigate }),
             h(NavButton, { icon: 'chartBar', label: 'Statistics', view: 'statistics', active: currentView === 'statistics', onNavigate: handleNavigate })
           )
@@ -1433,11 +1784,13 @@ const AmuleWebApp = () => {
           currentView === 'downloads' && renderDownloads(),
           currentView === 'uploads' && renderUploads(),
           currentView === 'shared' && renderShared(),
+          currentView === 'servers' && renderServers(),
           currentView === 'logs' && renderLogs(),
           currentView === 'statistics' && renderStatistics()
         )
       )
     ),
+    renderDeleteModal(),
     renderFooter()
   );
 

@@ -41,6 +41,21 @@ const Icon = ({ name, size = 20, className = '' }) => {
   });
 };
 
+// Memoized NavButton to prevent unnecessary re-renders
+const NavButton = React.memo(({ icon, label, view, active, onNavigate }) => {
+  return h('button', {
+    onClick: () => onNavigate(view),
+    className: `flex items-center gap-2 sm:gap-2.5 px-3 sm:px-3 py-2 sm:py-2.5 rounded-lg transition-all text-sm sm:text-base font-medium ${
+      active
+        ? 'bg-blue-600 text-white shadow-lg'
+        : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+    }`
+  },
+    h(Icon, { name: icon, size: 18 }),
+    h('span', null, label)
+  );
+});
+
 const AmuleWebApp = () => {
   const [currentView, setCurrentView] = useState('home');
   const [searchQuery, setSearchQuery] = useState('');
@@ -56,12 +71,18 @@ const AmuleWebApp = () => {
   const [serverInfo, setServerInfo] = useState('');
   const [statsTree, setStatsTree] = useState(null);
   const [expandedNodes, setExpandedNodes] = useState({});
-  const [sortBy, setSortBy] = useState('sourceCount');
-  const [sortDirection, setSortDirection] = useState('desc');
+  const [sortConfig, setSortConfig] = useState({
+    'search': { sortBy: 'sourceCount', sortDirection: 'desc' },
+    'search-results': { sortBy: 'sourceCount', sortDirection: 'desc' },
+    'downloads': { sortBy: 'EC_TAG_PARTFILE_NAME', sortDirection: 'asc' },
+    'uploads': { sortBy: 'EC_TAG_PARTFILE_NAME', sortDirection: 'asc' },
+    'shared': { sortBy: 'transferred', sortDirection: 'desc' }
+  });
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [error, setError] = useState('');
+  const hasUserInteracted = useRef(false);
   const [theme, setTheme] = useState(() => {
     // Check device preference, default to dark
     if (typeof window !== 'undefined') {
@@ -82,6 +103,7 @@ const AmuleWebApp = () => {
   
   const PAGE_SIZE_DESKTOP = 20,
         PAGE_SIZE_MOBILE = 10;
+
   // Dynamic page size based on screen width
   const [pageSize, setPageSize] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -94,6 +116,8 @@ const AmuleWebApp = () => {
   const [ws, setWs] = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
   const reconnectRef = useRef({ timer: null, interval: 1000 });
+  const serverInfoRef = useRef(null);
+  const logsRef = useRef(null);
 
   // Apply theme to document and body
   useEffect(() => {
@@ -121,6 +145,39 @@ const AmuleWebApp = () => {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  // Auto-expand first level of stats tree when loaded
+  useEffect(() => {
+    if (hasUserInteracted.current) return;
+    if (!statsTree || !statsTree.EC_TAG_STATTREE_NODE) return;
+    
+    const firstLevelKeys = {};
+    
+    const collectFirstLevel = (node, level = 0, parentKey = 'root') => {
+      if (!node || level >= 1) return;
+      
+      const nodes = Array.isArray(node) ? node : [node];
+      
+      for (let idx = 0; idx < nodes.length; idx++) {
+        const item = nodes[idx];
+        if (!item) continue;
+        
+        const children = item.EC_TAG_STATTREE_NODE;
+        if (!children) continue;
+        
+        const hasChildren = Array.isArray(children) ? children.length > 0 : true;
+        
+        if (hasChildren) {
+          const nodeKey = `${parentKey}-${level}-${idx}`;
+          firstLevelKeys[nodeKey] = true;
+          collectFirstLevel(children, level + 1, nodeKey);
+        }
+      }
+    };
+    
+    collectFirstLevel(statsTree.EC_TAG_STATTREE_NODE);
+    setExpandedNodes(firstLevelKeys);
+  }, [statsTree]);
 
   const toggleTheme = () => {
     setTheme(prevTheme => prevTheme === 'dark' ? 'light' : 'dark');
@@ -238,6 +295,30 @@ const AmuleWebApp = () => {
   useEffect(() => {
     if (currentView === 'statistics') {
       fetchStatsTree();
+    }
+  }, [currentView]);
+
+  // Auto-scroll logs to bottom when they update
+  useEffect(() => {
+    if (currentView === 'logs') {
+      if (serverInfoRef.current) {
+        serverInfoRef.current.scrollTop = serverInfoRef.current.scrollHeight;
+      }
+      if (logsRef.current) {
+        logsRef.current.scrollTop = logsRef.current.scrollHeight;
+      }
+    }
+  }, [logs, serverInfo, currentView]);
+
+  // Auto-refresh logs every 5 seconds when on logs page
+  useEffect(() => {
+    if (currentView === 'logs') {
+      const intervalId = setInterval(() => {
+        fetchLogs();
+        fetchServerInfo();
+      }, 5000);
+
+      return () => clearInterval(intervalId);
     }
   }, [currentView]);
 
@@ -359,7 +440,7 @@ const AmuleWebApp = () => {
     return speed + ' B/s';
   };
 
-  const sortFiles = (files) => {
+  const sortFiles = (files, sortBy, sortDirection) => {
     return [...files].sort((a, b) => {
       let result = 0;
 
@@ -368,6 +449,7 @@ const AmuleWebApp = () => {
       else if (sortBy === 'sourceCount') result = (a.sourceCount || 0) - (b.sourceCount || 0);
       else if (sortBy === 'transferred') result = a.transferred - b.transferred;
       else if (sortBy === 'transferredTotal') result = a.transferredTotal - b.transferredTotal;
+      else if (sortBy === 'speed') result = (a.speed || 0) - (b.speed || 0);
       else if (sortBy === 'EC_TAG_CLIENT_UP_SPEED') result = (a.EC_TAG_CLIENT_UP_SPEED || 0) - (b.EC_TAG_CLIENT_UP_SPEED || 0);
       else if (sortBy === 'EC_TAG_CLIENT_UPLOAD_SESSION') result = (a.EC_TAG_CLIENT_UPLOAD_SESSION || 0) - (b.EC_TAG_CLIENT_UPLOAD_SESSION || 0);
       else if (sortBy === 'EC_TAG_CLIENT_UPLOAD_TOTAL') result = (a.EC_TAG_CLIENT_UPLOAD_TOTAL || 0) - (b.EC_TAG_CLIENT_UPLOAD_TOTAL || 0);
@@ -384,24 +466,6 @@ const AmuleWebApp = () => {
     if (percent < 50) return 'bg-orange-500';
     if (percent < 75) return 'bg-yellow-500';
     return 'bg-green-500';
-  };
-
-  const NavButton = ({ icon, label, view, active }) => {
-    return h('button', {
-      onClick: () => {
-        setCurrentView(view);
-        setPage(0);
-        setMobileMenuOpen(false);
-      },
-      className: `flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg transition-all text-xs sm:text-sm ${
-        active
-          ? 'bg-blue-600 text-white shadow-lg'
-          : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
-      }`
-    },
-      h(Icon, { name: icon, size: 16 }),
-      h('span', { className: 'font-medium' }, label)
-    );
   };
 
   const renderFooter = () => {
@@ -499,8 +563,8 @@ const AmuleWebApp = () => {
     );
   };
 
-  const renderTable = (data, columns, actions) => {
-    const sorted = sortFiles(data);
+  const renderTable = (data, columns, actions, currentSortBy, currentSortDirection, onSortChange) => {
+    const sorted = sortFiles(data, currentSortBy, currentSortDirection);
     const pagesCount = Math.ceil(sorted.length / pageSize);
     const start = page * pageSize;
     const paginatedData = sorted.slice(start, start + pageSize);
@@ -512,8 +576,8 @@ const AmuleWebApp = () => {
         h('div', { className: 'flex items-center gap-2 flex-1' },
           h('label', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300' }, 'Sort by:'),
           h('select', {
-            value: sortBy,
-            onChange: (e) => setSortBy(e.target.value),
+            value: currentSortBy,
+            onChange: (e) => onSortChange(e.target.value, currentSortDirection),
             className: 'flex-1 border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100'
           },
             columns.filter(c => c.sortable !== false).map(col =>
@@ -522,10 +586,10 @@ const AmuleWebApp = () => {
           )
         ),
         h('button', {
-          onClick: () => setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc'),
+          onClick: () => onSortChange(currentSortBy, currentSortDirection === 'asc' ? 'desc' : 'asc'),
           className: 'px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm flex items-center gap-1 text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 active:scale-95 transition-all'
         },
-          sortDirection === 'asc' ? '↑ Asc' : '↓ Desc'
+          currentSortDirection === 'asc' ? '↑ Asc' : '↓ Desc'
         )
       ),
 
@@ -571,20 +635,19 @@ const AmuleWebApp = () => {
                 },
                   col.sortable ? h('button', {
                     onClick: () => {
-                      if (sortBy === col.key) {
+                      if (currentSortBy === col.key) {
                         // Toggle direction
-                        setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+                        onSortChange(col.key, currentSortDirection === 'asc' ? 'desc' : 'asc');
                       } else {
                         // New column – default to descending
-                        setSortBy(col.key);
-                        setSortDirection('desc');
+                        onSortChange(col.key, 'desc');
                       }
                       setPage(0);
                     },
-                    className: `hover:text-blue-600 dark:hover:text-blue-400 transition-colors ${sortBy === col.key ? 'text-blue-600 dark:text-blue-400' : ''}`
+                    className: `hover:text-blue-600 dark:hover:text-blue-400 transition-colors ${currentSortBy === col.key ? 'text-blue-600 dark:text-blue-400' : ''}`
                   }, col.label +
-                      (sortBy === col.key
-                        ? sortDirection === 'asc' ? ' ↑' : ' ↓'
+                      (currentSortBy === col.key
+                        ? currentSortDirection === 'asc' ? ' ↑' : ' ↓'
                         : '')
                       ) : col.label
                 )
@@ -695,6 +758,14 @@ const AmuleWebApp = () => {
   };
 
   const renderSearch = () => {
+    const currentSort = sortConfig['search'];
+    const handleSortChange = (newSortBy, newSortDirection) => {
+      setSortConfig(prev => ({
+        ...prev,
+        'search': { sortBy: newSortBy, sortDirection: newSortDirection }
+      }));
+    };
+
     const previousResultsColumns = [
       {
         label: 'File Name',
@@ -776,12 +847,20 @@ const AmuleWebApp = () => {
             onClick: () => handleDownload(item.fileHash),
             className: 'flex-1 px-2 py-1 text-xs sm:text-sm bg-green-600 text-white rounded hover:bg-green-700 text-sm transition-all active:scale-95'
           }, 'Download')
-        )
+        , currentSort.sortBy, currentSort.sortDirection, handleSortChange)
       )
     );
   };
 
   const renderSearchResults = () => {
+    const currentSort = sortConfig['search-results'];
+    const handleSortChange = (newSortBy, newSortDirection) => {
+      setSortConfig(prev => ({
+        ...prev,
+        'search-results': { sortBy: newSortBy, sortDirection: newSortDirection }
+      }));
+    };
+
     const columns = [
       {
         label: 'File Name',
@@ -824,15 +903,23 @@ const AmuleWebApp = () => {
             onClick: () => handleDownload(item.fileHash),
             className: 'flex-1 px-2 py-1 text-xs sm:text-sm bg-green-600 text-white rounded hover:bg-green-700 text-sm transition-all active:scale-95'
           }, 'Download')
-        )
+        , currentSort.sortBy, currentSort.sortDirection, handleSortChange)
     );
   };
 
   const renderDownloads = () => {
+    const currentSort = sortConfig['downloads'];
+    const handleSortChange = (newSortBy, newSortDirection) => {
+      setSortConfig(prev => ({
+        ...prev,
+        'downloads': { sortBy: newSortBy, sortDirection: newSortDirection }
+      }));
+    };
+
     const columns = [
       {
         label: 'File Name',
-        key: 'fileName',
+        key: 'EC_TAG_PARTFILE_NAME',
         sortable: true,
         width: 'auto',
         render: (item) =>
@@ -868,14 +955,16 @@ const AmuleWebApp = () => {
       {
         label: 'Sources',
         key: 'sourceCount',
+        sortable: true,
         width: '80px',
         render: (item) => `${item.sourceCount}`
       },
       {
         label: 'Speed',
         key: 'speed',
+        sortable: true,
         width: '100px',
-        render: (item) => formatSpeed(item.speed)
+        render: (item) => h('span', { className: 'font-mono text-blue-600 dark:text-blue-400' }, formatSpeed(item.speed))
       }
     ];
 
@@ -906,11 +995,19 @@ const AmuleWebApp = () => {
           h(Icon, { name: 'trash', size: 14, className: 'inline mr-1' }),
           'Delete'
         )
-      )
+      , currentSort.sortBy, currentSort.sortDirection, handleSortChange)
     );
   };
 
   const renderShared = () => {
+    const currentSort = sortConfig['shared'];
+    const handleSortChange = (newSortBy, newSortDirection) => {
+      setSortConfig(prev => ({
+        ...prev,
+        'shared': { sortBy: newSortBy, sortDirection: newSortDirection }
+      }));
+    };
+
     const columns = [
       {
         label: 'File Name',
@@ -965,11 +1062,19 @@ const AmuleWebApp = () => {
       ),
       shared.length === 0 ? h('div', { className: 'text-center py-6 text-xs sm:text-sm text-gray-500 dark:text-gray-400' },
         loading ? 'Loading shared files...' : 'No shared files'
-      ) : renderTable(shared, columns, null)
+      ) : renderTable(shared, columns, null, currentSort.sortBy, currentSort.sortDirection, handleSortChange)
     );
   };
 
   const renderUploads = () => {
+    const currentSort = sortConfig['uploads'];
+    const handleSortChange = (newSortBy, newSortDirection) => {
+      setSortConfig(prev => ({
+        ...prev,
+        'uploads': { sortBy: newSortBy, sortDirection: newSortDirection }
+      }));
+    };
+
     const ipToString = (ip) => {
       if (!ip) return 'N/A';
       return [
@@ -1063,7 +1168,7 @@ const AmuleWebApp = () => {
       ),
       uploads.length === 0 ? h('div', { className: 'text-center py-6 text-xs sm:text-sm text-gray-500 dark:text-gray-400' },
         loading ? 'Loading uploads...' : 'No active uploads'
-      ) : renderTable(uploads, columns, null)
+      ) : renderTable(uploads, columns, null, currentSort.sortBy, currentSort.sortDirection, handleSortChange)
     );
   };
 
@@ -1093,6 +1198,7 @@ const AmuleWebApp = () => {
       h('div', { className: 'bg-gray-50 dark:bg-gray-700 rounded-lg p-3' },
         h('h3', { className: 'text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2' }, 'Server Information'),
         h('div', {
+          ref: serverInfoRef,
           className: 'bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-600 p-3 max-h-48 overflow-y-auto',
           style: { fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
         },
@@ -1104,6 +1210,7 @@ const AmuleWebApp = () => {
       h('div', { className: 'bg-gray-50 dark:bg-gray-700 rounded-lg p-3' },
         h('h3', { className: 'text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2' }, 'Application Logs'),
         h('div', {
+          ref: logsRef,
           className: 'bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-600 p-3 max-h-96 overflow-y-auto',
           style: { fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
         },
@@ -1125,50 +1232,44 @@ const AmuleWebApp = () => {
   };
 
   const toggleNode = (nodeKey) => {
+    hasUserInteracted.current = true; 
     setExpandedNodes(prev => ({
       ...prev,
       [nodeKey]: !prev[nodeKey]
     }));
   };
 
-  const renderStatsNode = (node, level = 0, parentKey = '') => {
+  const formatNodeLabel = (label, value) => {
+    if (value === undefined || value === null) return label;
+
+    if (typeof value === 'object' && value._value !== undefined && value.EC_TAG_STAT_NODE_VALUE !== undefined) {
+      const sessionValue = value._value;
+      const totalValue = formatStatsValue(value.EC_TAG_STAT_NODE_VALUE);
+      return label.replace(/%s|%i|%llu|%g|%.2f%%/g, () => `${sessionValue} (${totalValue})`);
+    } else if (Array.isArray(value)) {
+      let valueIndex = 0;
+      return label.replace(/%s|%i|%llu|%g|%.2f%%/g, () => value[valueIndex++] || '');
+    } else {
+      return label.replace(/%s|%i|%llu|%g|%.2f%%/g, formatStatsValue(value));
+    }
+  };
+
+  const renderStatsNode = (node, level = 0, parentKey = 'root') => {
     if (!node) return null;
-    
-    const isArray = Array.isArray(node);
-    const nodes = isArray ? node : [node];
-    
+    const nodes = Array.isArray(node) ? node : [node];
+
     return nodes.map((item, idx) => {
       if (!item) return null;
-      
+
       const label = item._value || '';
       const value = item.EC_TAG_STAT_NODE_VALUE;
       const children = item.EC_TAG_STATTREE_NODE;
-      
-      let displayText = label;
-      
-      // Format the label with the value
-      if (value !== undefined && value !== null) {
-        const formattedValue = formatStatsValue(value);
-        
-        // Handle multiple values (session vs total)
-        if (typeof value === 'object' && value._value !== undefined && value.EC_TAG_STAT_NODE_VALUE !== undefined) {
-          const sessionValue = value._value;
-          const totalValue = formatStatsValue(value.EC_TAG_STAT_NODE_VALUE);
-          displayText = label.replace(/%s|%i|%llu|%g|%.2f%%/g, () => `${sessionValue} (${totalValue})`);
-        } else if (Array.isArray(value)) {
-          // Replace format specifiers with array values
-          let valueIndex = 0;
-          displayText = label.replace(/%s|%i|%llu|%g|%.2f%%/g, () => value[valueIndex++] || '');
-        } else {
-          displayText = label.replace(/%s|%i|%llu|%g|%.2f%%/g, formattedValue);
-        }
-      }
-      
-      const hasChildren = children && (Array.isArray(children) ? children.length > 0 : true);
-      const indent = level * 20;
+      const displayText = formatNodeLabel(label, value);
+
+      const hasChildren = children && ((Array.isArray(children) && children.length > 0) || (!Array.isArray(children)));
       const nodeKey = `${parentKey}-${level}-${idx}`;
-      const isExpanded = expandedNodes[nodeKey] !== false; // Default to expanded
-      
+      const isExpanded = !!expandedNodes[nodeKey];
+
       return h('div', { key: nodeKey, className: 'mb-1' },
         h('div', {
           className: `py-1 px-2 rounded text-sm flex items-center gap-2 ${
@@ -1176,7 +1277,7 @@ const AmuleWebApp = () => {
               ? 'font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer' 
               : 'text-gray-600 dark:text-gray-300'
           }`,
-          style: { paddingLeft: `${indent + 8}px` },
+          style: { paddingLeft: `${level * 20 + 8}px` },
           onClick: hasChildren ? () => toggleNode(nodeKey) : undefined
         },
           hasChildren && h(Icon, { 
@@ -1186,38 +1287,36 @@ const AmuleWebApp = () => {
           }),
           h('span', { className: 'flex-1' }, displayText)
         ),
-        hasChildren && isExpanded && h('div', null,
-          renderStatsNode(children, level + 1, nodeKey)
-        )
+        hasChildren && isExpanded && renderStatsNode(children, level + 1, nodeKey)
       );
     });
   };
 
   const renderStatistics = () => {
     const expandAll = () => {
+      hasUserInteracted.current = true;
       const allKeys = {};
-      const collectKeys = (node, level = 0, parentKey = '') => {
+      const collectKeys = (node, level = 0, parentKey = 'root') => {
         if (!node) return;
-        const isArray = Array.isArray(node);
-        const nodes = isArray ? node : [node];
-        nodes.forEach((item, idx) => {
-          if (!item) return;
+        const nodes = Array.isArray(node) ? node : [node];
+        for (let idx = 0; idx < nodes.length; idx++) {
+          const item = nodes[idx];
+          if (!item) continue;
           const children = item.EC_TAG_STATTREE_NODE;
-          const hasChildren = children && (Array.isArray(children) ? children.length > 0 : true);
+          const hasChildren = children && ((Array.isArray(children) && children.length > 0) || (!Array.isArray(children)));
           if (hasChildren) {
             const nodeKey = `${parentKey}-${level}-${idx}`;
             allKeys[nodeKey] = true;
             collectKeys(children, level + 1, nodeKey);
           }
-        });
+        }
       };
-      if (statsTree && statsTree.EC_TAG_STATTREE_NODE) {
-        collectKeys(statsTree.EC_TAG_STATTREE_NODE);
-      }
+      collectKeys(statsTree?.EC_TAG_STATTREE_NODE);
       setExpandedNodes(allKeys);
     };
 
     const collapseAll = () => {
+      hasUserInteracted.current = true;
       setExpandedNodes({});
     };
 
@@ -1257,6 +1356,13 @@ const AmuleWebApp = () => {
             )
       )
     );
+  };
+
+  // Navigation handler for NavButton
+  const handleNavigate = (view) => {
+    setCurrentView(view);
+    setPage(0);
+    setMobileMenuOpen(false);
   };
 
   // Render app
@@ -1306,16 +1412,16 @@ const AmuleWebApp = () => {
 
         // Sidebar
         h('aside', {
-          className: `fixed md:relative inset-y-0 left-0 z-50 md:z-0 w-56 md:w-56 bg-white dark:bg-gray-800 p-2 sm:p-3 rounded-lg shadow-lg md:shadow transform transition-transform duration-300 ease-in-out border border-gray-200 dark:border-gray-700 ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`
+          className: `fixed md:relative left-0 z-50 md:z-0 w-56 md:w-56 bg-white dark:bg-gray-800 p-3 sm:p-3 rounded-lg shadow-lg md:shadow transform transition-transform duration-300 ease-in-out border border-gray-200 dark:border-gray-700 ${mobileMenuOpen ? 'translate-x-0 top-16' : '-translate-x-full top-0 md:translate-x-0'} ${mobileMenuOpen ? 'bottom-0' : 'inset-y-0 md:inset-y-auto'}`
         },
-          h('div', { className: 'space-y-1' },
-            h(NavButton, { icon: 'home', label: 'Home', view: 'home', active: currentView === 'home' }),
-            h(NavButton, { icon: 'search', label: 'Search', view: 'search', active: currentView === 'search' || currentView === 'search-results' }),
-            h(NavButton, { icon: 'download', label: 'Downloads', view: 'downloads', active: currentView === 'downloads' }),
-            h(NavButton, { icon: 'upload', label: 'Uploads', view: 'uploads', active: currentView === 'uploads' }),
-            h(NavButton, { icon: 'share', label: 'Shared Files', view: 'shared', active: currentView === 'shared' }),
-            h(NavButton, { icon: 'fileText', label: 'Logs', view: 'logs', active: currentView === 'logs' }),
-            h(NavButton, { icon: 'chartBar', label: 'Statistics', view: 'statistics', active: currentView === 'statistics' })
+          h('div', { className: 'space-y-2' },
+            h(NavButton, { icon: 'home', label: 'Home', view: 'home', active: currentView === 'home', onNavigate: handleNavigate }),
+            h(NavButton, { icon: 'search', label: 'Search', view: 'search', active: currentView === 'search' || currentView === 'search-results', onNavigate: handleNavigate }),
+            h(NavButton, { icon: 'download', label: 'Downloads', view: 'downloads', active: currentView === 'downloads', onNavigate: handleNavigate }),
+            h(NavButton, { icon: 'upload', label: 'Uploads', view: 'uploads', active: currentView === 'uploads', onNavigate: handleNavigate }),
+            h(NavButton, { icon: 'share', label: 'Shared Files', view: 'shared', active: currentView === 'shared', onNavigate: handleNavigate }),
+            h(NavButton, { icon: 'fileText', label: 'Logs', view: 'logs', active: currentView === 'logs', onNavigate: handleNavigate }),
+            h(NavButton, { icon: 'chartBar', label: 'Statistics', view: 'statistics', active: currentView === 'statistics', onNavigate: handleNavigate })
           )
         ),
 

@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-Get up and running with aMule Web Controller in under 5 minutes!
+Get up and running with aMule Web Controller in under 3 minutes!
 
 ## 🚀 Fastest Setup (Docker)
 
@@ -10,33 +10,49 @@ Get up and running with aMule Web Controller in under 5 minutes!
 
 ### Steps
 
-1. **Clone and setup**
+1. **Pull the image**
 ```bash
-git clone https://github.com/got3nks/amule-web-controller.git
-cd amule-web-controller
-cp .env.example .env
+docker pull g0t3nks/amule-web-controller:latest
 ```
 
-2. **Configure (edit .env)**
-```bash
-# Use 'amule' if using docker-compose.yml with included aMule container
-# Use 'host.docker.internal' to connect to aMule on your host machine (standalone mode)
-AMULE_HOST=host.docker.internal
+2. **Create a `docker-compose.yml` file**
+```yaml
+version: '3.8'
+
+services:
+  amule-web:
+    image: g0t3nks/amule-web-controller:latest
+    container_name: amule-web-controller
+    ports:
+      - "${PORT:-4000}:${PORT:-4000}"
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=${PORT:-4000}
+      - AMULE_HOST=${AMULE_HOST:-host.docker.internal}
+      - AMULE_PORT=${AMULE_PORT:-4712}
+      - AMULE_PASSWORD=${AMULE_PASSWORD:-admin}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./logs:/usr/src/app/server/logs
+    restart: unless-stopped
+```
+
+3. **Create a `.env` file** (optional, for easier configuration)
+```env
+PORT=4000
+AMULE_HOST=host.docker.internal  # Use this for aMule running on host
 AMULE_PORT=4712
-AMULE_PASSWORD=your_password
+AMULE_PASSWORD=your_ec_password
+NODE_ENV=production
 ```
 
-3. **Start**
+4. **Start the container**
 ```bash
-# if you have an aMule istance already running on your host
-docker-compose -f docker-compose.standalone.yml up -d
-
-# OR, if you want to use the included aMule container
 docker-compose up -d
 ```
-
-4. **Access**
-Open http://localhost:4000
+5. **Access**
+The web app will be up and running at: http://localhost:4000
 
 Done! 🎉
 

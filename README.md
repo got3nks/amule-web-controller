@@ -238,7 +238,7 @@ The server exposes a WebSocket endpoint for real-time communication:
   <img src="./docs/home-mobile.jpg" height="550px" />
   <img src="./docs/search-mobile.jpg" height="550px" />
   <img src="./docs/downloads-mobile.jpg" height="550px" />
-  <img src="./docs/search-mobile.jpg" height="550px" />
+  <img src="./docs/uploads-mobile.jpg" height="550px" />
   <img src="./docs/shared-mobile.jpg" height="550px" />
   <img src="./docs/servers-mobile.jpg" height="550px" />
   <img src="./docs/logs-mobile.jpg" height="550px" />

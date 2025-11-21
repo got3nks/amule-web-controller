@@ -3,7 +3,7 @@ const http = require('http');
 const WebSocket = require('ws');
 const path = require('path');
 const fs = require('fs');
-const AmuleClient = require('./AmuleClient');
+const AmuleClient = require('amule-ec-node');
 
 // Configuration
 const PORT = process.env.PORT || 4000;

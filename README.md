@@ -16,23 +16,73 @@ A modern, real-time web interface for controlling aMule via the EC (External Con
 - 📱 **Responsive Design** - Works on desktop, tablet, and mobile
 - ⚡ **WebSocket Updates** - Real-time updates without polling
 
-## Prerequisites
+---
 
-### For All Installations:
-- **aMule daemon** (amuled) with EC (External Connection) protocol enabled
+## 📋 Prerequisites
 
 ### For Docker Installation (Recommended):
-- **Docker** 20.10+
-- **Docker Compose** 1.29+
+- **Docker** 20.10 or higher
+- **Docker Compose** 1.29 or higher (v2 recommended)
+- **aMule daemon** (amuled) running with EC protocol enabled
 
 ### For Native Installation:
-- **Node.js** 18+ 
-- **npm** (comes with Node.js)
+- **Node.js** 18 or higher
+- **npm** 8 or higher (comes with Node.js)
 - **git** (required for dependency installation)
+- **aMule daemon** (amuled) running with EC protocol enabled
 
-## Installation
+## 🚀 Installation
 
-### 🐳 Docker Installation (Recommended)
+### 🐳 Docker Quick Start (Recommended)
+
+#### Option 1: Pre-built Image from Docker Hub
+
+1. **Pull the image**
+```bash
+docker pull g0t3nks/amule-web-controller:latest
+```
+
+2. **Create a `docker-compose.yml` file**
+```yaml
+version: '3.8'
+
+services:
+  amule-web:
+    image: g0t3nks/amule-web-controller:latest
+    container_name: amule-web-controller
+    ports:
+      - "${PORT:-4000}:${PORT:-4000}"
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=${PORT:-4000}
+      - AMULE_HOST=${AMULE_HOST:-host.docker.internal}
+      - AMULE_PORT=${AMULE_PORT:-4712}
+      - AMULE_PASSWORD=${AMULE_PASSWORD:-admin}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./logs:/usr/src/app/server/logs
+    restart: unless-stopped
+```
+
+3. **Create a `.env` file** (optional, for easier configuration)
+```env
+PORT=4000
+AMULE_HOST=host.docker.internal  # Use this for aMule running on host
+AMULE_PORT=4712
+AMULE_PASSWORD=your_ec_password
+NODE_ENV=production
+```
+
+4. **Start the container**
+```bash
+docker-compose up -d
+```
+
+5. **Access the web interface**
+Open your browser and navigate to `http://localhost:4000`
+
+#### Option 2: Build from Source
 
 1. **Clone the repository**
 ```bash
@@ -53,25 +103,26 @@ AMULE_PORT=4712
 AMULE_PASSWORD=your_ec_password
 ```
 
-**Note:** You should not set the `AMULE_HOST` variable as it's already configured in the Docker Compose files.
+**Note:** You don't need to set `AMULE_HOST` as it's configured in docker-compose configuration files.
 
-3. **Build and run**
+3. **Choose your deployment scenario**
+
+**Scenario A:** aMule already running on your host machine
 ```bash
-# if you have an aMule istance already running on your host
 docker-compose -f docker-compose.standalone.yml up -d
+```
 
-# OR, if you want to use the included aMule container
+**Scenario B:** Use the included aMule container (all-in-one setup)
+```bash
 docker-compose up -d
 ```
 
-The web interface will be available at `http://localhost:4000`
+4. **Access the web interface**
+Open your browser and navigate to `http://localhost:4000`
+
+---
 
 ### 📦 Native Installation
-
-**Prerequisites:**
-- Node.js 18+
-- npm
-- git (required for installing dependencies)
 
 1. **Clone the repository**
 ```bash
@@ -79,13 +130,13 @@ git clone https://github.com/got3nks/amule-web-controller.git
 cd amule-web-controller
 ```
 
-2. **Install EC Protocol dependency**
+2. **Install server dependencies**
 ```bash
 cd server
 npm install
 ```
 
-This will automatically install the [amule-ec-node](https://github.com/got3nks/amule-ec-node) library from GitHub.
+This automatically installs the [amule-ec-node](https://github.com/got3nks/amule-ec-node) library from GitHub.
 
 3. **Build frontend assets**
 ```bash
@@ -94,12 +145,15 @@ npm install
 npm run build:css
 ```
 
-4. **Set environment variables**
-```bash
-export AMULE_HOST=127.0.0.1
-export AMULE_PORT=4712
-export AMULE_PASSWORD=your_ec_password
-export PORT=4000
+4. **Configure environment variables**
+
+Create a `.env` file in the root directory:
+```env
+AMULE_HOST=127.0.0.1
+AMULE_PORT=4712
+AMULE_PASSWORD=your_ec_password
+PORT=4000
+NODE_ENV=production
 ```
 
 5. **Start the server**
@@ -107,30 +161,45 @@ export PORT=4000
 node server/server.js
 ```
 
-The web interface will be available at `http://localhost:4000`
+6. **Access the web interface**
+Open your browser and navigate to `http://localhost:4000`
 
-## Configuration
+---
+
+## ⚙️ Configuration
 
 ### aMule EC Setup
 
-1. Enable External Connections in aMule:
-   - Open aMule preferences
-   - Go to "Remote Controls" → "External Connections"
-   - Enable "Accept external connections"
-   - Set a password
-   - Note the port (default: 4712)
+Before using this web controller, you must enable External Connections in aMule:
 
-2. Configure the web controller to connect to your aMule instance using environment variables.
+1. **Open aMule** (or amuled configuration)
+2. **Navigate to Preferences** → **Remote Controls** → **External Connections**
+3. **Enable "Accept external connections"**
+4. **Set an EC password** (remember this for the web controller configuration)
+5. **Note the EC port** (default: 4712)
+6. **Optional:** Configure allowed IP addresses for security
 
-### Environment Variables
+### Environment Variables Reference
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `4000` | Web server port |
-| `AMULE_HOST` | `127.0.0.1` | aMule daemon hostname/IP |
-| `AMULE_PORT` | `4712` | aMule EC port |
-| `AMULE_PASSWORD` | `admin` | aMule EC password |
-| `NODE_ENV` | `development` | Node environment |
+| Variable | Default | Description | Required |
+|----------|---------|-------------|----------|
+| `PORT` | `4000` | Web server listening port | No |
+| `AMULE_HOST` | `127.0.0.1` | aMule daemon hostname or IP address | Yes |
+| `AMULE_PORT` | `4712` | aMule EC protocol port | Yes |
+| `AMULE_PASSWORD` | `admin` | aMule EC connection password | Yes |
+| `NODE_ENV` | `development` | Node environment (`development` or `production`) | No |
+
+### Docker Network Configuration
+
+**Connecting to aMule on Host Machine:**
+- Use `AMULE_HOST=host.docker.internal`
+- Ensure the `extra_hosts` section is in your docker-compose.yml
+
+**Connecting to aMule in Another Container:**
+- Use the service name as hostname (e.g., `AMULE_HOST=amule`)
+- Ensure both containers are on the same Docker network
+
+---
 
 ## Development
 
@@ -221,6 +290,8 @@ The server exposes a WebSocket endpoint for real-time communication:
 // And more...
 ```
 
+---
+
 ## Screenshots
 
 ![Home](./docs/home-desktop.png)
@@ -244,6 +315,8 @@ The server exposes a WebSocket endpoint for real-time communication:
   <img src="./docs/logs-mobile.jpg" height="550px" />
   <img src="./docs/statistics-mobile.jpg" height="550px" />
 </div>
+
+---
 
 ## Troubleshooting
 
@@ -280,6 +353,8 @@ Then retry: `npm install`
 - Ensure CSS was built: `npm run build:css`
 - Check browser console for errors
 - Verify static files are served correctly
+
+---
 
 ## License
 

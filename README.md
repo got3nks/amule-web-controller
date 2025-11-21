@@ -147,13 +147,12 @@ npm run build:css
 
 4. **Configure environment variables**
 
-Create a `.env` file in the root directory:
-```env
-AMULE_HOST=127.0.0.1
-AMULE_PORT=4712
-AMULE_PASSWORD=your_ec_password
-PORT=4000
-NODE_ENV=production
+```bash
+export AMULE_HOST=127.0.0.1
+export AMULE_PORT=4712
+export AMULE_PASSWORD=your_ec_password
+export PORT=4000
+export NODE_ENV=production
 ```
 
 5. **Start the server**

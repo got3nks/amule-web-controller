@@ -3,7 +3,7 @@ const http = require('http');
 const WebSocket = require('ws');
 const path = require('path');
 const fs = require('fs');
-const AmuleClient = require('amule-ec-node');
+const AmuleClient = require('./AmuleClient');
 
 // Configuration
 const PORT = process.env.PORT || 4000;
@@ -159,6 +159,7 @@ wss.on('connection', (ws, req) => {
         case 'getUploadingQueue': await handleGetUploads(ws); break;
         case 'download': await handleDownload(ws, data); break;
         case 'delete': await handleDelete(ws, data); break;
+        case 'addEd2kLink': await handleAddEd2kLink(ws, data); break;
         default:
           ws.send(JSON.stringify({ type: 'error', message: `Unknown action: ${data.action}` }));
       }
@@ -347,6 +348,17 @@ wss.on('connection', (ws, req) => {
     } catch (err) {
       clientLog('Delete error:', err);
       ws.send(JSON.stringify({ type: 'error', message: 'Failed to delete file: ' + err.message }));
+    }
+  }
+
+  async function handleAddEd2kLink(ws, data) {
+    try {
+      const success = await enqueueAmuleCall(() => amuleClient.addEd2kLink(data.link));
+      ws.send(JSON.stringify({ type: 'ed2k-added', success}));
+      clientLog(`ED2K link ${data.link} ${success ? 'added' : 'failed to add'}`);
+    } catch (err) {
+      clientLog('AddEd2kLink error:', err);
+      ws.send(JSON.stringify({ type: 'error', message: `Failed to add ED2K link ${data.link} with error: ${err.message}` }));
     }
   }
 });

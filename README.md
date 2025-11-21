@@ -223,25 +223,25 @@ The server exposes a WebSocket endpoint for real-time communication:
 
 ## Screenshots
 
-### Home Dashboard
 ![Home](./docs/home-desktop.png)
-
-### Search Interface
 ![Search](./docs/search-desktop.png)
-
-### Downloads
 ![Downloads](./docs/downloads-desktop.png)
+![Uploads](./docs/uploads-desktop.png)
+![Shared-Files](./docs/shared-desktop.png)
+![Servers](./docs/servers-desktop.png)
+![Logs](./docs/logs-desktop.png)
+![Statistics](./docs/statistics-desktop.png)
 
 ## Screenshots (Mobile)
 
-### Home Dashboard
-<img src="./docs/home-mobile.png" height="600px" />
-
-### Search Interface
-<img src="./docs/search-mobile.png" height="600px" />
-
-### Downloads
-<img src="./docs/downloads-mobile.png" height="600px" />
+<img src="./docs/home-mobile.jpg" height="600px" />
+<img src="./docs/search-mobile.jpg" height="600px" />
+<img src="./docs/downloads-mobile.jpg" height="600px" />
+<img src="./docs/search-mobile.jpg" height="600px" />
+<img src="./docs/shared-mobile.jpg" height="600px" />
+<img src="./docs/servers-mobile.jpg" height="600px" />
+<img src="./docs/logs-mobile.jpg" height="600px" />
+<img src="./docs/statistics-mobile.jpg" height="600px" />
 
 ## Troubleshooting
 

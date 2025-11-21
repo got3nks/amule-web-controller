@@ -6,7 +6,7 @@ Get up and running with aMule Web Controller in under 3 minutes!
 
 ### Prerequisites
 - Docker and Docker Compose installed
-- aMule with EC enabled (or use the included aMule container)
+- aMule with EC enabled
 
 ### Steps
 
@@ -54,15 +54,6 @@ docker-compose up -d
 The web app will be up and running at: http://localhost:4000
 
 Done! 🎉
-
-## 📝 Enable aMule EC
-
-If you're running aMule separately, enable External Connections:
-
-1. Open aMule → Preferences → Remote Controls
-2. Check "Accept external connections"
-3. Set a password
-4. Note the port (default: 4712)
 
 ## 🔧 Native Setup (No Docker)
 

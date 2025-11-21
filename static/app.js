@@ -82,14 +82,15 @@ const AmuleWebApp = () => {
     'search': { sortBy: 'sourceCount', sortDirection: 'desc' },
     'search-results': { sortBy: 'sourceCount', sortDirection: 'desc' },
     'downloads': { sortBy: 'EC_TAG_PARTFILE_NAME', sortDirection: 'asc' },
-    'uploads': { sortBy: 'EC_TAG_PARTFILE_NAME', sortDirection: 'asc' },
+    'uploads': { sortBy: 'EC_TAG_CLIENT_UP_SPEED', sortDirection: 'desc' },
     'shared': { sortBy: 'transferred', sortDirection: 'desc' },
-    'servers': { sortBy: 'EC_TAG_SERVER_USERS', sortDirection: 'desc' }
+    'servers': { sortBy: 'EC_TAG_SERVER_FILES', sortDirection: 'desc' }
   });
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [deleteModal, setDeleteModal] = useState({ show: false, fileHash: null, fileName: '', isServer: false, serverAddress: null });
+  const [ed2kLink, setEd2kLink] = useState('');
   const hasUserInteracted = useRef(false);
   const [theme, setTheme] = useState(() => {
     // Check device preference, default to dark
@@ -229,7 +230,21 @@ const AmuleWebApp = () => {
       } else if (data.type === 'stats-update') {
         setStats(data.data);
       } else if (data.type === 'uploads-update') {
-        setUploads(data.data || []);
+        // Ensure uploads is always an array
+        let uploadsData = data.data;
+        if (uploadsData && uploadsData.EC_TAG_CLIENT) {
+          // If it's wrapped in EC_TAG_CLIENT, extract it
+          uploadsData = uploadsData.EC_TAG_CLIENT;
+        }
+        // Make sure it's an array
+        if (Array.isArray(uploadsData)) {
+          setUploads(uploadsData);
+        } else if (uploadsData) {
+          // If it's a single object, wrap it in an array
+          setUploads([uploadsData]);
+        } else {
+          setUploads([]);
+        }
       } else if (data.type === 'servers-update') {
         setServers(data.data?.EC_TAG_SERVER || []);
       } else if (data.type === 'server-action') {
@@ -449,6 +464,42 @@ const AmuleWebApp = () => {
     setDownloadedFiles(prev => new Set(prev).add(fileHash));
   };
 
+  const handleAddEd2kLink = (link, isServerList = false) => {
+    if (!link.trim()) return;
+    
+    setLoading(true);
+    sendWsMessage({ action: 'addEd2kLink', link: link.trim() });
+
+    const handleEd2kResponse = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'ed2k-added') {
+        setLoading(false);
+        if (data.success) {
+          setEd2kLink('');
+          // Refresh appropriate list based on context
+          setTimeout(() => {
+            if (isServerList) {
+              fetchServers();
+            } else {
+              fetchDownloads();
+            }
+          }, 500);
+        } else {
+          setError('Failed to add ED2K link');
+          setTimeout(() => setError(''), 3000);
+        }
+        ws.removeEventListener('message', handleEd2kResponse);
+      } else if (data.type === 'error') {
+        setLoading(false);
+        setError(data.message || 'Failed to add ED2K link');
+        setTimeout(() => setError(''), 3000);
+        ws.removeEventListener('message', handleEd2kResponse);
+      }
+    };
+
+    ws.addEventListener('message', handleEd2kResponse);
+  };
+
   const handleDelete = (fileHash, fileName) => {
     setDeleteModal({ show: true, fileHash, fileName });
   };
@@ -508,6 +559,12 @@ const AmuleWebApp = () => {
   };
 
   const sortFiles = (files, sortBy, sortDirection) => {
+    // Safety check: ensure files is an array
+    if (!Array.isArray(files)) {
+      console.error('sortFiles: files is not an array', files);
+      return [];
+    }
+    
     return [...files].sort((a, b) => {
       let result = 0;
 
@@ -560,8 +617,8 @@ const AmuleWebApp = () => {
     const uploadSpeed = formatSpeed(stats.EC_TAG_STATS_UL_SPEED || 0);
     const downloadSpeed = formatSpeed(stats.EC_TAG_STATS_DL_SPEED || 0);
 
-    return h('footer', { className: 'bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-1.5 px-2 sm:px-3 flex-none md:sticky md:bottom-0 z-40' },
-      h('div', { },
+    return h('footer', { className: 'bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-1.5 px-2 sm:px-3 flex-none sticky bottom-0 z-40' },
+      h('div', { className: 'mx-auto' },
         
         // Mobile view
         h('div', { className: 'md:hidden flex flex-col gap-1.5 text-xs' },
@@ -637,6 +694,14 @@ const AmuleWebApp = () => {
   };
 
   const renderTable = (data, columns, actions, currentSortBy, currentSortDirection, onSortChange) => {
+    // Safety check: ensure data is an array
+    if (!Array.isArray(data)) {
+      console.error('renderTable: data is not an array', data);
+      return h('div', { className: 'text-center py-6 text-xs sm:text-sm text-red-500 dark:text-red-400' }, 
+        'Error: Invalid data format'
+      );
+    }
+    
     const sorted = sortFiles(data, currentSortBy, currentSortDirection);
     const pagesCount = Math.ceil(sorted.length / pageSize);
     const start = page * pageSize;
@@ -792,16 +857,9 @@ const AmuleWebApp = () => {
         h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, 'Select an option from the menu to get started')
       ),
       
-      // Desktop: 3 columns grid with last row centered
+      // Desktop: 3 columns grid with last row centered (no Home button)
       h('div', { className: 'hidden sm:grid grid-cols-3 gap-3 max-w-4xl mx-auto' },
         // Row 1
-        h('button', {
-          onClick: () => setCurrentView('home'),
-          className: 'p-4 bg-teal-50 dark:bg-teal-900/20 rounded-lg hover:bg-teal-100 dark:hover:bg-teal-900/30 transition-colors active:scale-95 border border-teal-200 dark:border-teal-800'
-        },
-          h(Icon, { name: 'home', size: 24, className: 'mx-auto mb-1 text-teal-600 dark:text-teal-400' }),
-          h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Home')
-        ),
         h('button', {
           onClick: () => setCurrentView('search'),
           className: 'p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors active:scale-95 border border-blue-200 dark:border-blue-800'
@@ -816,8 +874,6 @@ const AmuleWebApp = () => {
           h(Icon, { name: 'download', size: 24, className: 'mx-auto mb-1 text-green-600 dark:text-green-400' }),
           h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Downloads')
         ),
-        
-        // Row 2
         h('button', {
           onClick: () => setCurrentView('uploads'),
           className: 'p-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg hover:bg-orange-100 dark:hover:bg-orange-900/30 transition-colors active:scale-95 border border-orange-200 dark:border-orange-800'
@@ -825,6 +881,8 @@ const AmuleWebApp = () => {
           h(Icon, { name: 'upload', size: 24, className: 'mx-auto mb-1 text-orange-600 dark:text-orange-400' }),
           h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Uploads')
         ),
+        
+        // Row 2
         h('button', {
           onClick: () => setCurrentView('shared'),
           className: 'p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg hover:bg-purple-100 dark:hover:bg-purple-900/30 transition-colors active:scale-95 border border-purple-200 dark:border-purple-800'
@@ -839,16 +897,16 @@ const AmuleWebApp = () => {
           h(Icon, { name: 'server', size: 24, className: 'mx-auto mb-1 text-indigo-600 dark:text-indigo-400' }),
           h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Servers')
         ),
+        h('button', {
+          onClick: () => setCurrentView('logs'),
+          className: 'p-4 bg-cyan-50 dark:bg-cyan-900/20 rounded-lg hover:bg-cyan-100 dark:hover:bg-cyan-900/30 transition-colors active:scale-95 border border-cyan-200 dark:border-cyan-800'
+        },
+          h(Icon, { name: 'fileText', size: 24, className: 'mx-auto mb-1 text-cyan-600 dark:text-cyan-400' }),
+          h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Logs')
+        ),
         
-        // Row 3 - centered (2 buttons in middle)
+        // Row 3 - centered (1 button in middle)
         h('div', { className: 'col-span-3 flex justify-center gap-3' },
-          h('button', {
-            onClick: () => setCurrentView('logs'),
-            className: 'p-4 bg-cyan-50 dark:bg-cyan-900/20 rounded-lg hover:bg-cyan-100 dark:hover:bg-cyan-900/30 transition-colors active:scale-95 border border-cyan-200 dark:border-cyan-800 w-full max-w-[calc(33.333%-0.5rem)]'
-          },
-            h(Icon, { name: 'fileText', size: 24, className: 'mx-auto mb-1 text-cyan-600 dark:text-cyan-400' }),
-            h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Logs')
-          ),
           h('button', {
             onClick: () => setCurrentView('statistics'),
             className: 'p-4 bg-pink-50 dark:bg-pink-900/20 rounded-lg hover:bg-pink-100 dark:hover:bg-pink-900/30 transition-colors active:scale-95 border border-pink-200 dark:border-pink-800 w-full max-w-[calc(33.333%-0.5rem)]'
@@ -859,25 +917,55 @@ const AmuleWebApp = () => {
         )
       ),
       
-      // Mobile: single column, all buttons including logs
+      // Mobile: stats widgets + buttons (no Home button)
       h('div', { className: 'sm:hidden flex flex-col gap-3' },
-        // Logo and Welcome text for mobile
-        h('div', { className: 'flex items-center justify-center gap-3 mb-2 px-2' },
-          h('img', { 
-            src: '/static/logo-brax.png', 
-            alt: 'aMule', 
-            className: 'w-12 h-12 object-contain'
-          }),
-          h('h2', { className: 'text-lg font-bold text-gray-800 dark:text-gray-100 text-center' }, 'Welcome')
+        // Stats widgets
+        stats ? h('div', { className: 'grid grid-cols-2 gap-3 mb-2' },
+          // Upload widget
+          h('div', { className: 'bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/30 rounded-lg p-4 border border-green-200 dark:border-green-800' },
+            h('div', { className: 'flex items-center gap-2 mb-2' },
+              h(Icon, { name: 'upload', size: 20, className: 'text-green-600 dark:text-green-400' }),
+              h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Upload')
+            ),
+            h('div', { className: 'space-y-1' },
+              h('div', { className: 'text-2xl font-bold text-green-600 dark:text-green-400' }, 
+                formatSpeed(stats.EC_TAG_STATS_UL_SPEED || 0)
+              ),
+              h('div', { className: 'text-xs text-gray-600 dark:text-gray-400' },
+                'Current speed'
+              )
+            )
+          ),
+          // Download widget
+          h('div', { className: 'bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/30 rounded-lg p-4 border border-blue-200 dark:border-blue-800' },
+            h('div', { className: 'flex items-center gap-2 mb-2' },
+              h(Icon, { name: 'download', size: 20, className: 'text-blue-600 dark:text-blue-400' }),
+              h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Download')
+            ),
+            h('div', { className: 'space-y-1' },
+              h('div', { className: 'text-2xl font-bold text-blue-600 dark:text-blue-400' }, 
+                formatSpeed(stats.EC_TAG_STATS_DL_SPEED || 0)
+              ),
+              h('div', { className: 'text-xs text-gray-600 dark:text-gray-400' },
+                'Current speed'
+              )
+            )
+          )
+        ) : h('div', { className: 'grid grid-cols-2 gap-3 mb-2' },
+          // Placeholder upload widget
+          h('div', { className: 'bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 animate-pulse' },
+            h('div', { className: 'h-4 bg-gray-300 dark:bg-gray-600 rounded w-20 mb-3' }),
+            h('div', { className: 'h-8 bg-gray-300 dark:bg-gray-600 rounded w-24 mb-2' }),
+            h('div', { className: 'h-3 bg-gray-300 dark:bg-gray-600 rounded w-20' })
+          ),
+          // Placeholder download widget
+          h('div', { className: 'bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 animate-pulse' },
+            h('div', { className: 'h-4 bg-gray-300 dark:bg-gray-600 rounded w-20 mb-3' }),
+            h('div', { className: 'h-8 bg-gray-300 dark:bg-gray-600 rounded w-24 mb-2' }),
+            h('div', { className: 'h-3 bg-gray-300 dark:bg-gray-600 rounded w-20' })
+          )
         ),
-        // Buttons
-        h('button', {
-          onClick: () => setCurrentView('home'),
-          className: 'p-4 bg-teal-50 dark:bg-teal-900/20 rounded-lg hover:bg-teal-100 dark:hover:bg-teal-900/30 transition-colors active:scale-95 border border-teal-200 dark:border-teal-800 flex items-center gap-3'
-        },
-          h(Icon, { name: 'home', size: 24, className: 'text-teal-600 dark:text-teal-400' }),
-          h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Home')
-        ),
+        
         h('button', {
           onClick: () => setCurrentView('search'),
           className: 'p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors active:scale-95 border border-blue-200 dark:border-blue-800 flex items-center gap-3'
@@ -1181,6 +1269,29 @@ const AmuleWebApp = () => {
           )
         )
       ),
+      
+      // ED2K download link form
+      h('div', { className: 'bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3' },
+        h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2' }, 
+          'Add download from ED2K link:'
+        ),
+        h('div', { className: 'flex gap-2' },
+          h('input', {
+            type: 'text',
+            value: ed2kLink,
+            onChange: (e) => setEd2kLink(e.target.value),
+            placeholder: 'ed2k://|file|...',
+            className: 'flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent',
+            disabled: loading
+          }),
+          h('button', {
+            onClick: () => handleAddEd2kLink(ed2kLink, false),
+            disabled: loading || !ed2kLink.trim(),
+            className: 'px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-all active:scale-95 text-sm font-medium'
+          }, loading ? 'Adding...' : 'Add Download')
+        )
+      ),
+      
       downloads.length === 0 ? h('div', { className: 'text-center py-6 text-xs sm:text-sm text-gray-500 dark:text-gray-400' },
         loading ? 'Loading downloads...' : 'No active downloads'
       ) : renderTable(downloads, columns, (item) =>
@@ -1497,6 +1608,29 @@ const AmuleWebApp = () => {
           )
         )
       ),
+      
+      // ED2K server.met form
+      h('div', { className: 'bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3' },
+        h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2' }, 
+          'Add server from server.met ED2K link:'
+        ),
+        h('div', { className: 'flex gap-2' },
+          h('input', {
+            type: 'text',
+            value: ed2kLink || 'ed2k://|serverlist|http://upd.emule-security.org/server.met|/',
+            onChange: (e) => setEd2kLink(e.target.value),
+            placeholder: 'ed2k://|serverlist|http://...',
+            className: 'flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent',
+            disabled: loading
+          }),
+          h('button', {
+            onClick: () => handleAddEd2kLink(ed2kLink || 'ed2k://|serverlist|http://upd.emule-security.org/server.met|/', true),
+            disabled: loading,
+            className: 'px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-all active:scale-95 text-sm font-medium'
+          }, loading ? 'Adding...' : 'Add Servers')
+        )
+      ),
+      
       servers.length === 0 ? h('div', { className: 'text-center py-6 text-xs sm:text-sm text-gray-500 dark:text-gray-400' },
         loading ? 'Loading servers...' : 'No servers available'
       ) : renderTable(servers, columns, (item) =>
@@ -1703,7 +1837,7 @@ const AmuleWebApp = () => {
         ),
         h('p', { className: 'text-gray-700 dark:text-gray-300 mb-6' },
           `Are you sure you want to ${actionWord} `,
-          h('span', { className: 'font-semibold break-words max-w-full' }, `"${deleteModal.fileName}"`),
+          h('span', { className: 'font-semibold' }, `"${deleteModal.fileName}"`),
           '?'
         ),
         h('div', { className: 'flex gap-3 justify-end' },

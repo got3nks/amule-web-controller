@@ -18,19 +18,6 @@ A modern, real-time web interface for controlling aMule via the EC (External Con
 
 ---
 
-## 📋 Prerequisites
-
-### For Docker Installation (Recommended):
-- **Docker** 20.10 or higher
-- **Docker Compose** 1.29 or higher (v2 recommended)
-- **aMule daemon** (amuled) running with EC protocol enabled
-
-### For Native Installation:
-- **Node.js** 18 or higher
-- **npm** 8 or higher (comes with Node.js)
-- **git** (required for dependency installation)
-- **aMule daemon** (amuled) running with EC protocol enabled
-
 ## 🚀 Installation
 
 ### 🐳 Docker Quick Start (Recommended)

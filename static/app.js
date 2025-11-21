@@ -1835,9 +1835,9 @@ const AmuleWebApp = () => {
             h('p', { className: 'text-sm text-gray-500 dark:text-gray-400' }, 'This action cannot be undone')
           )
         ),
-        h('p', { className: 'text-gray-700 dark:text-gray-300 mb-6' },
+        h('p', { className: 'text-gray-700 dark:text-gray-300 mb-6 break-words' },
           `Are you sure you want to ${actionWord} `,
-          h('span', { className: 'font-semibold' }, `"${deleteModal.fileName}"`),
+          h('span', { className: 'font-semibold break-words max-w-full inline-block' }, `"${deleteModal.fileName}"`),
           '?'
         ),
         h('div', { className: 'flex gap-3 justify-end' },

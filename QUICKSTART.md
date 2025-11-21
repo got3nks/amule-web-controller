@@ -44,7 +44,6 @@ PORT=4000
 AMULE_HOST=host.docker.internal  # Use this for aMule running on host
 AMULE_PORT=4712
 AMULE_PASSWORD=your_ec_password
-NODE_ENV=production
 ```
 
 4. **Start the container**
@@ -92,31 +91,5 @@ node server/server.js
 Access at http://localhost:4000
 
 ## ❓ Troubleshooting
-
-**Git not found?**
-```bash
-# Ubuntu/Debian
-sudo apt-get install git
-
-# macOS
-brew install git
-
-# Windows: download from git-scm.com
-```
-
-**Can't connect to aMule?**
-- Verify EC is enabled in aMule
-- Check password matches
-- Ensure port 4712 is accessible
-
-**Page not loading?**
-- Check `npm run build:css` completed
-- Verify `static/output.css` exists
-
-**WebSocket errors?**
-- Check aMule is running
-- Check logs: `docker-compose logs -f` or `tail -f logs/server.log`
-
-## 📚 Next Steps
 
 - Read the full [README.md](README.md)

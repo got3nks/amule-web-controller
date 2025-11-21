@@ -58,7 +58,6 @@ PORT=4000
 AMULE_HOST=host.docker.internal  # Use this for aMule running on host
 AMULE_PORT=4712
 AMULE_PASSWORD=your_ec_password
-NODE_ENV=production
 ```
 
 4. **Start the container**
@@ -84,7 +83,6 @@ cp .env.example .env
 
 Edit `.env` and configure your aMule connection:
 ```env
-NODE_ENV=production
 PORT=4000
 AMULE_PORT=4712
 AMULE_PASSWORD=your_ec_password
@@ -139,7 +137,6 @@ export AMULE_HOST=127.0.0.1
 export AMULE_PORT=4712
 export AMULE_PASSWORD=your_ec_password
 export PORT=4000
-export NODE_ENV=production
 ```
 
 5. **Start the server**

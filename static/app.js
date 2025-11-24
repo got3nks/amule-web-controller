@@ -82,7 +82,7 @@ const AmuleWebApp = () => {
   const [sortConfig, setSortConfig] = useState({
     'search': { sortBy: 'sourceCount', sortDirection: 'desc' },
     'search-results': { sortBy: 'sourceCount', sortDirection: 'desc' },
-    'downloads': { sortBy: 'EC_TAG_PARTFILE_NAME', sortDirection: 'asc' },
+    'downloads': { sortBy: 'fileName', sortDirection: 'asc' },
     'uploads': { sortBy: 'EC_TAG_CLIENT_UP_SPEED', sortDirection: 'desc' },
     'shared': { sortBy: 'transferred', sortDirection: 'desc' },
     'servers': { sortBy: 'EC_TAG_SERVER_FILES', sortDirection: 'desc' }

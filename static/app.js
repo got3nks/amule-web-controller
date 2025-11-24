@@ -1278,7 +1278,7 @@ const AmuleWebApp = () => {
     const columns = [
       {
         label: 'File Name',
-        key: 'EC_TAG_PARTFILE_NAME',
+        key: 'fileName',
         sortable: true,
         width: 'auto',
         render: (item) =>

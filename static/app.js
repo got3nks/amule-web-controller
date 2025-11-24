@@ -29,7 +29,8 @@ const Icon = ({ name, size = 20, className = '' }) => {
     plugConnect: '<path d="M12 2v4m0 0a4 4 0 014 4v4m-4-8a4 4 0 00-4 4v4m8 4v4m-8-4v4m4-4a4 4 0 01-4 4m4-4a4 4 0 004 4"/>',
     disconnect: '<path d="M18.36 6.64a9 9 0 11-12.73 0M12 2v10"/>',
     check: '<polyline points="20 6 9 17 4 12"/>',
-    power: '<path d="M18.36 6.64a9 9 0 11-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>'
+    power: '<path d="M18.36 6.64a9 9 0 11-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>',
+    cloud: '<path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/>'
   };
   
   return h('svg', {
@@ -109,9 +110,17 @@ const AmuleWebApp = () => {
     }
     return 'dark';
   });
-  
+
   const PAGE_SIZE_DESKTOP = 20,
         PAGE_SIZE_MOBILE = 10;
+  
+  // Track landscape orientation for mobile
+  const [isLandscape, setIsLandscape] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.matchMedia("(orientation: landscape)").matches && window.matchMedia("(max-device-width: 600px)").matches;
+    }
+    return false;
+  });
 
   // Dynamic page size based on screen width
   const [pageSize, setPageSize] = useState(() => {
@@ -120,6 +129,21 @@ const AmuleWebApp = () => {
     }
     return 10;
   });
+
+  // Update page size and landscape mode on window resize
+  useEffect(() => {
+    const handleResize = () => {
+      const newPageSize = window.innerWidth >= 768 ? PAGE_SIZE_DESKTOP : PAGE_SIZE_MOBILE;
+      setPageSize(newPageSize);
+      
+      // Update landscape detection
+      const isLandscapeMode = window.matchMedia("(orientation: landscape)").matches && window.matchMedia("(max-device-width: 600px)").matches;
+      setIsLandscape(isLandscapeMode);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // WebSocket connection for real-time updates
   const [ws, setWs] = useState(null);
@@ -143,17 +167,6 @@ const AmuleWebApp = () => {
       root.style.colorScheme = 'light';
     }
   }, [theme]);
-
-  // Update page size on window resize
-  useEffect(() => {
-    const handleResize = () => {
-      const newPageSize = window.innerWidth >= 768 ? PAGE_SIZE_DESKTOP : PAGE_SIZE_MOBILE;
-      setPageSize(newPageSize);
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
 
   // Auto-expand first level of stats tree when loaded
   useEffect(() => {
@@ -605,19 +618,27 @@ const AmuleWebApp = () => {
       );
     }
 
+    // Hide footer on mobile when on home page (sm:hidden)
+    if (currentView === 'home' && window.innerWidth < 640) {
+      return null;
+    }
+
     const connState = stats.EC_TAG_CONNSTATE || {};
     const server = connState.EC_TAG_SERVER || {};
+
     const ed2kConnected = server?.EC_TAG_SERVER_PING > 0;
     const clientId = connState.EC_TAG_CLIENT_ID;
     const isHighId = clientId && clientId > 16777216;
     
     const kadFirewalled = stats.EC_TAG_STATS_KAD_FIREWALLED_UDP === 1;
-    const kadStatus = kadFirewalled ? 'Firewalled' : 'OK';
+    const kadConnected = stats.EC_TAG_STATS_KAD_FIREWALLED_UDP !== undefined && stats.EC_TAG_STATS_KAD_FIREWALLED_UDP !== null;
     
     const uploadSpeed = formatSpeed(stats.EC_TAG_STATS_UL_SPEED || 0);
     const downloadSpeed = formatSpeed(stats.EC_TAG_STATS_DL_SPEED || 0);
 
-    return h('footer', { className: 'bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-1.5 px-2 sm:px-3 flex-none sticky bottom-0 z-40' },
+    return h('footer', { 
+      className: 'bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-1.5 px-2 sm:px-3 flex-none md:sticky md:bottom-0 z-40'
+    },
       h('div', { className: 'mx-auto' },
         
         // Mobile view
@@ -644,11 +665,11 @@ const AmuleWebApp = () => {
               h('span', { className: 'w-20 flex-shrink-0 font-semibold text-gray-300' }, 'KAD:'),
               h('span', {
                 className: `w-28 text-center px-2 py-0.5 rounded text-xs font-medium ${
-                  !kadFirewalled
-                    ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-                    : 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200'
+                  kadConnected
+                    ? (!kadFirewalled ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200')
+                    : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
                 }`
-              }, kadStatus)
+              }, kadConnected ? (!kadFirewalled ? '✓ OK' : '⚠ Firewalled') : '✗ Disconnected')
             ),
             h('div', { className: 'flex items-center gap-2' },
               h('span', { className: 'w-20 flex-shrink-0 font-semibold text-gray-300' }, 'Download ↓'),
@@ -673,9 +694,13 @@ const AmuleWebApp = () => {
             ),
             h('div', { className: 'flex items-center gap-2' },
               h('span', { className: 'font-semibold text-gray-700 dark:text-gray-300' }, 'KAD:'),
-              h('span', { className: `px-2 py-1 rounded text-xs font-medium ${!kadFirewalled ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200'}` },
-                kadStatus
-              )
+              h('span', { className: `px-2 py-1 rounded text-xs font-medium ${
+                kadConnected
+                  ? (!kadFirewalled ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200')
+                  : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'}`
+                },
+                kadConnected ? (!kadFirewalled ? '✓ OK' : '⚠ Firewalled') : '✗ Disconnected'
+              ),
             )
           ),
           h('div', { className: 'flex items-center gap-3' },
@@ -734,7 +759,7 @@ const AmuleWebApp = () => {
       // Mobile card view
       h('div', { className: 'block md:hidden space-y-2' },
         paginatedData.map((item, idx) => {
-          // Determina il titolo in base al tipo di item
+          // Title based on item type
           const title = item.EC_TAG_SERVER_NAME || item.fileName || item.EC_TAG_PARTFILE_NAME || 'N/A';
           
           return h('div', {
@@ -749,16 +774,16 @@ const AmuleWebApp = () => {
                 if (col.key === 'fileName' || col.key === 'EC_TAG_PARTFILE_NAME' || col.key === 'EC_TAG_SERVER_NAME') return null;
                 return h('div', {
                   key: cidx,
-                  className: 'flex justify-between items-center'
+                  className: 'text-gray-700 dark:text-gray-300'
                 },
-                  h('span', { className: 'text-gray-600 dark:text-gray-400 font-medium' }, col.label + ':'),
+                  col.key != 'progress' && h('span', { className: 'font-medium text-gray-600 dark:text-gray-400' }, col.label + ': '),
                   h('span', { className: 'text-gray-900 dark:text-gray-100' },
                     col.render ? col.render(item) : item[col.key]
                   )
                 );
               })
             ),
-            actions && h('div', { className: 'flex gap-1.5 mt-2 pt-2 border-t border-gray-200 dark:border-gray-700' },
+            actions && h('div', { className: 'flex gap-1.5 mt-2 pt-2 border-t border-gray-200 dark:border-gray-700 justify-center' },
               actions(item)
             )
           );
@@ -919,7 +944,7 @@ const AmuleWebApp = () => {
       
       // Mobile: stats widgets + buttons (no Home button)
       h('div', { className: 'sm:hidden flex flex-col gap-3' },
-        // Stats widgets
+        // Stats widgets - 2x2 grid
         stats ? h('div', { className: 'grid grid-cols-2 gap-3 mb-2' },
           // Upload widget
           h('div', { className: 'bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/30 rounded-lg p-4 border border-green-200 dark:border-green-800' },
@@ -950,19 +975,69 @@ const AmuleWebApp = () => {
                 'Current speed'
               )
             )
-          )
-        ) : h('div', { className: 'grid grid-cols-2 gap-3 mb-2' },
-          // Placeholder upload widget
-          h('div', { className: 'bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 animate-pulse' },
-            h('div', { className: 'h-4 bg-gray-300 dark:bg-gray-600 rounded w-20 mb-3' }),
-            h('div', { className: 'h-8 bg-gray-300 dark:bg-gray-600 rounded w-24 mb-2' }),
-            h('div', { className: 'h-3 bg-gray-300 dark:bg-gray-600 rounded w-20' })
           ),
-          // Placeholder download widget
-          h('div', { className: 'bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 animate-pulse' },
-            h('div', { className: 'h-4 bg-gray-300 dark:bg-gray-600 rounded w-20 mb-3' }),
-            h('div', { className: 'h-8 bg-gray-300 dark:bg-gray-600 rounded w-24 mb-2' }),
-            h('div', { className: 'h-3 bg-gray-300 dark:bg-gray-600 rounded w-20' })
+          // ED2K Status widget
+          (() => {
+            const connState = stats.EC_TAG_CONNSTATE || {};
+            const server = connState.EC_TAG_SERVER || {};
+            const ed2kConnected = server?.EC_TAG_SERVER_PING > 0;
+            const clientId = connState.EC_TAG_CLIENT_ID;
+            const isHighId = clientId && clientId > 16777216;
+            const statusText = ed2kConnected ? (isHighId ? 'High ID' : 'Low ID') : 'Disconnected';
+            const statusColor = ed2kConnected ? (isHighId ? 'green' : 'yellow') : 'red';
+            const serverName = ed2kConnected && server.EC_TAG_SERVER_NAME ? server.EC_TAG_SERVER_NAME : 'No server';
+            
+            return h('div', { 
+                className: 'bg-gradient-to-br from-indigo-50 to-indigo-100 dark:from-indigo-900/20 dark:to-indigo-800/30 rounded-lg p-4 border border-indigo-200 dark:border-indigo-800' 
+              },
+              h('div', { className: 'flex items-center gap-2 mb-2' },
+                h(Icon, { name: 'server', size: 20, className: 'text-indigo-600 dark:text-indigo-400' }),
+                h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'ED2K')
+              ),
+              h('div', { className: 'space-y-1' },
+                h('div', { className: `text-2xl font-bold text-${statusColor}-600 dark:text-${statusColor}-400` }, 
+                  statusText
+                ),
+                h('div', { className: 'text-xs text-gray-600 dark:text-gray-400 truncate' },
+                  serverName
+                )
+              )
+            );
+          })(),
+          // KAD Status widget
+          (() => {
+            const kadFirewalledValue = stats.EC_TAG_STATS_KAD_FIREWALLED_UDP;
+            const kadConnected = kadFirewalledValue !== undefined && kadFirewalledValue !== null;
+            const kadFirewalled = kadFirewalledValue === 1;
+            const statusText = !kadConnected ? 'Disconnected' : (kadFirewalled ? 'Firewalled' : 'OK');
+            const statusColor = !kadConnected ? 'red' : (kadFirewalled ? 'orange' : 'green');
+            
+            return h('div', { className: 'bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-800/30 rounded-lg p-4 border border-purple-200 dark:border-purple-800' },
+              h('div', { className: 'flex items-center gap-2 mb-2' },
+                h(Icon, { name: 'cloud', size: 20, className: 'text-purple-600 dark:text-purple-400' }),
+                h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'KAD')
+              ),
+              h('div', { className: 'space-y-1' },
+                h('div', { className: `text-2xl font-bold text-${statusColor}-600 dark:text-${statusColor}-400` }, 
+                  statusText
+                ),
+                h('div', { className: 'text-xs text-gray-600 dark:text-gray-400' },
+                  'Network'
+                )
+              )
+            );
+          })()
+        ) : h('div', { className: 'grid grid-cols-2 gap-3 mb-2' },
+          // Placeholder widgets (4 total)
+          ...Array(4).fill(null).map((_, i) => 
+            h('div', { 
+              key: i,
+              className: 'bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 animate-pulse' 
+            },
+              h('div', { className: 'h-4 bg-gray-300 dark:bg-gray-600 rounded w-20 mb-3' }),
+              h('div', { className: 'h-8 bg-gray-300 dark:bg-gray-600 rounded w-24 mb-2' }),
+              h('div', { className: 'h-3 bg-gray-300 dark:bg-gray-600 rounded w-20' })
+            )
           )
         ),
         
@@ -1213,13 +1288,6 @@ const AmuleWebApp = () => {
           }, item.fileName)
       },
       {
-        label: 'Size',
-        key: 'fileSize',
-        sortable: true,
-        width: '100px',
-        render: (item) => formatBytes(item.fileSize)
-      },
-      {
         label: 'Progress',
         key: 'progress',
         sortable: true,
@@ -1237,11 +1305,18 @@ const AmuleWebApp = () => {
         )
       },
       {
+        label: 'Size',
+        key: 'fileSize',
+        sortable: true,
+        width: '100px',
+        render: (item) => formatBytes(item.fileSize)
+      },
+      {
         label: 'Sources',
         key: 'sourceCount',
         sortable: true,
         width: '80px',
-        render: (item) => `${item.sourceCount}`
+        render: (item) => `${item.sourceCount} source${item.sourceCount === 1 ? '' : 's'}`
       },
       {
         label: 'Speed',
@@ -1270,8 +1345,20 @@ const AmuleWebApp = () => {
         )
       ),
       
+      downloads.length === 0 ? h('div', { className: 'text-center py-6 text-xs sm:text-sm text-gray-500 dark:text-gray-400' },
+        loading ? 'Loading downloads...' : 'No active downloads'
+      ) : renderTable(downloads, columns, (item) =>
+        h('button', {
+          onClick: () => handleDelete(item.fileHash, item.fileName),
+          className: 'flex-1 px-2 py-1 text-xs sm:text-sm bg-red-600 text-white rounded hover:bg-red-700 text-sm transition-all active:scale-95'
+        },
+          h(Icon, { name: 'trash', size: 14, className: 'inline mr-1' }),
+          'Delete'
+        )
+      , currentSort.sortBy, currentSort.sortDirection, handleSortChange),
+      
       // ED2K download link form
-      h('div', { className: 'bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3' },
+      h('div', { className: 'bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 mt-3' },
         h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2' }, 
           'Add download from ED2K link:'
         ),
@@ -1290,19 +1377,7 @@ const AmuleWebApp = () => {
             className: 'px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-all active:scale-95 text-sm font-medium'
           }, loading ? 'Adding...' : 'Add Download')
         )
-      ),
-      
-      downloads.length === 0 ? h('div', { className: 'text-center py-6 text-xs sm:text-sm text-gray-500 dark:text-gray-400' },
-        loading ? 'Loading downloads...' : 'No active downloads'
-      ) : renderTable(downloads, columns, (item) =>
-        h('button', {
-          onClick: () => handleDelete(item.fileHash, item.fileName),
-          className: 'flex-1 px-2 py-1 text-xs sm:text-sm bg-red-600 text-white rounded hover:bg-red-700 text-sm transition-all active:scale-95'
-        },
-          h(Icon, { name: 'trash', size: 14, className: 'inline mr-1' }),
-          'Delete'
-        )
-      , currentSort.sortBy, currentSort.sortDirection, handleSortChange)
+      )
     );
   };
 
@@ -1406,17 +1481,6 @@ const AmuleWebApp = () => {
 
     const columns = [
       {
-        label: 'Client',
-        key: 'EC_TAG_CLIENT_NAME',
-        sortable: true,
-        width: '140px',
-        render: (item) =>
-          h('div', { className: 'max-w-xs' },
-            h('div', { className: 'font-medium text-sm' }, getClientSoftware(item.EC_TAG_CLIENT_SOFTWARE)),
-            h('div', { className: 'text-xs text-gray-500 dark:text-gray-400' }, item.EC_TAG_CLIENT_SOFT_VER_STR || 'N/A')
-          )
-      },
-      {
         label: 'File',
         key: 'EC_TAG_PARTFILE_NAME',
         sortable: true,
@@ -1428,12 +1492,6 @@ const AmuleWebApp = () => {
           }, item.EC_TAG_PARTFILE_NAME || 'Unknown')
       },
       {
-        label: 'IP Address',
-        key: 'EC_TAG_CLIENT_USER_IP',
-        width: '130px',
-        render: (item) => h('span', { className: 'font-mono text-xs' }, ipToString(item.EC_TAG_CLIENT_USER_IP))
-      },
-      {
         label: 'Upload Speed',
         key: 'EC_TAG_CLIENT_UP_SPEED',
         sortable: true,
@@ -1441,14 +1499,31 @@ const AmuleWebApp = () => {
         render: (item) => h('span', { className: 'font-mono text-sm text-green-600 dark:text-green-400' }, formatSpeed(item.EC_TAG_CLIENT_UP_SPEED || 0))
       },
       {
-        label: 'Session',
+        label: 'Client',
+        key: 'EC_TAG_CLIENT_NAME',
+        sortable: true,
+        width: '140px',
+        render: (item) =>
+          h('span', { className: '' }, [
+            h('span', { className: 'font-medium text-sm align-baseline' }, getClientSoftware(item.EC_TAG_CLIENT_SOFTWARE)),
+            h('span', { className: 'text-xs text-gray-500 dark:text-gray-400 align-baseline ml-1' }, item.EC_TAG_CLIENT_SOFT_VER_STR || 'N/A')
+          ])
+      },
+      {
+        label: 'IP Address',
+        key: 'EC_TAG_CLIENT_USER_IP',
+        width: '130px',
+        render: (item) => h('span', { className: 'font-mono text-xs' }, ipToString(item.EC_TAG_CLIENT_USER_IP))
+      },
+      {
+        label: 'Session Upload',
         key: 'EC_TAG_CLIENT_UPLOAD_SESSION',
         sortable: true,
         width: '100px',
         render: (item) => formatBytes(item.EC_TAG_CLIENT_UPLOAD_SESSION || 0)
       },
       {
-        label: 'Total',
+        label: 'Total Upload',
         key: 'EC_TAG_CLIENT_UPLOAD_TOTAL',
         sortable: true,
         width: '100px',
@@ -1544,8 +1619,8 @@ const AmuleWebApp = () => {
         width: 'auto',
         render: (item) =>
           h('div', { className: 'max-w-xs' },
-            h('div', { className: 'font-medium text-sm break-words' }, item.EC_TAG_SERVER_NAME || 'Unknown'),
-            h('div', { className: 'text-xs text-gray-500 dark:text-gray-400' }, item.EC_TAG_SERVER_DESC || '')
+            h('div', { className: 'font-medium text-sm' }, item.EC_TAG_SERVER_NAME || 'Unknown'),
+            h('div', { className: 'text-xs text-gray-500 dark:text-gray-400 ml-1' }, item.EC_TAG_SERVER_DESC || '')
           )
       },
       {
@@ -1560,13 +1635,14 @@ const AmuleWebApp = () => {
         key: 'EC_TAG_SERVER_USERS',
         sortable: true,
         width: '120px',
+
         render: (item) => {
           const users = item.EC_TAG_SERVER_USERS || 0;
           const maxUsers = item.EC_TAG_SERVER_USERS_MAX || 0;
-          return h('div', { className: 'text-sm' },
-            h('div', null, users.toLocaleString()),
-            h('div', { className: 'text-xs text-gray-500 dark:text-gray-400' }, `/ ${maxUsers.toLocaleString()}`)
-          );
+          return h('span', { className: '' }, [
+            h('span', { className: 'font-medium text-sm align-baseline' }, users.toLocaleString()),
+            h('span', { className: 'text-xs text-gray-500 dark:text-gray-400 align-baseline ml-1' }, `/ ${maxUsers.toLocaleString()}`)
+          ])
         }
       },
       {
@@ -1609,28 +1685,6 @@ const AmuleWebApp = () => {
         )
       ),
       
-      // ED2K server.met form
-      h('div', { className: 'bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3' },
-        h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2' }, 
-          'Add server from server.met ED2K link:'
-        ),
-        h('div', { className: 'flex gap-2' },
-          h('input', {
-            type: 'text',
-            value: ed2kLink || 'ed2k://|serverlist|http://upd.emule-security.org/server.met|/',
-            onChange: (e) => setEd2kLink(e.target.value),
-            placeholder: 'ed2k://|serverlist|http://...',
-            className: 'flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent',
-            disabled: loading
-          }),
-          h('button', {
-            onClick: () => handleAddEd2kLink(ed2kLink || 'ed2k://|serverlist|http://upd.emule-security.org/server.met|/', true),
-            disabled: loading,
-            className: 'px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-all active:scale-95 text-sm font-medium'
-          }, loading ? 'Adding...' : 'Add Servers')
-        )
-      ),
-      
       servers.length === 0 ? h('div', { className: 'text-center py-6 text-xs sm:text-sm text-gray-500 dark:text-gray-400' },
         loading ? 'Loading servers...' : 'No servers available'
       ) : renderTable(servers, columns, (item) =>
@@ -1663,7 +1717,29 @@ const AmuleWebApp = () => {
             )
           )
         )
-      , currentSort.sortBy, currentSort.sortDirection, handleSortChange)
+      , currentSort.sortBy, currentSort.sortDirection, handleSortChange),
+      
+      // ED2K server.met form
+      h('div', { className: 'bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 mt-3' },
+        h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2' }, 
+          'Add server from server.met ED2K link:'
+        ),
+        h('div', { className: 'flex gap-2' },
+          h('input', {
+            type: 'text',
+            value: ed2kLink || 'ed2k://|serverlist|http://upd.emule-security.org/server.met|/',
+            onChange: (e) => setEd2kLink(e.target.value),
+            placeholder: 'ed2k://|serverlist|http://...',
+            className: 'flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent',
+            disabled: loading
+          }),
+          h('button', {
+            onClick: () => handleAddEd2kLink(ed2kLink || 'ed2k://|serverlist|http://upd.emule-security.org/server.met|/', true),
+            disabled: loading,
+            className: 'px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-all active:scale-95 text-sm font-medium'
+          }, loading ? 'Adding...' : 'Add Servers')
+        )
+      )
     );
   };
 
@@ -1882,9 +1958,10 @@ const AmuleWebApp = () => {
               className: 'p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors',
               title: theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
             }, h(Icon, { name: theme === 'dark' ? 'sun' : 'moon', size: 18, className: 'text-gray-600 dark:text-gray-300' })),
+            // Show home button on mobile (portrait) or in landscape mode
             h('button', {
               onClick: () => handleNavigate('home'),
-              className: 'md:hidden p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors',
+              className: `${isLandscape ? '' : 'md:hidden'} p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors`,
               title: 'Go to Home'
             }, h(Icon, { name: 'home', size: 20, className: 'text-gray-600 dark:text-gray-300' }))
           )
@@ -1894,8 +1971,8 @@ const AmuleWebApp = () => {
       // Main layout
       h('div', { className: 'px-2 sm:px-3 py-2 sm:py-3 flex flex-col md:flex-row gap-2 sm:gap-3 flex-1' },
         
-        // Sidebar (hidden on mobile)
-        h('aside', {
+        // Sidebar (hidden on mobile and in landscape mode)
+        !isLandscape && h('aside', {
           className: 'hidden md:flex md:flex-col w-56 bg-white dark:bg-gray-800 p-3 rounded-lg shadow border border-gray-200 dark:border-gray-700'
         },
           h('div', { className: 'space-y-2' },

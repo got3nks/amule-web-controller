@@ -44,8 +44,8 @@ function scheduleCleanup() {
   const msUntil3AM = next3AM - now;
 
   setTimeout(() => {
-    const deleted = metricsDB.cleanupOldData(365);
-    log(`🧹 Cleaned up ${deleted} old metrics records (older than 365 days)`);
+    const deleted = metricsDB.cleanupOldData(30);
+    log(`🧹 Cleaned up ${deleted} old metrics records (older than 30 days)`);
     scheduleCleanup(); // Schedule next cleanup
   }, msUntil3AM);
 

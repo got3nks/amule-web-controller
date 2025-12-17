@@ -1900,13 +1900,25 @@ const AmuleWebApp = () => {
     if (currentView !== 'statistics') return; // Only render when on statistics view
 
     const isDark = theme === 'dark';
-    const labels = speedData.data.map(d =>
-      new Date(d.timestamp).toLocaleTimeString('en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false
-      })
-    );
+    const labels = speedData.data.map(d => {
+      const date = new Date(d.timestamp);
+      if (historicalRange === '24h') {
+        return date.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        });
+      } else {
+        // For 7d and 30d, show day-month and time
+        return date.toLocaleString('en-US', {
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        }).replace(',', '');
+      }
+    });
 
     // If chart exists, update data instead of recreating (prevents animation bounce)
     if (speedChartInstance.current) {
@@ -2002,7 +2014,7 @@ const AmuleWebApp = () => {
         }
       }
     });
-  }, [speedData, theme, currentView]);
+  }, [speedData, theme, currentView, historicalRange]);
 
   // Cleanup charts when leaving statistics page
   useEffect(() => {
@@ -2027,13 +2039,25 @@ const AmuleWebApp = () => {
     const isDark = theme === 'dark';
 
     // Use deltas directly from API (already bucketed by 15min/2hr/6hr)
-    const labels = historicalData.data.map(d =>
-      new Date(d.timestamp).toLocaleTimeString('en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false
-      })
-    );
+    const labels = historicalData.data.map(d => {
+      const date = new Date(d.timestamp);
+      if (historicalRange === '24h') {
+        return date.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        });
+      } else {
+        // For 7d and 30d, show day-month and time
+        return date.toLocaleString('en-US', {
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        }).replace(',', '');
+      }
+    });
     const uploadedData = historicalData.data.map(d => d.uploadedDelta || 0);
     const downloadedData = historicalData.data.map(d => d.downloadedDelta || 0);
 
@@ -2131,7 +2155,7 @@ const AmuleWebApp = () => {
         }
       }
     });
-  }, [historicalData, theme, currentView]);
+  }, [historicalData, theme, currentView, historicalRange]);
 
   const renderStatistics = () => {
     const expandAll = () => {

@@ -126,10 +126,12 @@ services:
     image: crazymax/geoip-updater:latest
     container_name: geoip-updater
     environment:
-      - GEOIPUPDATE_ACCOUNT_ID=YOUR_ACCOUNT_ID
-      - GEOIPUPDATE_LICENSE_KEY=YOUR_LICENSE_KEY
-      - GEOIPUPDATE_EDITION_IDS=GeoLite2-City,GeoLite2-Country
-      - GEOIPUPDATE_FREQUENCY=24h
+      - EDITION_IDS=GeoLite2-ASN,GeoLite2-City,GeoLite2-Country
+      - LICENSE_KEY=YOUR_LICENSE_KEY
+      - DOWNLOAD_PATH=/data
+      - SCHEDULE=0 0 * * 0  # Weekly on Sunday at midnight
+      - LOG_LEVEL=info
+      - LOG_JSON=false
     volumes:
       - ./data/geoip:/data
     restart: unless-stopped

@@ -9,9 +9,10 @@ const { convertEd2kToMagnet } = require('../linkConverter');
  *
  * @param {Array} amuleResults - Results from amule
  * @param {string} query - Original search query
+ * @param {string} requestedCategories - Comma-separated category IDs from request
  * @returns {string} XML RSS feed
  */
-function convertToTorznabFeed(amuleResults, query) {
+function convertToTorznabFeed(amuleResults, query, requestedCategories = '') {
   const root = create({ version: '1.0', encoding: 'UTF-8' });
   const rss = root.ele('rss', {
     version: '1.0',
@@ -65,11 +66,37 @@ function convertToTorznabFeed(amuleResults, query) {
     item.ele('torznab:attr', { name: 'size', value: String(fileSize) }).up();
     item.ele('torznab:attr', { name: 'grabs', value: '0' }).up();
 
-    // Categories - add both parent and child categories
-    // Torznab expects hierarchical categories: parent (5000) and child (5040)
-    const categoryId = result.category || '5040';
-    item.ele('torznab:attr', { name: 'category', value: '5000' }).up(); // Parent: TV
-    item.ele('torznab:attr', { name: 'category', value: categoryId }).up(); // Child: TV/SD or custom
+    // Categories - Since aMule doesn't have categories, match what Prowlarr requested
+    // Torznab spec requires BOTH parent and child categories
+    const requestedCats = requestedCategories.split(',').filter(Boolean);
+    const categoriesToAdd = new Set();
+
+    // All available categories
+    const allMovieCategories = ['2000', '2010', '2020', '2030', '2040', '2045', '2050', '2060', '2070', '2080', '2090'];
+    const allTVCategories = ['5000', '5010', '5020', '5030', '5040', '5045', '5050', '5060', '5070', '5080', '5090'];
+
+    if (requestedCats.length === 0) {
+      // No categories requested - return both TV and Movies with all subcategories
+      allMovieCategories.forEach(cat => categoriesToAdd.add(cat));
+      allTVCategories.forEach(cat => categoriesToAdd.add(cat));
+    } else {
+      // Add requested categories AND their parent categories
+      requestedCats.forEach(cat => {
+        categoriesToAdd.add(cat);
+
+        // Add parent category if this is a child category
+        if (cat.startsWith('2') && cat !== '2000') {
+          categoriesToAdd.add('2000'); // Movies parent
+        } else if (cat.startsWith('5') && cat !== '5000') {
+          categoriesToAdd.add('5000'); // TV parent
+        }
+      });
+    }
+
+    // Add all determined categories to the item
+    Array.from(categoriesToAdd).forEach(cat => {
+      item.ele('torznab:attr', { name: 'category', value: cat }).up();
+    });
   });
 
   return root.end({ prettyPrint: true });

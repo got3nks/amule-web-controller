@@ -95,7 +95,7 @@ function createTorznabHandler(getAmuleClient) {
   }
 
   return async (req, res) => {
-    const { t, q, limit = 100, offset = 0 } = req.query;
+    const { t, q, limit = 100, offset = 0, cat = '' } = req.query;
 
     try {
       // Capabilities endpoint
@@ -125,7 +125,7 @@ function createTorznabHandler(getAmuleClient) {
             sourceCount: 10,
             category: '5040' // TV/SD category - matches Sonarr's test categories
           }];
-          const testFeed = convertToTorznabFeed(sampleResult, 'test');
+          const testFeed = convertToTorznabFeed(sampleResult, 'test', cat);
           res.set('Content-Type', 'application/xml');
           return res.send(testFeed);
         }
@@ -134,7 +134,7 @@ function createTorznabHandler(getAmuleClient) {
         // ED2K requires a text query, it doesn't support searching by metadata alone
         if (!q) {
           console.log('[Torznab] Search has metadata params but no text query - cannot search ED2K without query text');
-          const emptyFeed = convertToTorznabFeed([], 'no-query');
+          const emptyFeed = convertToTorznabFeed([], 'no-query', cat);
           res.set('Content-Type', 'application/xml');
           return res.send(emptyFeed);
         }
@@ -143,7 +143,7 @@ function createTorznabHandler(getAmuleClient) {
         if (!amuleClient) {
           console.log('[Torznab] aMule not connected, returning empty feed');
           // Return empty feed if aMule not connected
-          const emptyFeed = convertToTorznabFeed([], q);
+          const emptyFeed = convertToTorznabFeed([], q, cat);
           res.set('Content-Type', 'application/xml');
           return res.send(emptyFeed);
         }
@@ -244,7 +244,7 @@ function createTorznabHandler(getAmuleClient) {
         console.log(`[Torznab] Returning ${paginatedResults.length} results (offset: ${offsetNum}, limit: ${limitNum}, total: ${allResults.length})`);
 
         // Convert results to Torznab feed
-        const xml = convertToTorznabFeed(paginatedResults, q);
+        const xml = convertToTorznabFeed(paginatedResults, q, cat);
         res.set('Content-Type', 'application/xml');
         return res.send(xml);
       }
@@ -255,7 +255,7 @@ function createTorznabHandler(getAmuleClient) {
       console.error('Torznab error:', error);
 
       // Return empty feed on error to avoid breaking Sonarr/Radarr
-      const emptyFeed = convertToTorznabFeed([], q || '');
+      const emptyFeed = convertToTorznabFeed([], q || '', cat || '');
       res.set('Content-Type', 'application/xml');
       res.status(500).send(emptyFeed);
     }

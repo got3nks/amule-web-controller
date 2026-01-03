@@ -706,9 +706,11 @@ The server exposes a WebSocket endpoint for real-time communication:
 ## Screenshots
 
 ![Home](./docs/home-desktop.png)
+![Settings](./docs/settings-desktop.png)
 ![Search](./docs/search-desktop.png)
 ![Downloads](./docs/downloads-desktop.png)
 ![Uploads](./docs/uploads-desktop.png)
+![Categories](./docs/categories-desktop.png)
 ![Shared-Files](./docs/shared-desktop.png)
 ![Servers](./docs/servers-desktop.png)
 ![Logs](./docs/logs-desktop.png)
@@ -718,9 +720,11 @@ The server exposes a WebSocket endpoint for real-time communication:
 
 <div style="display: flex; gap: 10px;">
   <img src="./docs/home-mobile.jpg" height="550px" />
+  <img src="./docs/settings-mobile.jpg" height="550px" />
   <img src="./docs/search-mobile.jpg" height="550px" />
   <img src="./docs/downloads-mobile.jpg" height="550px" />
   <img src="./docs/uploads-mobile.jpg" height="550px" />
+  <img src="./docs/categories-mobile.jpg" height="550px" />
   <img src="./docs/shared-mobile.jpg" height="550px" />
   <img src="./docs/servers-mobile.jpg" height="550px" />
   <img src="./docs/logs-mobile.jpg" height="550px" />

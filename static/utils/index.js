@@ -9,10 +9,10 @@ export {
   formatBytes,
   formatSpeed,
   formatStatsValue,
-  getDynamicFontSize,
   formatDateTime,
   formatLastSeenComplete,
-  getTimeBasedColor
+  getTimeBasedColor,
+  ipToString
 } from './formatters.js';
 
 // Validators
@@ -52,7 +52,14 @@ export {
   SORT_DIRECTIONS,
   VIEWS,
   PRIORITIES,
-  PRIORITY_LABELS
+  PRIORITY_LABELS,
+  DOWNLOAD_STATUS,
+  UI_TIMEOUTS,
+  WIDGET_SETTINGS,
+  PROGRESS_BAR,
+  ICON_SIZES,
+  CLIENT_SOFTWARE,
+  CLIENT_SOFTWARE_LABELS
 } from './constants.js';
 
 // Pagination
@@ -62,3 +69,28 @@ export {
   shouldShowPagination,
   getNavigationBounds
 } from './pagination.js';
+
+// Chart Loader
+export {
+  loadChartJs,
+  isChartJsLoaded
+} from './chartLoader.js';
+
+// Clipboard
+export {
+  copyToClipboard
+} from './clipboard.js';
+
+// Markdown
+export {
+  parseMarkdownBold
+} from './markdown.js';
+
+// Network Status
+export {
+  getED2KStatus,
+  getKADStatus,
+  getStatusDotClass,
+  getStatusBadgeClass,
+  getStatusIcon
+} from './networkStatus.js';

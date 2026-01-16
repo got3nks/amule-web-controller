@@ -68,3 +68,59 @@ export const PRIORITY_LABELS = {
   [PRIORITIES.LOW]: 'Low',
   [PRIORITIES.AUTO]: 'Auto'
 };
+
+// Download status codes
+export const DOWNLOAD_STATUS = {
+  DOWNLOADING: 0,
+  PAUSED: 7
+};
+
+// UI Timeouts (milliseconds)
+export const UI_TIMEOUTS = {
+  COPY_FEEDBACK: 2000,           // "Copied!" feedback display
+  SEARCH_DEBOUNCE: 300,          // Search input debounce
+  FETCH_DELAY_SHORT: 100,        // Short delay before fetch (downloads)
+  FETCH_DELAY_MEDIUM: 500,       // Medium delay before fetch (servers)
+  SETUP_COMPLETION: 1000,        // Setup wizard completion delay
+  MOBILE_TOUCH_HOVER: 2000,      // Mobile hover simulation on touch
+  DASHBOARD_CACHE: 30000         // Dashboard data cache duration
+};
+
+// Widget settings
+export const WIDGET_SETTINGS = {
+  MAX_ITEMS: 50                  // Max items in dashboard widgets
+};
+
+// Progress bar dimensions (pixels)
+export const PROGRESS_BAR = {
+  DESKTOP_WIDTH: 280,
+  MOBILE_WIDTH: 400,
+  HEIGHT: 20
+};
+
+// Icon sizes (pixels)
+export const ICON_SIZES = {
+  SMALL: 12,
+  MEDIUM: 14,
+  LARGE: 16
+};
+
+// Client software types (for uploads view)
+export const CLIENT_SOFTWARE = {
+  EMULE: 0,
+  AMULE: 1,
+  XMULE: 2,
+  AMULE_ALT: 3,
+  MLDONKEY: 4,
+  SHAREAZA: 5
+};
+
+// Client software labels
+export const CLIENT_SOFTWARE_LABELS = {
+  [CLIENT_SOFTWARE.EMULE]: 'eMule',
+  [CLIENT_SOFTWARE.AMULE]: 'aMule',
+  [CLIENT_SOFTWARE.XMULE]: 'xMule',
+  [CLIENT_SOFTWARE.AMULE_ALT]: 'aMule',
+  [CLIENT_SOFTWARE.MLDONKEY]: 'MLDonkey',
+  [CLIENT_SOFTWARE.SHAREAZA]: 'Shareaza'
+};

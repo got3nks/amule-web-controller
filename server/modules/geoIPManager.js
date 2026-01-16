@@ -7,6 +7,7 @@ const maxmind = require('maxmind');
 const fs = require('fs');
 const config = require('./config');
 const BaseModule = require('../lib/BaseModule');
+const { ipToString } = require('../lib/networkUtils');
 
 class GeoIPManager extends BaseModule {
   constructor() {
@@ -215,17 +216,6 @@ class GeoIPManager extends BaseModule {
     }
   }
 
-  // Helper function to convert IP from integer to string
-  ipToString(ip) {
-    if (!ip) return 'N/A';
-    return [
-      (ip & 0xFF),         // lowest byte first
-      (ip >>> 8) & 0xFF,
-      (ip >>> 16) & 0xFF,
-      (ip >>> 24) & 0xFF   // highest byte last
-    ].join('.');
-  }
-
   // Helper function to enrich uploads with GeoIP data
   enrichUploadsWithGeo(uploads) {
     if (!Array.isArray(uploads)) return uploads;
@@ -234,7 +224,7 @@ class GeoIPManager extends BaseModule {
       const ipInt = upload.EC_TAG_CLIENT_USER_IP;
       if (!ipInt) return upload;
 
-      const ipStr = this.ipToString(ipInt);
+      const ipStr = ipToString(ipInt);
       const geoData = this.getGeoIPData(ipStr);
 
       return {

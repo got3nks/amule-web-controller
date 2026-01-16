@@ -2,58 +2,134 @@
  * HomeView Component
  *
  * Main dashboard/home page with navigation and stats widgets
+ * Manages its own dashboard state and data fetching
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { Icon, StatCard, SpeedChart, TransferChart } from '../common/index.js';
 import {
   DashboardChartWidget,
   ActiveDownloadsWidget,
   ActiveUploadsWidget,
-  QuickSearchWidget
+  QuickSearchWidget,
+  MobileSpeedWidget,
+  Stats24hWidget
 } from '../dashboard/index.js';
-import { formatSpeed, formatBytes } from '../../utils/index.js';
+import { STATISTICS_REFRESH_INTERVAL } from '../../utils/index.js';
+import { useAppState } from '../../contexts/AppStateContext.js';
+import { useLiveData } from '../../contexts/LiveDataContext.js';
+import { useStaticData } from '../../contexts/StaticDataContext.js';
+import { useSearch } from '../../contexts/SearchContext.js';
+import { useActions } from '../../contexts/ActionsContext.js';
+import { useTheme } from '../../contexts/ThemeContext.js';
 
-const { createElement: h } = React;
+const { createElement: h, useState, useEffect, useRef, useCallback, lazy, Suspense } = React;
+
+// Lazy load chart components for better initial page load performance
+const SpeedChart = lazy(() => import('../common/SpeedChart.js'));
+const TransferChart = lazy(() => import('../common/TransferChart.js'));
 
 /**
- * Home view component
- * @param {object} stats - Statistics data
- * @param {function} onNavigate - Navigation handler (receives view name)
- * @param {array} downloads - Downloads list
- * @param {array} uploads - Uploads list
- * @param {array} categories - Categories list
- * @param {object} dashboardState - Dashboard data state
- * @param {string} theme - Current theme
- * @param {string} searchQuery - Search query
- * @param {function} onSearchQueryChange - Search query change handler
- * @param {string} searchType - Search type
- * @param {function} onSearchTypeChange - Search type change handler
- * @param {boolean} searchLocked - Search locked state
- * @param {function} onSearch - Search submit handler
+ * Home view component - self-contained with its own dashboard state
  */
-const HomeView = ({
-  stats,
-  onNavigate,
-  downloads = [],
-  uploads = [],
-  categories = [],
-  dashboardState = {},
-  theme = 'light',
-  searchQuery = '',
-  onSearchQueryChange = () => {},
-  searchType = 'global',
-  onSearchTypeChange = () => {},
-  searchLocked = false,
-  onSearch = () => {}
-}) => {
-  return h('div', { className: 'py-4 sm:py-8 px-2 sm:px-4' },
-    // Desktop: Dashboard layout
-    h('div', { className: 'hidden sm:block' },
+const HomeView = () => {
+  // Get data from contexts
+  const { appCurrentView } = useAppState();
+  const { dataStats, dataDownloads, dataUploads, dataLoaded } = useLiveData();
+  const { dataCategories } = useStaticData();
+  const { searchQuery, searchType, searchLocked, setSearchQuery, setSearchType } = useSearch();
+  const actions = useActions();
+  const { theme } = useTheme();
+
+  // Local dashboard state (previously in AppStateContext)
+  const [dashboardState, setDashboardState] = useState({
+    speedData: null,
+    historicalData: null,
+    historicalStats: null,
+    loading: false
+  });
+
+  // Cache ref for dashboard data
+  const lastFetchTime = useRef(0);
+
+  // Fetch dashboard data with caching
+  const fetchDashboardData = useCallback(async (force = false) => {
+    const now = Date.now();
+    const CACHE_DURATION = 30000; // 30 seconds cache
+
+    // Skip fetch if data is fresh (unless forced)
+    if (!force && now - lastFetchTime.current < CACHE_DURATION) {
+      return;
+    }
+
+    // Don't show loading spinner for background refreshes (only for first load)
+    const isFirstLoad = lastFetchTime.current === 0;
+    if (isFirstLoad) {
+      setDashboardState(prev => ({ ...prev, loading: true }));
+    }
+
+    try {
+      const [speedRes, historyRes, statsRes] = await Promise.all([
+        fetch('/api/metrics/speed-history?range=24h'),
+        fetch('/api/metrics/history?range=24h'),
+        fetch('/api/metrics/stats?range=24h')
+      ]);
+
+      const speedData = await speedRes.json();
+      const historicalData = await historyRes.json();
+      const historicalStats = await statsRes.json();
+
+      setDashboardState({
+        speedData,
+        historicalData,
+        historicalStats,
+        loading: false
+      });
+
+      lastFetchTime.current = now;
+    } catch (error) {
+      console.error('Failed to fetch dashboard data:', error);
+      setDashboardState(prev => ({ ...prev, loading: false }));
+    }
+  }, []);
+
+  // Auto-refresh dashboard data when view is active
+  useEffect(() => {
+    if (appCurrentView !== 'home') return;
+
+    fetchDashboardData();
+
+    const intervalId = setInterval(fetchDashboardData, STATISTICS_REFRESH_INTERVAL);
+
+    return () => clearInterval(intervalId);
+  }, [appCurrentView, fetchDashboardData]);
+
+  // Defer chart rendering until after initial paint
+  const [shouldRenderCharts, setShouldRenderCharts] = useState(false);
+  useEffect(() => {
+    // Use requestIdleCallback for better performance, fallback to setTimeout
+    if (typeof requestIdleCallback !== 'undefined') {
+      requestIdleCallback(() => setShouldRenderCharts(true));
+    } else {
+      setTimeout(() => setShouldRenderCharts(true), 0);
+    }
+  }, []);
+
+  // Aliases for readability
+  const stats = dataStats;
+  const downloads = dataDownloads;
+  const uploads = dataUploads;
+  const categories = dataCategories;
+  const onSearchQueryChange = setSearchQuery;
+  const onSearchTypeChange = setSearchType;
+  const onSearch = actions.search.perform;
+
+  return h('div', { className: 'flex-1 flex flex-col py-0 px-2 sm:px-4' },
+    // Desktop: Dashboard layout (shown when sidebar is visible at md+)
+    h('div', { className: 'hidden md:block' },
       // Dashboard grid
-      h('div', { className: 'grid grid-cols-1 lg:grid-cols-6 gap-4 max-w-7xl mx-auto' },
+      h('div', { className: 'grid grid-cols-1 sm:grid-cols-6 gap-4 max-w-7xl mx-auto' },
         // Quick Search Widget - Full width at top
-        h('div', { className: 'lg:col-span-6' },
+        h('div', { className: 'sm:col-span-6' },
           h(QuickSearchWidget, {
             searchType,
             onSearchTypeChange,
@@ -64,265 +140,133 @@ const HomeView = ({
           })
         ),
 
-        // Speed Chart (half width)
-        h('div', { className: 'lg:col-span-3' },
+        // Speed Chart (full width on sm, half width on md+)
+        h('div', { className: 'sm:col-span-6 md:col-span-3' },
           h(DashboardChartWidget, {
-            title: 'Speed (24h)',
+            title: 'Speed Over Time (24h)',
             height: '200px'
           },
-            dashboardState.speedData && h(SpeedChart, {
-              speedData: dashboardState.speedData,
-              theme,
-              historicalRange: '24h'
-            })
+            shouldRenderCharts && dashboardState.speedData
+              ? h(Suspense, {
+                  fallback: h('div', {
+                    className: 'h-full flex items-center justify-center'
+                  },
+                    h('div', { className: 'loader' })
+                  )
+                },
+                  h(SpeedChart, {
+                    speedData: dashboardState.speedData,
+                    theme,
+                    historicalRange: '24h'
+                  })
+                )
+              : h('div', {
+                  className: 'h-full flex items-center justify-center'
+                },
+                  h('div', { className: 'loader' })
+                )
           )
         ),
 
-        // Transfer Chart (half width)
-        h('div', { className: 'lg:col-span-3' },
+        // Transfer Chart (full width on sm, half width on md+)
+        h('div', { className: 'sm:col-span-6 md:col-span-3' },
           h(DashboardChartWidget, {
             title: 'Data Transferred (24h)',
             height: '200px'
           },
-            dashboardState.historicalData && h(TransferChart, {
-              historicalData: dashboardState.historicalData,
-              theme,
-              historicalRange: '24h'
-            })
+            shouldRenderCharts && dashboardState.historicalData
+              ? h(Suspense, {
+                  fallback: h('div', {
+                    className: 'h-full flex items-center justify-center'
+                  },
+                    h('div', { className: 'loader' })
+                  )
+                },
+                  h(TransferChart, {
+                    historicalData: dashboardState.historicalData,
+                    theme,
+                    historicalRange: '24h'
+                  })
+                )
+              : h('div', {
+                  className: 'h-full flex items-center justify-center'
+                },
+                  h('div', { className: 'loader' })
+                )
           )
         ),
 
-        // 24h Stats - Title (full width)
-        dashboardState.historicalStats && h('h3', {
-          className: 'lg:col-span-6 text-sm font-semibold text-gray-700 dark:text-gray-300'
-        }, 'Last 24 Hours'),
 
-        // 24h Stats - Cards (3 per row, each spans 2 columns in a 6-column grid)
-        dashboardState.historicalStats && h('div', { className: 'lg:col-span-2' },
-          h(StatCard, {
-            label: 'Total Uploaded',
-            value: formatBytes(dashboardState.historicalStats.totalUploaded),
-            icon: 'upload',
-            iconColor: 'text-green-600 dark:text-green-400'
-          })
-        ),
-        dashboardState.historicalStats && h('div', { className: 'lg:col-span-2' },
-          h(StatCard, {
-            label: 'Avg Upload Speed',
-            value: formatSpeed(dashboardState.historicalStats.avgUploadSpeed),
-            icon: 'trendingUp',
-            iconColor: 'text-green-600 dark:text-green-400'
-          })
-        ),
-        dashboardState.historicalStats && h('div', { className: 'lg:col-span-2' },
-          h(StatCard, {
-            label: 'Peak Upload Speed',
-            value: formatSpeed(dashboardState.historicalStats.peakUploadSpeed),
-            icon: 'zap',
-            iconColor: 'text-green-600 dark:text-green-400'
-          })
-        ),
-        dashboardState.historicalStats && h('div', { className: 'lg:col-span-2' },
-          h(StatCard, {
-            label: 'Total Downloaded',
-            value: formatBytes(dashboardState.historicalStats.totalDownloaded),
-            icon: 'download',
-            iconColor: 'text-blue-600 dark:text-blue-400'
-          })
-        ),
-        dashboardState.historicalStats && h('div', { className: 'lg:col-span-2' },
-          h(StatCard, {
-            label: 'Avg Download Speed',
-            value: formatSpeed(dashboardState.historicalStats.avgDownloadSpeed),
-            icon: 'trendingUp',
-            iconColor: 'text-blue-600 dark:text-blue-400'
-          })
-        ),
-        dashboardState.historicalStats && h('div', { className: 'lg:col-span-2' },
-          h(StatCard, {
-            label: 'Peak Download Speed',
-            value: formatSpeed(dashboardState.historicalStats.peakDownloadSpeed),
-            icon: 'zap',
-            iconColor: 'text-blue-600 dark:text-blue-400'
+        // 24h Stats Widget (full width)
+        h('div', { className: 'sm:col-span-6' },
+          h(Stats24hWidget, {
+            stats: dashboardState.historicalStats,
+            showPeakSpeeds: true
           })
         ),
 
         // Active Downloads Widget (half width)
-        h('div', { className: 'lg:col-span-3' },
+        h('div', { className: 'sm:col-span-3' },
           h(ActiveDownloadsWidget, {
             downloads,
             categories,
-            maxItems: 10
+            maxItems: 50,
+            loading: !dataLoaded.downloads
           })
         ),
 
         // Active Uploads Widget (half width)
-        h('div', { className: 'lg:col-span-3' },
+        h('div', { className: 'sm:col-span-3' },
           h(ActiveUploadsWidget, {
             uploads,
-            maxItems: 10
+            maxItems: 50,
+            loading: !dataLoaded.uploads
           })
         )
       )
     ),
 
-    // Mobile: stats widgets + buttons (no Home button)
-    h('div', { className: 'sm:hidden flex flex-col gap-3' },
-      // Stats widgets - 2x2 grid
-      stats ? h('div', { className: 'grid grid-cols-2 gap-3 mb-2' },
-        // Upload widget
-        h('div', { className: 'bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/30 rounded-lg p-4 border border-green-200 dark:border-green-800' },
-          h('div', { className: 'flex items-center gap-2 mb-2' },
-            h(Icon, { name: 'upload', size: 20, className: 'text-green-600 dark:text-green-400' }),
-            h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Upload')
-          ),
-          h('div', { className: 'space-y-1' },
-            h('div', { className: 'text-2xl font-bold text-green-600 dark:text-green-400' },
-              formatSpeed(stats.EC_TAG_STATS_UL_SPEED || 0)
-            ),
-            h('div', { className: 'text-xs text-gray-600 dark:text-gray-400' },
-              'Current speed'
-            )
-          )
-        ),
-        // Download widget
-        h('div', { className: 'bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/30 rounded-lg p-4 border border-blue-200 dark:border-blue-800' },
-          h('div', { className: 'flex items-center gap-2 mb-2' },
-            h(Icon, { name: 'download', size: 20, className: 'text-blue-600 dark:text-blue-400' }),
-            h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'Download')
-          ),
-          h('div', { className: 'space-y-1' },
-            h('div', { className: 'text-2xl font-bold text-blue-600 dark:text-blue-400' },
-              formatSpeed(stats.EC_TAG_STATS_DL_SPEED || 0)
-            ),
-            h('div', { className: 'text-xs text-gray-600 dark:text-gray-400' },
-              'Current speed'
-            )
-          )
-        ),
-        // ED2K Status widget
-        (() => {
-          const connState = stats.EC_TAG_CONNSTATE || {};
-          const server = connState.EC_TAG_SERVER || {};
-          const ed2kConnected = server?.EC_TAG_SERVER_PING > 0;
-          const clientId = connState.EC_TAG_CLIENT_ID;
-          const isHighId = clientId && clientId > 16777216;
-          const statusText = ed2kConnected ? (isHighId ? 'High ID' : 'Low ID') : 'Disconnected';
-          const statusColor = ed2kConnected ? (isHighId ? 'green' : 'yellow') : 'red';
-          const serverName = ed2kConnected && server.EC_TAG_SERVER_NAME ? server.EC_TAG_SERVER_NAME : 'No server';
+    // Mobile: Dashboard widgets (similar to desktop but optimized for mobile)
+    // Shown below md breakpoint where sidebar is hidden
+    h('div', { className: 'md:hidden flex-1 flex flex-col px-1 overflow-y-auto' },
+      // Inner wrapper with my-auto to center content vertically when container is larger
+      h('div', { className: 'flex flex-col gap-3 my-auto' },
+        // Speed chart with network status
+        h(MobileSpeedWidget, {
+          speedData: dashboardState.speedData,
+          stats,
+          theme
+        }),
 
-          return h('div', {
-              className: 'bg-gradient-to-br from-indigo-50 to-indigo-100 dark:from-indigo-900/20 dark:to-indigo-800/30 rounded-lg p-4 border border-indigo-200 dark:border-indigo-800'
-            },
-            h('div', { className: 'flex items-center gap-2 mb-2' },
-              h(Icon, { name: 'server', size: 20, className: 'text-indigo-600 dark:text-indigo-400' }),
-              h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'ED2K')
-            ),
-            h('div', { className: 'space-y-1' },
-              h('div', { className: `text-2xl font-bold text-${statusColor}-600 dark:text-${statusColor}-400` },
-                statusText
-              ),
-              h('div', { className: 'text-xs text-gray-600 dark:text-gray-400 truncate' },
-                serverName
-              )
-            )
-          );
-        })(),
-        // KAD Status widget
-        (() => {
-          const kadFirewalledValue = stats.EC_TAG_STATS_KAD_FIREWALLED_UDP;
-          const kadConnected = kadFirewalledValue !== undefined && kadFirewalledValue !== null;
-          const kadFirewalled = kadFirewalledValue === 1;
-          const statusText = !kadConnected ? 'Disconnected' : (kadFirewalled ? 'Firewalled' : 'OK');
-          const statusColor = !kadConnected ? 'red' : (kadFirewalled ? 'orange' : 'green');
+        // 24h Stats (compact, no peak speeds)
+        h(Stats24hWidget, {
+          stats: dashboardState.historicalStats,
+          showPeakSpeeds: false,
+          compact: true
+        }),
 
-          return h('div', { className: 'bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-800/30 rounded-lg p-4 border border-purple-200 dark:border-purple-800' },
-            h('div', { className: 'flex items-center gap-2 mb-2' },
-              h(Icon, { name: 'cloud', size: 20, className: 'text-purple-600 dark:text-purple-400' }),
-              h('h3', { className: 'font-semibold text-sm text-gray-800 dark:text-gray-200' }, 'KAD')
-            ),
-            h('div', { className: 'space-y-1' },
-              h('div', { className: `text-2xl font-bold text-${statusColor}-600 dark:text-${statusColor}-400` },
-                statusText
-              ),
-              h('div', { className: 'text-xs text-gray-600 dark:text-gray-400' },
-                'Network'
-              )
-            )
-          );
-        })()
-      ) : h('div', { className: 'grid grid-cols-2 gap-3 mb-2' },
-        // Placeholder widgets (4 total)
-        ...Array(4).fill(null).map((_, i) =>
-          h('div', {
-            key: i,
-            className: 'bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 animate-pulse'
-          },
-            h('div', { className: 'h-4 bg-gray-300 dark:bg-gray-600 rounded w-20 mb-3' }),
-            h('div', { className: 'h-8 bg-gray-300 dark:bg-gray-600 rounded w-24 mb-2' }),
-            h('div', { className: 'h-3 bg-gray-300 dark:bg-gray-600 rounded w-20' })
-          )
-        )
-      ),
+        // Active Downloads
+        h(ActiveDownloadsWidget, {
+          downloads,
+          categories,
+          maxItems: 50,
+          compact: true,
+          loading: !dataLoaded.downloads
+        }),
 
-      h('button', {
-        onClick: () => onNavigate('search'),
-        className: 'p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors active:scale-95 border border-blue-200 dark:border-blue-800 flex items-center gap-3'
-      },
-        h(Icon, { name: 'search', size: 24, className: 'text-blue-600 dark:text-blue-400' }),
-        h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Search Files')
-      ),
-      h('button', {
-        onClick: () => onNavigate('downloads'),
-        className: 'p-4 bg-green-50 dark:bg-green-900/20 rounded-lg hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors active:scale-95 border border-green-200 dark:border-green-800 flex items-center gap-3'
-      },
-        h(Icon, { name: 'download', size: 24, className: 'text-green-600 dark:text-green-400' }),
-        h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Downloads')
-      ),
-      h('button', {
-        onClick: () => onNavigate('uploads'),
-        className: 'p-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg hover:bg-orange-100 dark:hover:bg-orange-900/30 transition-colors active:scale-95 border border-orange-200 dark:border-orange-800 flex items-center gap-3'
-      },
-        h(Icon, { name: 'upload', size: 24, className: 'text-orange-600 dark:text-orange-400' }),
-        h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Uploads')
-      ),
-      h('button', {
-        onClick: () => onNavigate('shared'),
-        className: 'p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg hover:bg-purple-100 dark:hover:bg-purple-900/30 transition-colors active:scale-95 border border-purple-200 dark:border-purple-800 flex items-center gap-3'
-      },
-        h(Icon, { name: 'share', size: 24, className: 'text-purple-600 dark:text-purple-400' }),
-        h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Shared Files')
-      ),
-      h('button', {
-        onClick: () => onNavigate('categories'),
-        className: 'p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg hover:bg-yellow-100 dark:hover:bg-yellow-900/30 transition-colors active:scale-95 border border-yellow-200 dark:border-yellow-800 flex items-center gap-3'
-      },
-        h(Icon, { name: 'folder', size: 24, className: 'text-yellow-600 dark:text-yellow-400' }),
-        h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Categories')
-      ),
-      h('button', {
-        onClick: () => onNavigate('servers'),
-        className: 'p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/30 transition-colors active:scale-95 border border-indigo-200 dark:border-indigo-800 flex items-center gap-3'
-      },
-        h(Icon, { name: 'server', size: 24, className: 'text-indigo-600 dark:text-indigo-400' }),
-        h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Servers')
-      ),
-      h('button', {
-        onClick: () => onNavigate('logs'),
-        className: 'p-4 bg-cyan-50 dark:bg-cyan-900/20 rounded-lg hover:bg-cyan-100 dark:hover:bg-cyan-900/30 transition-colors active:scale-95 border border-cyan-200 dark:border-cyan-800 flex items-center gap-3'
-      },
-        h(Icon, { name: 'fileText', size: 24, className: 'text-cyan-600 dark:text-cyan-400' }),
-        h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Logs')
-      ),
-      h('button', {
-        onClick: () => onNavigate('statistics'),
-        className: 'p-4 bg-pink-50 dark:bg-pink-900/20 rounded-lg hover:bg-pink-100 dark:hover:bg-pink-900/30 transition-colors active:scale-95 border border-pink-200 dark:border-pink-800 flex items-center gap-3'
-      },
-        h(Icon, { name: 'chartBar', size: 24, className: 'text-pink-600 dark:text-pink-400' }),
-        h('h3', { className: 'font-semibold text-base text-gray-800 dark:text-gray-200' }, 'Statistics')
+        // Active Uploads
+        h(ActiveUploadsWidget, {
+          uploads,
+          maxItems: 50,
+          compact: true,
+          loading: !dataLoaded.uploads
+        })
       )
     )
   );
 };
 
+// Note: React.memo doesn't help much here since we're using contexts
+// Context changes will trigger re-renders regardless of props
+// The solution is to optimize the context structure or split into smaller components
 export default HomeView;

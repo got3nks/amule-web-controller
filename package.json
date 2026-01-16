@@ -1,12 +1,19 @@
 {
   "name": "amule-webapp-frontend",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "aMule Web Controller Frontend Build",
   "scripts": {
     "build:css": "tailwindcss -i ./src/input.css -o ./static/output.css --minify",
-    "watch:css": "tailwindcss -i ./src/input.css -o ./static/output.css --watch"
+    "build:js": "node build.mjs",
+    "build": "npm run build:css && npm run build:js",
+    "watch:css": "tailwindcss -i ./src/input.css -o ./static/output.css --watch",
+    "watch:js": "node build.mjs --watch",
+    "watch": "npm run watch:css & npm run watch:js"
   },
   "devDependencies": {
+    "esbuild": "^0.24.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
     "tailwindcss": "^3.4.0"
   }
 }

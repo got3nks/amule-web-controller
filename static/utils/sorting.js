@@ -44,6 +44,13 @@ export const sortFiles = (files, sortBy, sortDirection, useFileNameAsSecondary =
     else if (sortBy === 'EC_TAG_SERVER_FILES') result = (a.EC_TAG_SERVER_FILES || 0) - (b.EC_TAG_SERVER_FILES || 0);
     else if (sortBy === 'EC_TAG_SERVER_PING') result = (a.EC_TAG_SERVER_PING || 0) - (b.EC_TAG_SERVER_PING || 0);
 
+    // Category fields
+    else if (sortBy === 'id') result = (a.id || 0) - (b.id || 0);
+    else if (sortBy === 'title') result = (a.title || '').localeCompare(b.title || '');
+    else if (sortBy === 'path') result = (a.path || '').localeCompare(b.path || '');
+    else if (sortBy === 'comment') result = (a.comment || '').localeCompare(b.comment || '');
+    else if (sortBy === 'priority') result = (a.priority || 0) - (b.priority || 0);
+
     // Generic fields
     else if (sortBy === '_value') result = (a._value || '').localeCompare(b._value || '');
     else result = (a.fileName || '').localeCompare(b.fileName || '');

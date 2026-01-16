@@ -6,6 +6,7 @@
 const QueuedAmuleClient = require('./queuedAmuleClient');
 const config = require('./config');
 const BaseModule = require('../lib/BaseModule');
+const logger = require('../lib/logger');
 
 class AmuleManager extends BaseModule {
   constructor() {
@@ -26,8 +27,8 @@ class AmuleManager extends BaseModule {
     const ecProtocolErrorHandler = (err) => {
       // Only handle ECProtocol errors
       if (err.message && err.message.includes('[ECProtocol]')) {
-        console.error('⚠️  ECProtocol error caught (prevented crash):', err.message);
-        console.error('Stack:', err.stack);
+        logger.error('⚠️  ECProtocol error caught (prevented crash):', err.message);
+        logger.error('Stack:', err.stack);
 
         // Mark client as disconnected
         if (this.client) {
@@ -36,9 +37,9 @@ class AmuleManager extends BaseModule {
 
         // Trigger reconnection if not already scheduled
         if (!this.reconnectInterval) {
-          console.log('🔄 Will retry connection every 10 seconds...');
+          logger.log('🔄 Will retry connection every 10 seconds...');
           this.reconnectInterval = setInterval(async () => {
-            console.log('🔄 Attempting to reconnect to aMule...');
+            logger.log('🔄 Attempting to reconnect to aMule...');
             await this.initClient();
           }, 10000);
         }
@@ -56,8 +57,8 @@ class AmuleManager extends BaseModule {
       const handled = ecProtocolErrorHandler(err);
       if (!handled) {
         // For non-ECProtocol errors, log and exit gracefully
-        console.error('❌ Uncaught exception:', err);
-        console.error(err.stack);
+        logger.error('❌ Uncaught exception:', err);
+        logger.error(err.stack);
         process.exit(1);
       }
     });
@@ -113,6 +114,14 @@ class AmuleManager extends BaseModule {
 
       // Only set as active client if connection succeeded
       this.client = newClient;
+
+      // Setup download history tracking on the new client
+      if (this.downloadHistoryDB) {
+        this.client.setDownloadHistoryDB(this.downloadHistoryDB);
+        const historyEnabled = config.getConfig()?.history?.enabled !== false;
+        this.log(`📜 Download history tracking ${historyEnabled ? 'enabled' : 'disabled'} on new client`);
+      }
+
       this.log('✅ Connected to aMule successfully');
 
       // Stop reconnection attempts

@@ -5,15 +5,14 @@
 
 const express = require('express');
 const BaseModule = require('../lib/BaseModule');
-const configManager = require('./configManager');
+const config = require('./config');
 const configTester = require('../lib/configTester');
+const response = require('../lib/responseFormatter');
 
 class ConfigAPI extends BaseModule {
   constructor() {
     super();
-    this.configManager = configManager;
     this.amuleManager = null;
-    this.configModule = null;
     this.initializeServices = null;
   }
 
@@ -24,13 +23,92 @@ class ConfigAPI extends BaseModule {
     this.amuleManager = manager;
   }
 
-  setConfigModule(module) {
-    this.configModule = module;
-  }
-
   setInitializeServices(fn) {
     this.initializeServices = fn;
   }
+
+  // ==========================================================================
+  // HELPER METHODS
+  // ==========================================================================
+
+  /**
+   * Build the _meta.fromEnv object for API responses
+   * For getDefaults: checks environment variables directly
+   * For getCurrent: uses config.isFromEnv() to check if value is from env and not overridden
+   */
+  buildFromEnvMeta(useConfigCheck = false) {
+    if (useConfigCheck) {
+      // For getCurrent - check if values come from env and are not overridden
+      return {
+        port: config.isFromEnv('server.port'),
+        amuleHost: config.isFromEnv('amule.host'),
+        amulePort: config.isFromEnv('amule.port'),
+        serverAuthEnabled: config.isFromEnv('server.auth.enabled'),
+        serverAuthPassword: config.isFromEnv('server.auth.password'),
+        amulePassword: config.isFromEnv('amule.password'),
+        sonarrUrl: config.isFromEnv('integrations.sonarr.url'),
+        sonarrApiKey: config.isFromEnv('integrations.sonarr.apiKey'),
+        sonarrSearchInterval: config.isFromEnv('integrations.sonarr.searchIntervalHours'),
+        radarrUrl: config.isFromEnv('integrations.radarr.url'),
+        radarrApiKey: config.isFromEnv('integrations.radarr.apiKey'),
+        radarrSearchInterval: config.isFromEnv('integrations.radarr.searchIntervalHours')
+      };
+    } else {
+      // For getDefaults - check environment variables directly
+      return {
+        port: !!process.env.PORT,
+        amuleHost: !!process.env.AMULE_HOST,
+        amulePort: !!process.env.AMULE_PORT,
+        serverAuthEnabled: process.env.WEB_AUTH_ENABLED !== undefined,
+        serverAuthPassword: !!process.env.WEB_AUTH_PASSWORD,
+        amulePassword: !!process.env.AMULE_PASSWORD,
+        sonarrUrl: !!process.env.SONARR_URL,
+        sonarrApiKey: !!process.env.SONARR_API_KEY,
+        sonarrSearchInterval: !!process.env.SONARR_SEARCH_INTERVAL_HOURS,
+        radarrUrl: !!process.env.RADARR_URL,
+        radarrApiKey: !!process.env.RADARR_API_KEY,
+        radarrSearchInterval: !!process.env.RADARR_SEARCH_INTERVAL_HOURS
+      };
+    }
+  }
+
+  /**
+   * Merge missing passwords from current config into new config
+   * Handles the case where UI sends masked passwords ('********')
+   */
+  mergeMissingPasswords(newConfig, currentConfig) {
+    if (!currentConfig) return;
+
+    const passwordPaths = [
+      { new: 'server.auth.password', current: 'server.auth.password' },
+      { new: 'amule.password', current: 'amule.password' },
+      { new: 'integrations.sonarr.apiKey', current: 'integrations.sonarr.apiKey' },
+      { new: 'integrations.radarr.apiKey', current: 'integrations.radarr.apiKey' }
+    ];
+
+    for (const { new: newPath, current: currentPath } of passwordPaths) {
+      const newValue = config.getValueByPath(newConfig, newPath);
+      const currentValue = config.getValueByPath(currentConfig, currentPath);
+
+      // If password is missing or masked, use current value
+      if ((!newValue || newValue === '********') && currentValue) {
+        config.setValueByPath(newConfig, newPath, currentValue);
+      }
+    }
+  }
+
+  /**
+   * Log test result with emoji
+   */
+  logTestResult(name, result) {
+    const success = result.success || result.available;
+    const emoji = success ? '✅' : '❌';
+    this.log(`${name} test: ${emoji}${result.warning ? ' ⚠️  ' + result.warning : ''}`);
+  }
+
+  // ==========================================================================
+  // API ENDPOINTS
+  // ==========================================================================
 
   /**
    * GET /api/config/status
@@ -38,17 +116,14 @@ class ConfigAPI extends BaseModule {
    */
   async getStatus(req, res) {
     try {
-      const firstRun = await this.configManager.isFirstRun();
+      const firstRun = await config.isFirstRun();
       res.json({
         firstRun,
-        isDocker: this.configManager.isDocker
+        isDocker: config.isDocker
       });
     } catch (err) {
       this.log('❌ Error checking config status:', err.message);
-      res.status(500).json({
-        error: 'Failed to check configuration status',
-        details: err.message
-      });
+      response.serverError(res, 'Failed to check configuration status');
     }
   }
 
@@ -58,40 +133,19 @@ class ConfigAPI extends BaseModule {
    */
   async getCurrent(req, res) {
     try {
-      const config = this.configManager.getMaskedConfig();
+      const currentConfig = config.getMaskedConfig();
 
-      if (!config) {
-        return res.status(404).json({
-          error: 'No configuration loaded'
-        });
+      if (!currentConfig) {
+        return response.notFound(res, 'No configuration loaded');
       }
 
-      // Add metadata about which values come from environment
-      const withEnvInfo = {
-        ...config,
-        _meta: {
-          fromEnv: {
-            port: this.configManager.isFromEnv('server.port'),
-            amuleHost: this.configManager.isFromEnv('amule.host'),
-            amulePort: this.configManager.isFromEnv('amule.port'),
-            amulePassword: this.configManager.isFromEnv('amule.password'),
-            sonarrUrl: this.configManager.isFromEnv('integrations.sonarr.url'),
-            sonarrApiKey: this.configManager.isFromEnv('integrations.sonarr.apiKey'),
-            sonarrSearchInterval: this.configManager.isFromEnv('integrations.sonarr.searchIntervalHours'),
-            radarrUrl: this.configManager.isFromEnv('integrations.radarr.url'),
-            radarrApiKey: this.configManager.isFromEnv('integrations.radarr.apiKey'),
-            radarrSearchInterval: this.configManager.isFromEnv('integrations.radarr.searchIntervalHours')
-          }
-        }
-      };
-
-      res.json(withEnvInfo);
+      res.json({
+        ...currentConfig,
+        _meta: { fromEnv: this.buildFromEnvMeta(true) }
+      });
     } catch (err) {
       this.log('❌ Error getting current config:', err.message);
-      res.status(500).json({
-        error: 'Failed to get current configuration',
-        details: err.message
-      });
+      response.serverError(res, 'Failed to get current configuration');
     }
   }
 
@@ -101,14 +155,15 @@ class ConfigAPI extends BaseModule {
    */
   async getDefaults(req, res) {
     try {
-      const envConfig = this.configManager.getConfigFromEnv();
-      res.json(envConfig);
+      const envConfig = config.getConfigFromEnv();
+
+      res.json({
+        ...envConfig,
+        _meta: { fromEnv: this.buildFromEnvMeta(false) }
+      });
     } catch (err) {
       this.log('❌ Error getting defaults:', err.message);
-      res.status(500).json({
-        error: 'Failed to get default configuration',
-        details: err.message
-      });
+      response.serverError(res, 'Failed to get default configuration');
     }
   }
 
@@ -122,19 +177,14 @@ class ConfigAPI extends BaseModule {
     try {
       const { amule, directories, sonarr, radarr } = req.body;
       const results = {};
-      const currentConfig = this.configManager.getConfig();
+      const currentConfig = config.getConfig();
 
       // Test aMule connection if provided
       if (amule) {
-        // Use current password if not provided (masked in UI)
         const password = amule.password || currentConfig.amule.password;
         this.log(`🧪 Testing aMule connection to ${amule.host}:${amule.port}...`);
-        results.amule = await configTester.testAmuleConnection(
-          amule.host,
-          amule.port,
-          password
-        );
-        this.log(`aMule test result: ${results.amule.success ? '✅' : '❌'}`);
+        results.amule = await configTester.testAmuleConnection(amule.host, amule.port, password);
+        this.logTestResult('aMule connection', results.amule);
       }
 
       // Test directories if provided
@@ -144,44 +194,36 @@ class ConfigAPI extends BaseModule {
         if (directories.data) {
           this.log(`🧪 Testing data directory: ${directories.data}`);
           results.directories.data = await configTester.testDirectoryAccess(directories.data);
-          this.log(`Data directory test: ${results.directories.data.success ? '✅' : '❌'}`);
+          this.logTestResult('Data directory', results.directories.data);
         }
 
         if (directories.logs) {
           this.log(`🧪 Testing logs directory: ${directories.logs}`);
           results.directories.logs = await configTester.testDirectoryAccess(directories.logs);
-          this.log(`Logs directory test: ${results.directories.logs.success ? '✅' : '❌'}`);
+          this.logTestResult('Logs directory', results.directories.logs);
         }
 
         if (directories.geoip) {
-          this.log(`🧪 Testing GeoIP database availability: ${directories.geoip}`);
+          this.log(`🧪 Testing GeoIP database: ${directories.geoip}`);
           results.directories.geoip = await configTester.testGeoIPDatabase(directories.geoip);
-          this.log(`GeoIP database test: ${results.directories.geoip.available ? '✅ Available' : '⚠️  Not available (optional)'}`);
+          this.logTestResult('GeoIP database', results.directories.geoip);
         }
       }
 
       // Test Sonarr if provided and enabled
       if (sonarr && sonarr.enabled) {
-        // Use current API key if not provided (masked in UI)
         const apiKey = sonarr.apiKey || currentConfig.integrations.sonarr.apiKey;
         this.log(`🧪 Testing Sonarr API at ${sonarr.url}...`);
-        results.sonarr = await configTester.testSonarrAPI(
-          sonarr.url,
-          apiKey
-        );
-        this.log(`Sonarr test result: ${results.sonarr.success ? '✅' : '❌'}`);
+        results.sonarr = await configTester.testSonarrAPI(sonarr.url, apiKey);
+        this.logTestResult('Sonarr API', results.sonarr);
       }
 
       // Test Radarr if provided and enabled
       if (radarr && radarr.enabled) {
-        // Use current API key if not provided (masked in UI)
         const apiKey = radarr.apiKey || currentConfig.integrations.radarr.apiKey;
         this.log(`🧪 Testing Radarr API at ${radarr.url}...`);
-        results.radarr = await configTester.testRadarrAPI(
-          radarr.url,
-          apiKey
-        );
-        this.log(`Radarr test result: ${results.radarr.success ? '✅' : '❌'}`);
+        results.radarr = await configTester.testRadarrAPI(radarr.url, apiKey);
+        this.logTestResult('Radarr API', results.radarr);
       }
 
       // Determine overall success
@@ -202,10 +244,7 @@ class ConfigAPI extends BaseModule {
       });
     } catch (err) {
       this.log('❌ Error testing config:', err.message);
-      res.status(500).json({
-        error: 'Failed to test configuration',
-        details: err.message
-      });
+      response.serverError(res, 'Failed to test configuration');
     }
   }
 
@@ -216,51 +255,45 @@ class ConfigAPI extends BaseModule {
    */
   async saveConfig(req, res) {
     try {
-      const config = req.body;
+      const newConfig = req.body;
 
       this.log('💾 Saving configuration...');
 
       // Merge with current config to fill in missing passwords
-      const currentConfig = this.configManager.getConfig();
-      if (currentConfig) {
-        // If passwords are missing (not sent from UI), use current values
-        if (!config.amule?.password && currentConfig.amule?.password) {
-          config.amule.password = currentConfig.amule.password;
-        }
-        if (!config.integrations?.sonarr?.apiKey && currentConfig.integrations?.sonarr?.apiKey) {
-          config.integrations.sonarr.apiKey = currentConfig.integrations.sonarr.apiKey;
-        }
-        if (!config.integrations?.radarr?.apiKey && currentConfig.integrations?.radarr?.apiKey) {
-          config.integrations.radarr.apiKey = currentConfig.integrations.radarr.apiKey;
-        }
+      this.mergeMissingPasswords(newConfig, config.getConfig());
+
+      // Preserve lastSeenVersion (not sent from frontend)
+      const currentLastSeenVersion = config.getLastSeenVersion();
+      if (currentLastSeenVersion) {
+        newConfig.lastSeenVersion = currentLastSeenVersion;
       }
 
       // Validate configuration
-      const validation = this.configManager.validateConfig(config);
+      const validation = config.validateConfig(newConfig);
       if (!validation.valid) {
         this.log('❌ Configuration validation failed:', validation.errors.join(', '));
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid configuration',
-          errors: validation.errors
-        });
+        return response.badRequest(res, 'Invalid configuration: ' + validation.errors.join(', '));
       }
 
       // Check if this was first run BEFORE marking as completed
-      const wasFirstRun = await this.configManager.isFirstRun();
+      const wasFirstRun = await config.isFirstRun();
 
       // Mark as completed (important for first-run)
-      config.firstRunCompleted = true;
+      newConfig.firstRunCompleted = true;
 
       // Save configuration
-      await this.configManager.saveConfig(config);
+      await config.saveConfig(newConfig);
 
       this.log('✅ Configuration saved successfully');
 
-      // Update config module with new configuration
-      if (this.configModule) {
-        this.configModule.updateFromConfigManager(this.configManager);
-        this.log('🔄 Configuration module updated');
+      // Shutdown any existing aMule connection before reinitializing
+      if (this.amuleManager && this.amuleManager) {
+        this.log('🔄 Closing existing aMule connection...');
+        try {
+          await this.amuleManager.shutdown();
+        } catch (err) {
+          this.log('⚠️  Error shutting down aMule connection:', err.message);
+        }
       }
 
       // Initialize services or restart aMule connection based on context
@@ -273,11 +306,10 @@ class ConfigAPI extends BaseModule {
           this.log('⚠️  Service initialization failed:', err.message);
           // Don't fail the save if initialization fails - user can restart server
         }
-      } else if (this.amuleManager && !wasFirstRun) {
+      } else if (this.amuleManager) {
         // Settings changed after initial setup - reconnect aMule immediately
-        this.log('🔄 Reconnecting to aMule with new settings...');
+        this.log('🔄 Connecting to aMule with new settings...');
         try {
-          await this.amuleManager.shutdown();
           await this.amuleManager.startConnection();
           this.log('✅ aMule reconnected successfully');
         } catch (err) {
@@ -286,17 +318,12 @@ class ConfigAPI extends BaseModule {
         }
       }
 
-      res.json({
-        success: true,
+      response.success(res, {
         message: 'Configuration saved successfully.' + (wasFirstRun ? ' Services initialized.' : ' aMule connection updated.')
       });
     } catch (err) {
       this.log('❌ Error saving config:', err.message);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to save configuration',
-        details: err.message
-      });
+      response.serverError(res, 'Failed to save configuration');
     }
   }
 

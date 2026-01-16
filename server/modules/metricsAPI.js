@@ -3,8 +3,10 @@
  * Handles historical metrics endpoints
  */
 
-const config = require('./config');
 const BaseModule = require('../lib/BaseModule');
+const timeRange = require('../lib/timeRange');
+const response = require('../lib/responseFormatter');
+const { validateTimeRange } = require('../middleware/validateRequest');
 
 class MetricsAPI extends BaseModule {
   constructor() {
@@ -15,27 +17,10 @@ class MetricsAPI extends BaseModule {
   getHistory(req, res) {
     try {
       const { range = '24h' } = req.query;
-      const now = Date.now();
-      let startTime, bucketSize;
+      // Range is pre-validated by middleware, parseTimeRange won't return null
+      const { startTime, endTime, bucketSize } = timeRange.parseTimeRange(range);
 
-      switch (range) {
-        case '24h':
-          startTime = now - (24 * 60 * 60 * 1000);
-          bucketSize = 15 * 60 * 1000; // 15-minute buckets
-          break;
-        case '7d':
-          startTime = now - (7 * 24 * 60 * 60 * 1000);
-          bucketSize = 2 * 60 * 60 * 1000; // 2-hour buckets
-          break;
-        case '30d':
-          startTime = now - (30 * 24 * 60 * 60 * 1000);
-          bucketSize = 6 * 60 * 60 * 1000; // 6-hour buckets
-          break;
-        default:
-          return res.status(400).json({ error: 'Invalid range. Use 24h, 7d, or 30d' });
-      }
-
-      const metrics = this.metricsDB.getAggregatedMetrics(startTime, now, bucketSize);
+      const metrics = this.metricsDB.getAggregatedMetrics(startTime, endTime, bucketSize);
       res.json({
         range,
         data: metrics.map(m => ({
@@ -48,7 +33,7 @@ class MetricsAPI extends BaseModule {
       });
     } catch (err) {
       this.log('⚠️  Error fetching metrics:', err);
-      res.status(500).json({ error: 'Failed to fetch metrics' });
+      response.serverError(res, 'Failed to fetch metrics');
     }
   }
 
@@ -56,28 +41,11 @@ class MetricsAPI extends BaseModule {
   getSpeedHistory(req, res) {
     try {
       const { range = '24h' } = req.query;
-      const now = Date.now();
-      let startTime, bucketSize;
+      // Range is pre-validated by middleware
+      const { startTime, endTime, speedBucketSize } = timeRange.parseTimeRange(range);
 
-      switch (range) {
-        case '24h':
-          startTime = now - (24 * 60 * 60 * 1000);
-          bucketSize = 15 * 1000; // 15-second buckets
-          break;
-        case '7d':
-          startTime = now - (7 * 24 * 60 * 60 * 1000);
-          bucketSize = 15 * 60 * 1000; // 15-minute buckets
-          break;
-        case '30d':
-          startTime = now - (30 * 24 * 60 * 60 * 1000);
-          bucketSize = 60 * 60 * 1000; // 1-hour buckets
-          break;
-        default:
-          return res.status(400).json({ error: 'Invalid range. Use 24h, 7d, or 30d' });
-      }
-
-      // For 7d and 30d, use aggregated data
-      const metrics = this.metricsDB.getAggregatedMetrics(startTime, now, bucketSize);
+      // Use speed-specific bucket size (finer granularity for speed charts)
+      const metrics = this.metricsDB.getAggregatedMetrics(startTime, endTime, speedBucketSize);
       res.json({
         range,
         data: metrics.map(m => ({
@@ -88,7 +56,7 @@ class MetricsAPI extends BaseModule {
       });
     } catch (err) {
       this.log('⚠️  Error fetching speed metrics:', err);
-      res.status(500).json({ error: 'Failed to fetch speed metrics' });
+      response.serverError(res, 'Failed to fetch speed metrics');
     }
   }
 
@@ -96,29 +64,12 @@ class MetricsAPI extends BaseModule {
   getStats(req, res) {
     try {
       const { range = '24h' } = req.query;
-      const now = Date.now();
-      let startTime, bucketSize;
-
-      switch (range) {
-        case '24h':
-          startTime = now - (24 * 60 * 60 * 1000);
-          bucketSize = 15 * 60 * 1000; // 15-minute buckets
-          break;
-        case '7d':
-          startTime = now - (7 * 24 * 60 * 60 * 1000);
-          bucketSize = 2 * 60 * 60 * 1000; // 2-hour buckets
-          break;
-        case '30d':
-          startTime = now - (30 * 24 * 60 * 60 * 1000);
-          bucketSize = 6 * 60 * 60 * 1000; // 6-hour buckets
-          break;
-        default:
-          return res.status(400).json({ error: 'Invalid range' });
-      }
+      // Range is pre-validated by middleware
+      const { startTime, endTime } = timeRange.parseTimeRange(range);
 
       // Get first and last records to calculate total transferred
-      const firstMetric = this.metricsDB.getFirstMetric(startTime, now);
-      const lastMetric = this.metricsDB.getLastMetric(startTime, now);
+      const firstMetric = this.metricsDB.getFirstMetric(startTime, endTime);
+      const lastMetric = this.metricsDB.getLastMetric(startTime, endTime);
 
       if (!firstMetric || !lastMetric) {
         return res.json({
@@ -142,7 +93,7 @@ class MetricsAPI extends BaseModule {
       const avgDownloadSpeed = timeRangeSeconds > 0 ? totalDownloaded / timeRangeSeconds : 0;
 
       // Get peak speeds from raw data (not from aggregated buckets)
-      const peaks = this.metricsDB.getPeakSpeeds(startTime, now);
+      const peaks = this.metricsDB.getPeakSpeeds(startTime, endTime);
       const peakUploadSpeed = peaks.peakUploadSpeed;
       const peakDownloadSpeed = peaks.peakDownloadSpeed;
 
@@ -157,15 +108,16 @@ class MetricsAPI extends BaseModule {
       });
     } catch (err) {
       this.log('⚠️  Error fetching stats:', err);
-      res.status(500).json({ error: 'Failed to fetch stats' });
+      response.serverError(res, 'Failed to fetch stats');
     }
   }
 
   // Register all metrics routes
   registerRoutes(app) {
-    app.get('/api/metrics/history', (req, res) => this.getHistory(req, res));
-    app.get('/api/metrics/speed-history', (req, res) => this.getSpeedHistory(req, res));
-    app.get('/api/metrics/stats', (req, res) => this.getStats(req, res));
+    // All metrics routes use validateTimeRange middleware for ?range= parameter
+    app.get('/api/metrics/history', validateTimeRange, (req, res) => this.getHistory(req, res));
+    app.get('/api/metrics/speed-history', validateTimeRange, (req, res) => this.getSpeedHistory(req, res));
+    app.get('/api/metrics/stats', validateTimeRange, (req, res) => this.getStats(req, res));
   }
 }
 

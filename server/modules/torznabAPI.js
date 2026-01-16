@@ -3,15 +3,17 @@
  * Provides Torznab indexer API for aMule integration with *arr apps
  */
 
-const express = require('express');
 const BaseModule = require('../lib/BaseModule');
-const { createTorznabHandler } = require('../lib/torznab');
+const TorznabHandler = require('../lib/torznab/TorznabHandler');
+const config = require('./config');
+const { verifyPassword } = require('../lib/authUtils');
+const response = require('../lib/responseFormatter');
 
 class TorznabAPI extends BaseModule {
   constructor() {
     super();
     this.amuleManager = null;
-    this.handler = null;
+    this.handler = new TorznabHandler();
   }
 
   /**
@@ -19,34 +21,54 @@ class TorznabAPI extends BaseModule {
    */
   setAmuleManager(manager) {
     this.amuleManager = manager;
-    // Create handler with amuleManager client getter
-    this.handler = createTorznabHandler(() => this.amuleManager.getClient());
+    this.handler.setDependencies({
+      getAmuleClient: () => this.amuleManager.getClient()
+    });
   }
 
   /**
-   * GET /indexer/amule/api
-   * Torznab API endpoint for *arr apps
+   * Middleware to check Torznab API key authentication
    */
-  handleRequest(req, res) {
-    if (!this.handler) {
-      return res.status(500).json({
-        error: 'Torznab handler not initialized'
-      });
+  async checkApiKey(req, res, next) {
+    const authEnabled = config.getAuthEnabled();
+
+    if (!authEnabled) {
+      return next();
     }
 
-    this.handler(req, res);
+    const apiKey = req.query.apikey || req.query.t;
+
+    if (!apiKey) {
+      return response.unauthorized(res, 'API key required');
+    }
+
+    try {
+      const hashedPassword = config.getAuthPassword();
+
+      if (!hashedPassword) {
+        return next();
+      }
+
+      const isValid = await verifyPassword(apiKey, hashedPassword);
+
+      if (isValid) {
+        next();
+      } else {
+        response.unauthorized(res, 'Invalid API key');
+      }
+    } catch (err) {
+      this.log('Torznab API key verification error:', err);
+      response.serverError(res, 'Internal server error');
+    }
   }
 
   /**
    * Register all Torznab API routes
    */
   registerRoutes(app) {
-    // Torznab indexer API
-    app.get('/indexer/amule/api', this.handleRequest.bind(this));
+    app.get('/indexer/amule/api', this.checkApiKey.bind(this), this.handler.handleRequest);
 
-    if (this.log) {
-      this.log('🔌 Torznab API routes registered');
-    }
+    this.log('🔍 Torznab API routes registered with authentication');
   }
 }
 

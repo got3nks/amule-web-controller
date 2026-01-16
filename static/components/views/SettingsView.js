@@ -2,13 +2,15 @@
  * SettingsView Component
  *
  * Full-page settings view for viewing and editing configuration
+ * Uses contexts directly for all data and actions
  */
 
 import React from 'https://esm.sh/react@18.2.0';
 const { createElement: h, useState, useEffect } = React;
 
 import { useConfig } from '../../hooks/index.js';
-import { LoadingSpinner, Icon } from '../common/index.js';
+import { useAppState } from '../../contexts/AppStateContext.js';
+import { LoadingSpinner, AlertBox } from '../common/index.js';
 import {
   ConfigSection,
   ConfigField,
@@ -16,14 +18,20 @@ import {
   TestResultIndicator,
   PasswordField,
   EnableToggle,
-  DockerWarning
+  TestSummary,
+  IntegrationConfigInfo
 } from '../settings/index.js';
+import { validatePassword } from '../../utils/passwordValidator.js';
+import { hasTestErrors as checkTestErrors, checkResultsForErrors, buildTestPayload } from '../../utils/testHelpers.js';
 
 /**
- * SettingsView component
- * @param {function} onClose - Close handler (navigate away from settings)
+ * SettingsView component - now uses contexts directly
  */
-const SettingsView = ({ onClose }) => {
+const SettingsView = () => {
+  // Get navigation from context
+  const { setAppCurrentView } = useAppState();
+  const onClose = () => setAppCurrentView('home');
+
   const {
     currentConfig,
     configStatus,
@@ -40,6 +48,7 @@ const SettingsView = ({ onClose }) => {
 
   const [formData, setFormData] = useState(null);
   const [originalPasswords, setOriginalPasswords] = useState(null);
+  const [passwordConfirm, setPasswordConfirm] = useState('');
   const [saveError, setSaveError] = useState(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
@@ -48,6 +57,7 @@ const SettingsView = ({ onClose }) => {
     server: false,
     amule: false,
     directories: false,
+    history: false,
     sonarr: false,
     radarr: false
   });
@@ -69,12 +79,14 @@ const SettingsView = ({ onClose }) => {
         integrations: {
           sonarr: { ...currentConfig.integrations.sonarr },
           radarr: { ...currentConfig.integrations.radarr }
-        }
+        },
+        history: { ...currentConfig.history }
       });
 
       // Store original password values (masked as '********')
       // We'll keep them as '********' markers to know they haven't been changed
       setOriginalPasswords({
+        auth: currentConfig.server?.auth?.password || '',
         amule: currentConfig.amule.password,
         sonarr: currentConfig.integrations.sonarr.apiKey,
         radarr: currentConfig.integrations.radarr.apiKey
@@ -82,43 +94,44 @@ const SettingsView = ({ onClose }) => {
     }
   }, [currentConfig]);
 
-  // Auto-open sections with test failures
+  // Auto-open sections with test failures (preserves existing open state)
   useEffect(() => {
     if (!testResults || !testResults.results) return;
 
     const results = testResults.results;
-    const newOpenSections = {
-      server: false,
-      amule: false,
-      directories: false,
-      sonarr: false,
-      radarr: false
-    };
 
-    // Check aMule
-    if (results.amule && results.amule.success === false) {
-      newOpenSections.amule = true;
-    }
+    setOpenSections(prev => {
+      const updates = {};
 
-    // Check directories
-    if (results.directories) {
-      if ((results.directories.data && !results.directories.data.success) ||
-          (results.directories.logs && !results.directories.logs.success)) {
-        newOpenSections.directories = true;
+      // Only auto-open sections that have failures
+      // (preserves existing state for sections without failures)
+
+      // Check aMule
+      if (results.amule && results.amule.success === false) {
+        updates.amule = true;
       }
-    }
 
-    // Check Sonarr
-    if (results.sonarr && results.sonarr.success === false) {
-      newOpenSections.sonarr = true;
-    }
+      // Check directories
+      if (results.directories) {
+        if ((results.directories.data && !results.directories.data.success) ||
+            (results.directories.logs && !results.directories.logs.success)) {
+          updates.directories = true;
+        }
+      }
 
-    // Check Radarr
-    if (results.radarr && results.radarr.success === false) {
-      newOpenSections.radarr = true;
-    }
+      // Check Sonarr
+      if (results.sonarr && results.sonarr.success === false) {
+        updates.sonarr = true;
+      }
 
-    setOpenSections(newOpenSections);
+      // Check Radarr
+      if (results.radarr && results.radarr.success === false) {
+        updates.radarr = true;
+      }
+
+      // Return merged state (preserves existing open sections)
+      return { ...prev, ...updates };
+    });
   }, [testResults]);
 
   // Helper to unmask passwords for API calls
@@ -127,6 +140,9 @@ const SettingsView = ({ onClose }) => {
     const unmasked = JSON.parse(JSON.stringify(config));
 
     // Remove masked passwords - server will keep existing values
+    if (unmasked.server?.auth?.password === '********') {
+      delete unmasked.server.auth.password;
+    }
     if (unmasked.amule?.password === '********') {
       delete unmasked.amule.password;
     }
@@ -232,13 +248,8 @@ const SettingsView = ({ onClose }) => {
     if (!formData) return;
     setIsTesting(true);
     try {
-      const unmasked = getUnmaskedConfig(formData);
-      await testConfig({
-        amule: unmasked.amule,
-        directories: unmasked.directories,
-        sonarr: unmasked.integrations.sonarr.enabled ? unmasked.integrations.sonarr : undefined,
-        radarr: unmasked.integrations.radarr.enabled ? unmasked.integrations.radarr : undefined
-      });
+      const payload = buildTestPayload(formData, true, getUnmaskedConfig);
+      await testConfig(payload);
     } catch (err) {
       // Error is handled by useConfig
     } finally {
@@ -246,39 +257,6 @@ const SettingsView = ({ onClose }) => {
     }
   };
 
-  // Check if results have errors
-  const checkResultsForErrors = (results) => {
-    if (!results || !results.results) return false;
-
-    const testData = results.results;
-
-    // Check aMule
-    if (testData.amule && testData.amule.success === false) {
-      return true;
-    }
-
-    // Check directories (data and logs are required)
-    if (testData.directories) {
-      if (testData.directories.data && !testData.directories.data.success) {
-        return true;
-      }
-      if (testData.directories.logs && !testData.directories.logs.success) {
-        return true;
-      }
-    }
-
-    // Check Sonarr (only if enabled)
-    if (formData?.integrations?.sonarr?.enabled && testData.sonarr && testData.sonarr.success === false) {
-      return true;
-    }
-
-    // Check Radarr (only if enabled)
-    if (formData?.integrations?.radarr?.enabled && testData.radarr && testData.radarr.success === false) {
-      return true;
-    }
-
-    return false;
-  };
 
   // Save configuration
   const handleSave = async () => {
@@ -287,6 +265,19 @@ const SettingsView = ({ onClose }) => {
     setSaveError(null);
     setSaveSuccess(false);
     clearError();
+
+    // Validate authentication password if enabled and changed
+    if (formData.server.auth?.enabled && formData.server.auth.password && formData.server.auth.password !== '********') {
+      const passwordErrors = validatePassword(formData.server.auth.password);
+      if (passwordErrors.length > 0) {
+        setSaveError('Authentication password does not meet requirements: ' + passwordErrors.join(', '));
+        return;
+      }
+      if (formData.server.auth.password !== passwordConfirm) {
+        setSaveError('Authentication passwords do not match. Please ensure both password fields are identical.');
+        return;
+      }
+    }
 
     // Always test before saving
     // If tests haven't been run, run them first
@@ -309,7 +300,7 @@ const SettingsView = ({ onClose }) => {
       setIsTesting(false);
 
       // Check results directly from the return value
-      if (checkResultsForErrors(results)) {
+      if (checkResultsForErrors(results, formData)) {
         setSaveError('Configuration test failed. Please fix the errors and click Save Changes again.');
         return;
       }
@@ -360,157 +351,8 @@ const SettingsView = ({ onClose }) => {
   };
 
   // Check if there are any test errors
-  const hasTestErrors = () => {
-    if (!testResults || !testResults.results) return false;
+  const hasTestErrors = () => checkTestErrors(testResults, formData);
 
-    const results = testResults.results;
-
-    // Check aMule
-    if (results.amule && results.amule.success === false) {
-      return true;
-    }
-
-    // Check directories (data and logs are required)
-    if (results.directories) {
-      if (results.directories.data && !results.directories.data.success) {
-        return true;
-      }
-      if (results.directories.logs && !results.directories.logs.success) {
-        return true;
-      }
-      // GeoIP is optional, so we don't check it
-    }
-
-    // Check Sonarr (only if enabled)
-    if (formData?.integrations?.sonarr?.enabled && results.sonarr && results.sonarr.success === false) {
-      return true;
-    }
-
-    // Check Radarr (only if enabled)
-    if (formData?.integrations?.radarr?.enabled && results.radarr && results.radarr.success === false) {
-      return true;
-    }
-
-    return false;
-  };
-
-  // Render test summary
-  const renderTestSummary = () => {
-    if (!testResults || !testResults.results) return null;
-
-    const results = testResults.results;
-    const summary = {
-      passed: 0,
-      failed: 0,
-      warnings: 0,
-      total: 0
-    };
-
-    // Count aMule
-    if (results.amule) {
-      summary.total++;
-      if (results.amule.success === false) {
-        summary.failed++;
-      } else if (results.amule.success) {
-        summary.passed++;
-      }
-    }
-
-    // Count directories
-    if (results.directories) {
-      if (results.directories.data) {
-        summary.total++;
-        if (!results.directories.data.success) {
-          summary.failed++;
-        } else {
-          summary.passed++;
-        }
-      }
-      if (results.directories.logs) {
-        summary.total++;
-        if (!results.directories.logs.success) {
-          summary.failed++;
-        } else {
-          summary.passed++;
-        }
-      }
-      if (results.directories.geoip) {
-        summary.total++;
-        if (results.directories.geoip.warning && !results.directories.geoip.error) {
-          summary.warnings++;
-        } else if (results.directories.geoip.success) {
-          summary.passed++;
-        }
-      }
-    }
-
-    // Count Sonarr (only if enabled)
-    if (formData?.integrations?.sonarr?.enabled && results.sonarr) {
-      summary.total++;
-      if (results.sonarr.success === false) {
-        summary.failed++;
-      } else if (results.sonarr.success) {
-        summary.passed++;
-      }
-    }
-
-    // Count Radarr (only if enabled)
-    if (formData?.integrations?.radarr?.enabled && results.radarr) {
-      summary.total++;
-      if (results.radarr.success === false) {
-        summary.failed++;
-      } else if (results.radarr.success) {
-        summary.passed++;
-      }
-    }
-
-    const allPassed = summary.failed === 0 && summary.total > 0;
-    const hasWarnings = summary.warnings > 0;
-
-    return h('div', {
-      className: `p-4 rounded-lg border mb-4 ${
-        allPassed && !hasWarnings
-          ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
-          : allPassed && hasWarnings
-            ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
-            : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
-      }`
-    },
-      h('div', { className: 'flex items-center gap-2 mb-2' },
-        h(Icon, {
-          name: allPassed ? (hasWarnings ? 'alertTriangle' : 'check') : 'x',
-          size: 20,
-          className: allPassed && !hasWarnings
-            ? 'text-green-600 dark:text-green-400'
-            : allPassed && hasWarnings
-              ? 'text-yellow-600 dark:text-yellow-400'
-              : 'text-red-600 dark:text-red-400'
-        }),
-        h('p', {
-          className: `font-medium ${
-            allPassed && !hasWarnings
-              ? 'text-green-800 dark:text-green-300'
-              : allPassed && hasWarnings
-                ? 'text-yellow-800 dark:text-yellow-300'
-                : 'text-red-800 dark:text-red-300'
-          }`
-        }, allPassed
-          ? hasWarnings
-            ? 'Configuration test completed with warnings'
-            : 'All configuration tests passed!'
-          : 'Configuration test failed')
-      ),
-      h('p', {
-        className: `text-sm ${
-          allPassed && !hasWarnings
-            ? 'text-green-700 dark:text-green-400'
-            : allPassed && hasWarnings
-              ? 'text-yellow-700 dark:text-yellow-400'
-              : 'text-red-700 dark:text-red-400'
-        }`
-      }, `${summary.passed} passed${summary.warnings > 0 ? `, ${summary.warnings} warnings` : ''}${summary.failed > 0 ? `, ${summary.failed} failed` : ''} of ${summary.total} tests`)
-    );
-  };
 
   if (loading && !formData) {
     return h('div', { className: 'flex items-center justify-center h-64' },
@@ -527,31 +369,11 @@ const SettingsView = ({ onClose }) => {
   const isDocker = configStatus?.isDocker;
   const meta = currentConfig?._meta;
 
-  return h('div', { className: 'max-w-4xl mx-auto p-4' },
-    h('div', { className: 'mb-6' },
-        h('h1', { className: 'text-2xl font-bold text-gray-900 dark:text-gray-100' }, 'Settings'),
-    ),
-
-    // Success message
-    saveSuccess && h('div', {
-      className: 'mb-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg'
-    },
-      h('p', { className: 'text-green-800 dark:text-green-300 font-medium' }, '✓ Configuration saved successfully!'),
-      h('p', { className: 'text-sm text-green-700 dark:text-green-400 mt-1' },
-        'Note: Some changes may require a server restart to take effect.')
-    ),
-
-    // Error message
-    (error || saveError) && h('div', {
-      className: 'mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg'
-    },
-      h('p', { className: 'text-red-800 dark:text-red-300 font-medium' }, error || saveError)
-    ),
-
-    // Server Configuration
+  return h('div', { className: 'w-full lg:w-3/4 mx-auto px-2 py-4 sm:px-4' },
+    // Server & Authentication Configuration
     h(ConfigSection, {
-      title: 'Server',
-      description: 'HTTP server configuration',
+      title: 'Server & Authentication',
+      description: 'HTTP server and web interface access control',
       defaultOpen: false,
       open: openSections.server,
       onToggle: (value) => setOpenSections(prev => ({ ...prev, server: value }))
@@ -565,9 +387,101 @@ const SettingsView = ({ onClose }) => {
         required: true,
         fromEnv: meta?.fromEnv.port
       }),
-      isDocker && h(DockerWarning, {
-        message: 'Changing the port requires updating the Docker port mapping and restarting the container.'
-      })
+      isDocker && h(AlertBox, { type: 'warning' },
+        h('p', {}, 'Changing the port requires updating the Docker port mapping and restarting the container.')
+      ),
+
+      h('hr', { className: 'my-4 border-gray-200 dark:border-gray-700' }),
+
+      h(EnableToggle, {
+        label: 'Enable Authentication',
+        description: 'Require password to access the web interface (recommended for network-accessible installations)',
+        enabled: formData.server.auth?.enabled || false,
+        onChange: (enabled) => {
+          updateNestedField('server', 'auth', 'enabled', enabled);
+          if (!enabled) {
+            setPasswordConfirm('');
+          }
+        }
+      }),
+
+      formData.server.auth?.enabled && h('div', { className: 'mt-4 space-y-4' },
+        // Show info about environment variable
+          meta?.fromEnv.serverAuthPassword && h(AlertBox, { type: 'warning' },
+          h('p', {}, 'Password is set via WEB_AUTH_PASSWORD environment variable and cannot be changed here. To change the password, update the environment variable and restart the server.')
+        ),
+
+        !meta?.fromEnv.serverAuthPassword && h('div', {},
+          h(AlertBox, { type: 'info', className: 'mb-4' },
+            h('div', {},
+              h('p', { className: 'font-medium mb-2' }, 'Password requirements:'),
+              h('ul', { className: 'list-disc list-inside space-y-1' },
+                h('li', {}, 'At least 8 characters'),
+                h('li', {}, 'Contains at least one digit'),
+                h('li', {}, 'Contains at least one letter'),
+                h('li', {}, 'Contains at least one special character (!@#$%^&*()_+-=[]{}|;:,.<>?)')
+              )
+            )
+          ),
+
+          h(ConfigField, {
+            label: 'Password',
+            description: 'Choose a strong password for the web interface',
+            value: formData.server.auth?.password || '',
+            onChange: (value) => updateNestedField('server', 'auth', 'password', value),
+            required: true,
+          },
+            h(PasswordField, {
+              value: formData.server.auth?.password || '',
+              onChange: (value) => updateNestedField('server', 'auth', 'password', value),
+              placeholder: 'Enter password',
+            })
+          ),
+
+          h(ConfigField, {
+            label: 'Confirm Password',
+            description: 'Re-enter your password to confirm',
+            value: passwordConfirm,
+            onChange: (value) => setPasswordConfirm(value),
+            required: true,
+          },
+            h(PasswordField, {
+              value: passwordConfirm,
+              onChange: (value) => setPasswordConfirm(value),
+              placeholder: 'Confirm password',
+            })
+          ),
+
+          // Real-time validation feedback
+          formData.server.auth?.password && formData.server.auth.password !== '********' && (() => {
+            const passwordErrors = validatePassword(formData.server.auth.password);
+            const passwordMismatch = formData.server.auth.password !== passwordConfirm && passwordConfirm;
+
+            return h('div', {},
+              passwordErrors.length > 0 && h(AlertBox, { type: 'error' },
+                h('div', {},
+                  h('p', { className: 'font-medium mb-1' }, 'Password requirements not met:'),
+                  h('ul', { className: 'list-disc list-inside space-y-1' },
+                    passwordErrors.map(error => h('li', { key: error }, error))
+                  )
+                )
+              ),
+
+              passwordMismatch && h(AlertBox, { type: 'error' },
+                h('p', {}, 'Passwords do not match')
+              ),
+
+              passwordErrors.length === 0 && !passwordMismatch && passwordConfirm && h(AlertBox, { type: 'success' },
+                h('p', {}, 'Password meets all requirements and matches')
+              )
+            );
+          })()
+        )
+      ),
+
+      !formData.server.auth?.enabled && h(AlertBox, { type: 'warning', className: 'mt-4' },
+        h('p', {}, 'Authentication is disabled. Your web interface will be accessible without a password. This is not recommended for network-accessible installations.')
+      )
     ),
 
     // aMule Configuration
@@ -578,6 +492,9 @@ const SettingsView = ({ onClose }) => {
       open: openSections.amule,
       onToggle: (value) => setOpenSections(prev => ({ ...prev, amule: value }))
     },
+      isDocker && h(AlertBox, { type: 'info' },
+          h('p', {}, 'You are running in Docker. If aMule is running on your host machine, use the special hostname ', h('code', { className: 'bg-white dark:bg-gray-800 px-1 rounded' }, 'host.docker.internal'), '. If aMule is running in another container, use that container\'s name as the hostname.')
+      ),
       h(ConfigField, {
         label: 'Host',
         description: 'aMule External Connection (EC) host address',
@@ -597,7 +514,13 @@ const SettingsView = ({ onClose }) => {
         required: true,
         fromEnv: meta?.fromEnv.amulePort
       }),
-      h(ConfigField, {
+
+      // Warning if aMule password is from environment
+      meta?.fromEnv.amulePassword && h(AlertBox, { type: 'warning' },
+        h('p', {}, 'aMule password is set via AMULE_PASSWORD environment variable and cannot be changed here. To change the password, update the environment variable and restart the server.')
+      ),
+
+      !meta?.fromEnv.amulePassword && h(ConfigField, {
         label: 'Password',
         description: 'aMule EC password (set in aMule preferences)',
         value: formData.amule.password,
@@ -633,9 +556,9 @@ const SettingsView = ({ onClose }) => {
       open: openSections.directories,
       onToggle: (value) => setOpenSections(prev => ({ ...prev, directories: value }))
     },
-      isDocker && h(DockerWarning, {
-        message: 'You are running in Docker. Changing directories requires updating your docker-compose.yml volume mounts. Unless you know what you\'re doing, keep the default values.'
-      }),
+      isDocker && h(AlertBox, { type: 'warning' },
+        h('p', {}, 'You are running in Docker. Changing directories requires updating your docker-compose.yml volume mounts. Unless you know what you\'re doing, keep the default values.')
+      ),
       h(ConfigField, {
         label: 'Data Directory',
         description: 'Data directory for database files',
@@ -666,7 +589,7 @@ const SettingsView = ({ onClose }) => {
           loading: isTesting
         }, 'Test Directory Access')
       ),
-      testResults?.results?.directories && h('div', { className: 'space-y-2 mt-2' },
+      testResults?.results?.directories && h('div', {},
         testResults.results.directories.data && h(TestResultIndicator, {
           result: testResults.results.directories.data,
           label: 'Data Directory'
@@ -679,6 +602,50 @@ const SettingsView = ({ onClose }) => {
           result: testResults.results.directories.geoip,
           label: 'GeoIP Database'
         })
+      )
+    ),
+
+    // Download History Configuration
+    h(ConfigSection, {
+      title: 'Download History',
+      description: 'Track and view download history',
+      defaultOpen: false,
+      open: openSections.history,
+      onToggle: (value) => setOpenSections(prev => ({ ...prev, history: value }))
+    },
+      h(EnableToggle, {
+        enabled: formData.history?.enabled ?? true,
+        onChange: (value) => updateField('history', 'enabled', value),
+        label: 'Enable Download History',
+        description: 'Track all downloads with their status (downloading, completed, missing, deleted)'
+      }),
+      formData.history?.enabled && h('div', { className: 'mt-4 space-y-4' },
+        h(ConfigField, {
+          label: 'Retention Period (days)',
+          description: 'Number of days to keep history entries. Set to 0 to keep history indefinitely.',
+          value: formData.history?.retentionDays ?? 0,
+          onChange: (value) => updateField('history', 'retentionDays', parseInt(value) || 0),
+          type: 'number',
+          placeholder: '0'
+        }),
+        h(ConfigField, {
+          label: 'Username Header (Optional)',
+          description: 'HTTP header containing username from reverse proxy (e.g., X-Remote-User for Authelia). Leave empty if not using proxy authentication.',
+          value: formData.history?.usernameHeader || '',
+          onChange: (value) => updateField('history', 'usernameHeader', value),
+          placeholder: 'X-Remote-User'
+        }),
+        h(AlertBox, { type: 'info' },
+          h('div', {},
+            h('p', { className: 'font-medium mb-1' }, 'History Status Tracking:'),
+            h('ul', { className: 'list-disc list-inside space-y-1' },
+              h('li', {}, h('span', { className: 'font-medium' }, 'Downloading'), ' - File is currently in the download queue'),
+              h('li', {}, h('span', { className: 'font-medium' }, 'Completed'), ' - File has been downloaded and is shared'),
+              h('li', {}, h('span', { className: 'font-medium' }, 'Missing'), ' - File was downloading but is no longer in queue or shared'),
+              h('li', {}, h('span', { className: 'font-medium' }, 'Deleted'), ' - File was manually removed from downloads')
+            )
+          )
+        )
       )
     ),
 
@@ -706,7 +673,13 @@ const SettingsView = ({ onClose }) => {
           required: formData.integrations.sonarr.enabled,
           fromEnv: meta?.fromEnv.sonarrUrl
         }),
-        h(ConfigField, {
+
+        // Warning if Sonarr API key is from environment
+        meta?.fromEnv.sonarrApiKey && h(AlertBox, { type: 'warning' },
+          h('p', {}, 'Sonarr API key is set via SONARR_API_KEY environment variable and cannot be changed here. To change the API key, update the environment variable and restart the server.')
+        ),
+
+        !meta?.fromEnv.sonarrApiKey && h(ConfigField, {
           label: 'API Key',
           description: 'Sonarr API key (found in Settings → General)',
           value: formData.integrations.sonarr.apiKey,
@@ -729,6 +702,12 @@ const SettingsView = ({ onClose }) => {
           type: 'number',
           placeholder: '6',
           fromEnv: meta?.fromEnv.sonarrSearchInterval
+        }),
+        // Integration configuration info message
+        h(IntegrationConfigInfo, {
+          title: 'Sonarr Integration Configuration',
+          port: formData.server.port,
+          authEnabled: formData.server.auth?.enabled
         }),
         h('div', { className: 'mt-4' },
           h(TestButton, {
@@ -768,7 +747,13 @@ const SettingsView = ({ onClose }) => {
           required: formData.integrations.radarr.enabled,
           fromEnv: meta?.fromEnv.radarrUrl
         }),
-        h(ConfigField, {
+
+        // Warning if Radarr API key is from environment
+        meta?.fromEnv.radarrApiKey && h(AlertBox, { type: 'warning' },
+          h('p', {}, 'Radarr API key is set via RADARR_API_KEY environment variable and cannot be changed here. To change the API key, update the environment variable and restart the server.')
+        ),
+
+        !meta?.fromEnv.radarrApiKey && h(ConfigField, {
           label: 'API Key',
           description: 'Radarr API key (found in Settings → General)',
           value: formData.integrations.radarr.apiKey,
@@ -792,6 +777,12 @@ const SettingsView = ({ onClose }) => {
           placeholder: '6',
           fromEnv: meta?.fromEnv.radarrSearchInterval
         }),
+        // Integration configuration info message
+        h(IntegrationConfigInfo, {
+          title: 'Radarr Integration Configuration',
+          port: formData.server.port,
+          authEnabled: formData.server.auth?.enabled
+        }),
         h('div', { className: 'mt-4' },
           h(TestButton, {
             onClick: handleTestRadarr,
@@ -807,14 +798,31 @@ const SettingsView = ({ onClose }) => {
     ),
 
     // Test summary
-    renderTestSummary(),
+    h(TestSummary, {
+      testResults,
+      formData,
+      showDetails: false
+    }),
+
+    // Error message
+    (error || saveError) && h(AlertBox, { type: 'error', className: 'mb-4' },
+        h('p', { className: 'font-medium' }, error || saveError)
+    ),
+
+    // Success message
+    saveSuccess && h(AlertBox, { type: 'success', className: 'mb-4' },
+        h('div', {},
+            h('p', { className: 'font-medium' }, 'Configuration saved successfully!'),
+            h('p', { className: 'mt-1' }, 'Note: Some changes may require a server restart to take effect.')
+        )
+    ),
 
     // Action buttons
     h('div', { className: 'flex flex-wrap gap-3 mt-6 pb-4' },
       h('button', {
         onClick: handleTestAll,
         disabled: isTesting || loading,
-        className: `px-4 py-2 font-medium rounded-lg
+        className: `px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium rounded-lg
           ${isTesting || loading
             ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
             : 'bg-blue-600 hover:bg-blue-700 text-white'}
@@ -823,7 +831,7 @@ const SettingsView = ({ onClose }) => {
       h('button', {
         onClick: handleSave,
         disabled: !hasChanges || loading || hasTestErrors(),
-        className: `px-4 py-2 font-medium rounded-lg
+        className: `px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium rounded-lg
           ${!hasChanges || loading || hasTestErrors()
             ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
             : 'bg-green-600 hover:bg-green-700 text-white'}
@@ -832,9 +840,10 @@ const SettingsView = ({ onClose }) => {
       h('button', {
         onClick: handleCancel,
         disabled: loading,
-        className: 'px-4 py-2 font-medium rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 transition-colors'
+        className: 'px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 transition-colors'
       }, 'Cancel')
-    )
+    ),
+
   );
 };
 

@@ -6,6 +6,8 @@
 
 import React from 'https://esm.sh/react@18.2.0';
 import { categoryColorToHex, hexToCategoryColor } from '../../utils/index.js';
+import Portal from '../common/Portal.js';
+import { Button, Input, Select } from '../common/index.js';
 
 const { createElement: h } = React;
 
@@ -64,14 +66,15 @@ const CategoryModal = ({
     }
   };
 
-  return h('div', {
-    className: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4',
-    onClick: onClose
-  },
+  return h(Portal, null,
     h('div', {
-      className: 'bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full p-6',
-      onClick: (e) => e.stopPropagation()
+      className: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4',
+      onClick: onClose
     },
+      h('div', {
+        className: 'bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full p-6',
+        onClick: (e) => e.stopPropagation()
+      },
       h('h3', { className: 'text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4' },
         isEdit ? 'Edit Category' : 'Create New Category'
       ),
@@ -81,12 +84,12 @@ const CategoryModal = ({
           h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
             'Title *'
           ),
-          h('input', {
+          h(Input, {
             type: 'text',
             value: formData.title,
             onChange: (e) => onFormDataChange({ ...formData, title: e.target.value }),
             placeholder: 'e.g., Movies, Music, Software',
-            className: 'w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent',
+            className: 'w-full',
             required: true
           })
         ),
@@ -96,12 +99,12 @@ const CategoryModal = ({
           h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
             'Download Path'
           ),
-          h('input', {
+          h(Input, {
             type: 'text',
             value: formData.path,
             onChange: (e) => onFormDataChange({ ...formData, path: e.target.value }),
             placeholder: '/path/to/downloads (leave empty for default)',
-            className: 'w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm'
+            className: 'w-full font-mono'
           })
         ),
 
@@ -110,12 +113,12 @@ const CategoryModal = ({
           h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
             'Comment'
           ),
-          h('input', {
+          h(Input, {
             type: 'text',
             value: formData.comment,
             onChange: (e) => onFormDataChange({ ...formData, comment: e.target.value }),
             placeholder: 'Optional description',
-            className: 'w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent'
+            className: 'w-full'
           })
         ),
 
@@ -131,13 +134,13 @@ const CategoryModal = ({
               onChange: (e) => {
                 onFormDataChange({ ...formData, color: hexToCategoryColor(e.target.value) });
               },
-              className: 'w-16 h-10 rounded border border-gray-300 dark:border-gray-600 cursor-pointer'
+              className: 'w-16 h-9 sm:h-10 rounded-lg border border-gray-300 dark:border-gray-600 cursor-pointer'
             }),
-            h('input', {
+            h(Input, {
               type: 'text',
               value: categoryColorToHex(formData.color).toUpperCase(),
               readOnly: true,
-              className: 'flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-mono text-sm'
+              className: 'flex-1 font-mono bg-gray-50 dark:bg-gray-700'
             })
           )
         ),
@@ -147,33 +150,34 @@ const CategoryModal = ({
           h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
             'Priority'
           ),
-          h('select', {
+          h(Select, {
             value: formData.priority,
             onChange: (e) => onFormDataChange({ ...formData, priority: parseInt(e.target.value) }),
-            className: 'w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent'
-          },
-            h('option', { value: 0 }, 'Normal'),
-            h('option', { value: 1 }, 'High'),
-            h('option', { value: 2 }, 'Low'),
-            h('option', { value: 3 }, 'Auto')
-          )
+            options: [
+              { value: 0, label: 'Normal' },
+              { value: 1, label: 'High' },
+              { value: 2, label: 'Low' },
+              { value: 3, label: 'Auto' }
+            ],
+            className: 'w-full'
+          })
         ),
 
         // Buttons
         h('div', { className: 'flex gap-3 justify-end pt-4' },
-          h('button', {
+          h(Button, {
             type: 'button',
-            onClick: onClose,
-            className: 'px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all'
+            variant: 'secondary',
+            onClick: onClose
           }, 'Cancel'),
-          h('button', {
+          h(Button, {
             type: 'submit',
-            className: 'px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-all'
+            variant: 'primary'
           }, isEdit ? 'Update Category' : 'Create Category')
         )
       )
     )
-  );
+  ));
 };
 
 export default CategoryModal;

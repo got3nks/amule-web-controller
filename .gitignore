@@ -31,6 +31,7 @@ pids/
 
 # Build outputs
 static/output.css
+static/dist/
 dist/
 build/
 

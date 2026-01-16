@@ -1,6 +1,8 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const { daysToMs } = require('./lib/timeRange');
+const logger = require('./lib/logger');
 
 /**
  * MetricsDB - SQLite database for storing historical metrics
@@ -12,7 +14,7 @@ class MetricsDB {
       // Ensure database directory exists
       const dbDir = path.dirname(dbPath);
       if (!fs.existsSync(dbDir)) {
-        console.log(`Creating database directory: ${dbDir}`);
+        logger.log(`Creating database directory: ${dbDir}`);
         fs.mkdirSync(dbDir, { recursive: true });
       }
 
@@ -25,9 +27,9 @@ class MetricsDB {
       this.db.pragma('journal_mode = WAL'); // Better concurrency
       this.initSchema();
 
-      console.log(`Database initialized successfully at: ${dbPath}`);
+      logger.log(`📊 Metrics database initialized: ${dbPath}`);
     } catch (error) {
-      console.error(`Failed to initialize database at ${dbPath}:`, error);
+      logger.error(`Failed to initialize database at ${dbPath}:`, error);
       throw new Error(`Database initialization failed: ${error.message}. Check directory permissions for: ${path.dirname(dbPath)}`);
     }
   }
@@ -216,7 +218,7 @@ class MetricsDB {
    * @returns {number} Number of records deleted
    */
   cleanupOldData(retentionDays = 365) {
-    const cutoffTime = Date.now() - (retentionDays * 24 * 60 * 60 * 1000);
+    const cutoffTime = Date.now() - daysToMs(retentionDays);
     const deleteStmt = this.db.prepare('DELETE FROM metrics WHERE timestamp < ?');
     const result = deleteStmt.run(cutoffTime);
     return result.changes;

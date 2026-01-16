@@ -5,6 +5,7 @@
  */
 
 export { default as Icon } from './Icon.js';
+export { default as AlertBox } from './AlertBox.js';
 export { default as NavButton } from './NavButton.js';
 export { default as LoadingSpinner } from './LoadingSpinner.js';
 export { default as DeleteModal } from './DeleteModal.js';
@@ -17,6 +18,13 @@ export { default as SegmentsBar } from './SegmentsBar.js';
 export { default as FlagIcon } from './FlagIcon.js';
 export { default as MobileCardView } from './MobileCardView.js';
 export { PaginationControls } from './PaginationControls.js';
-export { SortControls } from './SortControls.js';
-export { default as SearchResultsList } from './SearchResultsList.js';
+export { default as SearchResultsList, SEARCH_RESULTS_COLUMNS } from './SearchResultsList.js';
+export { default as SearchResultsSection } from './SearchResultsSection.js';
 export { default as StatCard } from './StatCard.js';
+export { default as FilterInput } from './FilterInput.js';
+export { default as ContextMenu, useContextMenu, MoreButton } from './ContextMenu.js';
+export { default as Portal } from './Portal.js';
+export { default as VersionBadge } from './VersionBadge.js';
+export { default as MobileOptionsPopover } from './MobileOptionsPopover.js';
+export { default as ExpandableSearch } from './ExpandableSearch.js';
+export { Button, Input, Select, IconButton, Textarea, BUTTON_VARIANTS, BASE_HEIGHT } from './FormControls.js';

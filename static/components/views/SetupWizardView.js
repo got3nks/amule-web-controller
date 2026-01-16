@@ -8,15 +8,18 @@ import React from 'https://esm.sh/react@18.2.0';
 const { createElement: h, useState, useEffect } = React;
 
 import { useConfig } from '../../hooks/index.js';
-import { LoadingSpinner, Icon } from '../common/index.js';
+import { LoadingSpinner, Icon, AlertBox, Button } from '../common/index.js';
 import {
   ConfigField,
   TestButton,
   TestResultIndicator,
   PasswordField,
   EnableToggle,
-  DockerWarning
+  TestSummary,
+  IntegrationConfigInfo
 } from '../settings/index.js';
+import { validatePassword } from '../../utils/passwordValidator.js';
+import { hasTestErrors as checkTestErrors, checkResultsForErrors, buildTestPayload } from '../../utils/testHelpers.js';
 
 /**
  * SetupWizardView component
@@ -41,8 +44,10 @@ const SetupWizardView = ({ onComplete }) => {
   const [isTesting, setIsTesting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
+  const [passwordConfirm, setPasswordConfirm] = useState('');
+  const [securityValidationError, setSecurityValidationError] = useState(null);
 
-  const steps = ['Welcome', 'aMule', 'Directories', 'Integrations', 'Review'];
+  const steps = ['Welcome', 'Security', 'aMule', 'Directories', 'Integrations', 'Review'];
 
   // Load defaults on mount
   useEffect(() => {
@@ -54,7 +59,13 @@ const SetupWizardView = ({ onComplete }) => {
   useEffect(() => {
     if (defaults && !formData) {
       setFormData({
-        server: { ...defaults.server },
+        server: {
+          ...defaults.server,
+          auth: {
+            ...defaults.server.auth,
+            enabled: true // Enable auth by default during first-run setup
+          }
+        },
         amule: { ...defaults.amule },
         directories: { ...defaults.directories },
         integrations: {
@@ -95,6 +106,38 @@ const SetupWizardView = ({ onComplete }) => {
   // Navigate to next step
   const handleNext = () => {
     if (currentStep < steps.length - 1) {
+      // Validate security step before proceeding (step 1)
+      if (currentStep === 1) {
+        // Only validate if authentication is enabled and password is not from environment
+        if (formData.server.auth.enabled && !meta?.fromEnv.serverAuthPassword) {
+          // Check if password is provided
+          if (!formData.server.auth.password) {
+            setSecurityValidationError('Password is required when authentication is enabled');
+            return; // Don't proceed without password
+          }
+
+          // Validate password requirements
+          const passwordErrors = validatePassword(formData.server.auth.password);
+          if (passwordErrors.length > 0) {
+            setSecurityValidationError('Password does not meet requirements: ' + passwordErrors.join(', '));
+            return; // Don't proceed if password doesn't meet requirements
+          }
+
+          // Check password confirmation
+          if (!passwordConfirm) {
+            setSecurityValidationError('Please confirm your password');
+            return;
+          }
+
+          if (formData.server.auth.password !== passwordConfirm) {
+            setSecurityValidationError('Passwords do not match');
+            return; // Don't proceed if passwords don't match
+          }
+        }
+        // If auth is disabled or password is from env, allow proceeding without validation
+        setSecurityValidationError(null); // Clear any previous errors
+      }
+
       setCurrentStep(currentStep + 1);
       clearTestResults();
     }
@@ -104,7 +147,9 @@ const SetupWizardView = ({ onComplete }) => {
   const handleBack = () => {
     if (currentStep > 0) {
       setCurrentStep(currentStep - 1);
+      setSaveError('');
       clearTestResults();
+      setSecurityValidationError(null); // Clear validation errors when navigating
     }
   };
 
@@ -114,14 +159,14 @@ const SetupWizardView = ({ onComplete }) => {
 
     setIsTesting(true);
     try {
-      if (currentStep === 1) {
-        // Test aMule
+      if (currentStep === 2) {
+        // Test aMule (step 2)
         await testConfig({ amule: formData.amule });
-      } else if (currentStep === 2) {
-        // Test directories
-        await testConfig({ directories: formData.directories });
       } else if (currentStep === 3) {
-        // Test integrations
+        // Test directories (step 3)
+        await testConfig({ directories: formData.directories });
+      } else if (currentStep === 4) {
+        // Test integrations (step 4)
         const testPayload = {};
         if (formData.integrations.sonarr.enabled) {
           testPayload.sonarr = formData.integrations.sonarr;
@@ -146,19 +191,8 @@ const SetupWizardView = ({ onComplete }) => {
 
     setIsTesting(true);
     try {
-      const testPayload = {
-        amule: formData.amule,
-        directories: formData.directories
-      };
-
-      if (formData.integrations.sonarr.enabled) {
-        testPayload.sonarr = formData.integrations.sonarr;
-      }
-      if (formData.integrations.radarr.enabled) {
-        testPayload.radarr = formData.integrations.radarr;
-      }
-
-      await testConfig(testPayload);
+      const payload = buildTestPayload(formData);
+      await testConfig(payload);
     } catch (err) {
       // Error handled by useConfig
     } finally {
@@ -166,192 +200,9 @@ const SetupWizardView = ({ onComplete }) => {
     }
   };
 
-  // Render test summary
-  const renderTestSummary = () => {
-    if (!testResults || !testResults.results) return null;
-
-    const results = testResults.results;
-    const summary = {
-      passed: 0,
-      failed: 0,
-      warnings: 0,
-      total: 0
-    };
-
-    // Count aMule
-    if (results.amule) {
-      summary.total++;
-      if (results.amule.success === false) {
-        summary.failed++;
-      } else if (results.amule.success) {
-        summary.passed++;
-      }
-    }
-
-    // Count directories
-    if (results.directories) {
-      if (results.directories.data) {
-        summary.total++;
-        if (!results.directories.data.success) {
-          summary.failed++;
-        } else {
-          summary.passed++;
-        }
-      }
-      if (results.directories.logs) {
-        summary.total++;
-        if (!results.directories.logs.success) {
-          summary.failed++;
-        } else {
-          summary.passed++;
-        }
-      }
-      if (results.directories.geoip) {
-        summary.total++;
-        if (results.directories.geoip.warning && !results.directories.geoip.error) {
-          summary.warnings++;
-        } else if (results.directories.geoip.success) {
-          summary.passed++;
-        }
-      }
-    }
-
-    // Count Sonarr (only if enabled)
-    if (formData?.integrations?.sonarr?.enabled && results.sonarr) {
-      summary.total++;
-      if (results.sonarr.success === false) {
-        summary.failed++;
-      } else if (results.sonarr.success) {
-        summary.passed++;
-      }
-    }
-
-    // Count Radarr (only if enabled)
-    if (formData?.integrations?.radarr?.enabled && results.radarr) {
-      summary.total++;
-      if (results.radarr.success === false) {
-        summary.failed++;
-      } else if (results.radarr.success) {
-        summary.passed++;
-      }
-    }
-
-    const allPassed = summary.failed === 0 && summary.total > 0;
-    const hasWarnings = summary.warnings > 0;
-
-    return h('div', {
-      className: `p-4 rounded-lg border ${
-        allPassed && !hasWarnings
-          ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
-          : allPassed && hasWarnings
-            ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
-            : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
-      }`
-    },
-      h('div', { className: 'flex items-center gap-2 mb-2' },
-        h(Icon, {
-          name: allPassed ? (hasWarnings ? 'alertTriangle' : 'check') : 'x',
-          size: 20,
-          className: allPassed && !hasWarnings
-            ? 'text-green-600 dark:text-green-400'
-            : allPassed && hasWarnings
-              ? 'text-yellow-600 dark:text-yellow-400'
-              : 'text-red-600 dark:text-red-400'
-        }),
-        h('p', {
-          className: `font-medium ${
-            allPassed && !hasWarnings
-              ? 'text-green-800 dark:text-green-300'
-              : allPassed && hasWarnings
-                ? 'text-yellow-800 dark:text-yellow-300'
-                : 'text-red-800 dark:text-red-300'
-          }`
-        }, allPassed
-          ? hasWarnings
-            ? 'Configuration test completed with warnings'
-            : 'All configuration tests passed!'
-          : 'Configuration test failed')
-      ),
-      h('p', {
-        className: `text-sm ${
-          allPassed && !hasWarnings
-            ? 'text-green-700 dark:text-green-400'
-            : allPassed && hasWarnings
-              ? 'text-yellow-700 dark:text-yellow-400'
-              : 'text-red-700 dark:text-red-400'
-        }`
-      }, `${summary.passed} passed${summary.warnings > 0 ? `, ${summary.warnings} warnings` : ''}${summary.failed > 0 ? `, ${summary.failed} failed` : ''} of ${summary.total} tests`)
-    );
-  };
-
   // Check if there are any test errors
-  const hasTestErrors = () => {
-    if (!testResults || !testResults.results) return false;
+  const hasTestErrors = () => checkTestErrors(testResults, formData);
 
-    const results = testResults.results;
-
-    // Check aMule
-    if (results.amule && results.amule.success === false) {
-      return true;
-    }
-
-    // Check directories (data and logs are required)
-    if (results.directories) {
-      if (results.directories.data && !results.directories.data.success) {
-        return true;
-      }
-      if (results.directories.logs && !results.directories.logs.success) {
-        return true;
-      }
-      // GeoIP is optional, so we don't check it
-    }
-
-    // Check Sonarr (only if enabled)
-    if (formData?.integrations?.sonarr?.enabled && results.sonarr && results.sonarr.success === false) {
-      return true;
-    }
-
-    // Check Radarr (only if enabled)
-    if (formData?.integrations?.radarr?.enabled && results.radarr && results.radarr.success === false) {
-      return true;
-    }
-
-    return false;
-  };
-
-  // Check if results have errors (for direct return value checking)
-  const checkResultsForErrors = (results) => {
-    if (!results || !results.results) return false;
-
-    const testData = results.results;
-
-    // Check aMule
-    if (testData.amule && testData.amule.success === false) {
-      return true;
-    }
-
-    // Check directories (data and logs are required)
-    if (testData.directories) {
-      if (testData.directories.data && !testData.directories.data.success) {
-        return true;
-      }
-      if (testData.directories.logs && !testData.directories.logs.success) {
-        return true;
-      }
-    }
-
-    // Check Sonarr (only if enabled)
-    if (formData?.integrations?.sonarr?.enabled && testData.sonarr && testData.sonarr.success === false) {
-      return true;
-    }
-
-    // Check Radarr (only if enabled)
-    if (formData?.integrations?.radarr?.enabled && testData.radarr && testData.radarr.success === false) {
-      return true;
-    }
-
-    return false;
-  };
 
   // Save and complete setup
   const handleComplete = async () => {
@@ -389,7 +240,7 @@ const SetupWizardView = ({ onComplete }) => {
       setIsSaving(false);
 
       // Check results directly from the return value
-      if (checkResultsForErrors(results)) {
+      if (checkResultsForErrors(results, formData)) {
         setSaveError('Configuration test failed. Please fix the errors and click Complete Setup again.');
         return;
       }
@@ -436,6 +287,7 @@ const SetupWizardView = ({ onComplete }) => {
   }
 
   const isDocker = configStatus?.isDocker;
+  const meta = defaults?._meta;
 
   // Wizard steps content
   const WelcomeStep = () => h('div', { className: 'text-center max-w-2xl mx-auto' },
@@ -451,6 +303,13 @@ const SetupWizardView = ({ onComplete }) => {
     h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-6 shadow-md text-left' },
       h('h3', { className: 'text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4' }, 'What we\'ll configure:'),
       h('ul', { className: 'space-y-3' },
+        h('li', { className: 'flex items-start gap-3' },
+          h(Icon, { name: 'lock', size: 20, className: 'text-blue-600 dark:text-blue-400 mt-0.5' }),
+          h('div', {},
+            h('p', { className: 'font-medium text-gray-900 dark:text-gray-100' }, 'Web Interface Security'),
+            h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, 'Protect your controller with password authentication')
+          )
+        ),
         h('li', { className: 'flex items-start gap-3' },
           h(Icon, { name: 'plugConnect', size: 20, className: 'text-blue-600 dark:text-blue-400 mt-0.5' }),
           h('div', {},
@@ -477,9 +336,124 @@ const SetupWizardView = ({ onComplete }) => {
     h('p', { className: 'mt-6 text-gray-600 dark:text-gray-400' }, 'Click "Next" to begin the setup process')
   );
 
+  const SecurityStep = () => {
+    const passwordErrors = formData.server.auth.enabled && formData.server.auth.password
+      ? validatePassword(formData.server.auth.password)
+      : [];
+    const passwordMismatch = formData.server.auth.enabled && formData.server.auth.password !== passwordConfirm;
+
+    return h('div', {},
+      h('h2', { className: 'text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2' }, 'Web Interface Security'),
+      h('p', { className: 'text-gray-600 dark:text-gray-400 mb-6' }, 'Protect your aMule Web Controller with password authentication'),
+
+      h(EnableToggle, {
+        label: 'Enable Authentication',
+        description: 'Require password to access the web interface (recommended for network-accessible installations)',
+        enabled: formData.server.auth.enabled,
+        onChange: (enabled) => {
+          updateNestedField('server', 'auth', 'enabled', enabled);
+          if (!enabled) {
+            // Clear password fields when disabling
+            updateNestedField('server', 'auth', 'password', '');
+            setPasswordConfirm('');
+          }
+          setSecurityValidationError(null); // Clear validation error when toggling
+        }
+      }),
+
+      formData.server.auth.enabled && h('div', { className: 'mt-6 space-y-4' },
+        // Show warning if password from environment
+        meta?.fromEnv.serverAuthPassword && h(AlertBox, { type: 'warning' },
+          h('p', {}, 'Password is set via WEB_AUTH_PASSWORD environment variable and cannot be changed here. To change the password, update the environment variable and restart the server.')
+        ),
+
+        !meta?.fromEnv.serverAuthPassword && h('div', {},
+          h(AlertBox, { type: 'info', className: 'mb-4' },
+            h('div', {},
+              h('p', { className: 'font-medium mb-2' }, 'Password requirements:'),
+              h('ul', { className: 'list-disc list-inside space-y-1' },
+                h('li', {}, 'At least 8 characters'),
+                h('li', {}, 'Contains at least one digit'),
+                h('li', {}, 'Contains at least one letter'),
+                h('li', {}, 'Contains at least one special character (!@#$%^&*()_+-=[]{}|;:,.<>?)')
+              )
+            )
+          ),
+
+          h(ConfigField, {
+            label: 'Password',
+            description: 'Choose a strong password for the web interface',
+            required: true,
+            fromEnv: meta?.fromEnv.serverAuthPassword
+          },
+            h(PasswordField, {
+              value: formData.server.auth.password || '',
+              onChange: (value) => {
+                updateNestedField('server', 'auth', 'password', value);
+                setSecurityValidationError(null); // Clear validation error when typing
+              },
+              placeholder: 'Enter password',
+              disabled: meta?.fromEnv.serverAuthPassword
+            })
+          ),
+
+          h(ConfigField, {
+            label: 'Confirm Password',
+            description: 'Re-enter your password to confirm',
+            required: true
+          },
+            h(PasswordField, {
+              value: passwordConfirm,
+              onChange: (value) => {
+                setPasswordConfirm(value);
+                setSecurityValidationError(null); // Clear validation error when typing
+              },
+              placeholder: 'Confirm password',
+              disabled: meta?.fromEnv.serverAuthPassword
+            })
+          ),
+
+          // Real-time validation feedback
+          formData.server.auth.password && h('div', {},
+            passwordErrors.length > 0 && h(AlertBox, { type: 'error' },
+              h('div', {},
+                h('p', { className: 'font-medium mb-1' }, 'Password requirements not met:'),
+                h('ul', { className: 'list-disc list-inside space-y-1' },
+                  passwordErrors.map(error => h('li', { key: error }, error))
+                )
+              )
+            ),
+
+            passwordMismatch && passwordConfirm && h(AlertBox, { type: 'error' },
+              h('p', {}, 'Passwords do not match')
+            ),
+
+            passwordErrors.length === 0 && !passwordMismatch && passwordConfirm && h(AlertBox, { type: 'success' },
+              h('p', {}, 'Password meets all requirements and matches')
+            )
+          )
+        )
+      ),
+
+      // Validation error message
+      securityValidationError && h(AlertBox, { type: 'error', className: 'mt-4' },
+            h('p', {}, securityValidationError)
+      ),
+
+      !formData.server.auth.enabled && h(AlertBox, { type: 'warning', className: 'mt-4' },
+        h('p', {},
+          'Authentication is disabled. Your web interface will be accessible without a password. This is not recommended for network-accessible installations.')
+      )
+    );
+  };
+
   const AmuleStep = () => h('div', {},
     h('h2', { className: 'text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2' }, 'aMule Connection'),
     h('p', { className: 'text-gray-600 dark:text-gray-400 mb-6' }, 'Configure connection to your aMule daemon'),
+
+    isDocker && h(AlertBox, { type: 'info' },
+      h('p', {}, 'You are running in Docker. If aMule is running on your host machine, use the special hostname ', h('code', { className: 'bg-white dark:bg-gray-800 px-1 rounded' }, 'host.docker.internal'), '. If aMule is running in another container, use that container\'s name as the hostname.')
+    ),
 
     h(ConfigField, {
       label: 'Host',
@@ -487,7 +461,8 @@ const SetupWizardView = ({ onComplete }) => {
       value: formData.amule.host,
       onChange: (value) => updateField('amule', 'host', value),
       placeholder: '127.0.0.1',
-      required: true
+      required: true,
+      fromEnv: meta?.fromEnv.amuleHost
     }),
     h(ConfigField, {
       label: 'Port',
@@ -496,19 +471,28 @@ const SetupWizardView = ({ onComplete }) => {
       onChange: (value) => updateField('amule', 'port', value),
       type: 'number',
       placeholder: '4712',
-      required: true
+      required: true,
+      fromEnv: meta?.fromEnv.amulePort
     }),
-    h(ConfigField, {
+
+    // Warning if aMule password is from environment
+    meta?.fromEnv.amulePassword && h(AlertBox, { type: 'warning' },
+      h('p', {}, 'aMule password is set via AMULE_PASSWORD environment variable and cannot be changed here. To change the password, update the environment variable and restart the server.')
+    ),
+
+    !meta?.fromEnv.amulePassword && h(ConfigField, {
       label: 'Password',
       description: 'aMule EC password (set in aMule preferences)',
       value: formData.amule.password,
       onChange: (value) => updateField('amule', 'password', value),
-      required: true
+      required: true,
+      fromEnv: meta?.fromEnv.amulePassword
     },
       h(PasswordField, {
         value: formData.amule.password,
         onChange: (value) => updateField('amule', 'password', value),
-        placeholder: 'Enter aMule EC password'
+        placeholder: 'Enter aMule EC password',
+        disabled: meta?.fromEnv.amulePassword
       })
     ),
 
@@ -530,9 +514,9 @@ const SetupWizardView = ({ onComplete }) => {
     h('h2', { className: 'text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2' }, 'Directories'),
     h('p', { className: 'text-gray-600 dark:text-gray-400 mb-6' }, 'Configure directories for data, logs, and GeoIP files'),
 
-    isDocker && h(DockerWarning, {
-      message: '⚠️ You are running in Docker. Changing directories requires updating your docker-compose.yml volume mounts. Unless you know what you\'re doing, keep the default values.'
-    }),
+    isDocker && h(AlertBox, { type: 'warning' },
+      h('p', {}, 'You are running in Docker. Changing directories requires updating your docker-compose.yml volume mounts. Unless you know what you\'re doing, keep the default values.')
+    ),
 
     h(ConfigField, {
       label: 'Data Directory',
@@ -566,7 +550,7 @@ const SetupWizardView = ({ onComplete }) => {
       }, 'Test Directory Access')
     ),
 
-    testResults?.results?.directories && h('div', { className: 'space-y-2 mt-2' },
+    testResults?.results?.directories && h('div', {},
       testResults.results.directories.data && h(TestResultIndicator, {
         result: testResults.results.directories.data,
         label: 'Data Directory'
@@ -601,19 +585,28 @@ const SetupWizardView = ({ onComplete }) => {
           value: formData.integrations.sonarr.url,
           onChange: (value) => updateNestedField('integrations', 'sonarr', 'url', value),
           placeholder: 'http://localhost:8989',
-          required: formData.integrations.sonarr.enabled
+          required: formData.integrations.sonarr.enabled,
+          fromEnv: meta?.fromEnv.sonarrUrl
         }),
-        h(ConfigField, {
+
+        // Warning if Sonarr API key is from environment
+        meta?.fromEnv.sonarrApiKey && h(AlertBox, { type: 'warning' },
+          h('p', {}, 'Sonarr API key is set via SONARR_API_KEY environment variable and cannot be changed here. To change the API key, update the environment variable and restart the server.')
+        ),
+
+        !meta?.fromEnv.sonarrApiKey && h(ConfigField, {
           label: 'API Key',
           description: 'Sonarr API key (found in Settings → General)',
           value: formData.integrations.sonarr.apiKey,
           onChange: (value) => updateNestedField('integrations', 'sonarr', 'apiKey', value),
-          required: formData.integrations.sonarr.enabled
+          required: formData.integrations.sonarr.enabled,
+          fromEnv: meta?.fromEnv.sonarrApiKey
         },
           h(PasswordField, {
             value: formData.integrations.sonarr.apiKey,
             onChange: (value) => updateNestedField('integrations', 'sonarr', 'apiKey', value),
-            placeholder: 'Enter Sonarr API key'
+            placeholder: 'Enter Sonarr API key',
+            disabled: meta?.fromEnv.sonarrApiKey
           })
         ),
         h(ConfigField, {
@@ -622,7 +615,8 @@ const SetupWizardView = ({ onComplete }) => {
           value: formData.integrations.sonarr.searchIntervalHours,
           onChange: (value) => updateNestedField('integrations', 'sonarr', 'searchIntervalHours', value),
           type: 'number',
-          placeholder: '6'
+          placeholder: '6',
+          fromEnv: meta?.fromEnv.sonarrSearchInterval
         })
       )
     ),
@@ -642,19 +636,28 @@ const SetupWizardView = ({ onComplete }) => {
           value: formData.integrations.radarr.url,
           onChange: (value) => updateNestedField('integrations', 'radarr', 'url', value),
           placeholder: 'http://localhost:7878',
-          required: formData.integrations.radarr.enabled
+          required: formData.integrations.radarr.enabled,
+          fromEnv: meta?.fromEnv.radarrUrl
         }),
-        h(ConfigField, {
+
+        // Warning if Radarr API key is from environment
+        meta?.fromEnv.radarrApiKey && h(AlertBox, { type: 'warning' },
+          h('p', {}, 'Radarr API key is set via RADARR_API_KEY environment variable and cannot be changed here. To change the API key, update the environment variable and restart the server.')
+        ),
+
+        !meta?.fromEnv.radarrApiKey && h(ConfigField, {
           label: 'API Key',
           description: 'Radarr API key (found in Settings → General)',
           value: formData.integrations.radarr.apiKey,
           onChange: (value) => updateNestedField('integrations', 'radarr', 'apiKey', value),
-          required: formData.integrations.radarr.enabled
+          required: formData.integrations.radarr.enabled,
+          fromEnv: meta?.fromEnv.radarrApiKey
         },
           h(PasswordField, {
             value: formData.integrations.radarr.apiKey,
             onChange: (value) => updateNestedField('integrations', 'radarr', 'apiKey', value),
-            placeholder: 'Enter Radarr API key'
+            placeholder: 'Enter Radarr API key',
+            disabled: meta?.fromEnv.radarrApiKey
           })
         ),
         h(ConfigField, {
@@ -663,10 +666,18 @@ const SetupWizardView = ({ onComplete }) => {
           value: formData.integrations.radarr.searchIntervalHours,
           onChange: (value) => updateNestedField('integrations', 'radarr', 'searchIntervalHours', value),
           type: 'number',
-          placeholder: '6'
+          placeholder: '6',
+          fromEnv: meta?.fromEnv.radarrSearchInterval
         })
       )
     ),
+
+    // Integration configuration info message
+    (formData.integrations.sonarr.enabled || formData.integrations.radarr.enabled) && h(IntegrationConfigInfo, {
+      title: 'Integration Configuration',
+      port: formData.server.port,
+      authEnabled: formData.server.auth.enabled
+    }),
 
     (formData.integrations.sonarr.enabled || formData.integrations.radarr.enabled) && h('div', { className: 'mt-6' },
       h(TestButton, {
@@ -678,7 +689,7 @@ const SetupWizardView = ({ onComplete }) => {
       }, 'Test Integrations')
     ),
 
-    testResults?.results && h('div', { className: 'space-y-2 mt-2' },
+    testResults?.results && h('div', {},
       testResults.results.sonarr && h(TestResultIndicator, {
         result: testResults.results.sonarr,
         label: 'Sonarr API Test'
@@ -700,6 +711,16 @@ const SetupWizardView = ({ onComplete }) => {
       h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700' },
         h('h3', { className: 'font-semibold text-gray-900 dark:text-gray-100 mb-2' }, 'Server'),
         h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Port: ${formData.server.port}`)
+      ),
+
+      // Authentication
+      h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700' },
+        h('h3', { className: 'font-semibold text-gray-900 dark:text-gray-100 mb-2' }, 'Web Interface Authentication'),
+        h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' },
+          formData.server.auth.enabled
+            ? 'Authentication: Enabled (password configured)'
+            : 'Authentication: Disabled'
+        )
       ),
 
       // aMule
@@ -744,22 +765,26 @@ const SetupWizardView = ({ onComplete }) => {
 
     // Test summary
     h('div', { className: 'mt-4' },
-      renderTestSummary()
+      h(TestSummary, {
+        testResults,
+        formData,
+        showDetails: true
+      })
     ),
 
-    saveError && h('div', { className: 'mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg' },
-      h('p', { className: 'text-red-800 dark:text-red-300 font-medium' }, saveError)
+    saveError && h(AlertBox, { type: 'error', className: 'mt-4' },
+      h('p', { className: 'font-medium' }, saveError)
     ),
 
-    isSaving && h('div', { className: 'mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg' },
-      h('p', { className: 'text-blue-800 dark:text-blue-300 flex items-center gap-2' },
+    isSaving && h(AlertBox, { type: 'success', className: 'mt-4' },
+      h('p', { className: 'flex items-center gap-2' },
         h(LoadingSpinner, { size: 20 }),
         'Saving configuration and initializing services...'
       )
     )
   );
 
-  const stepComponents = [WelcomeStep, AmuleStep, DirectoriesStep, IntegrationsStep, ReviewStep];
+  const stepComponents = [WelcomeStep, SecurityStep, AmuleStep, DirectoriesStep, IntegrationsStep, ReviewStep];
 
   return h('div', { className: 'min-h-screen bg-gray-50 dark:bg-gray-900 py-8 px-4' },
     h('div', { className: 'max-w-3xl mx-auto' },
@@ -800,29 +825,21 @@ const SetupWizardView = ({ onComplete }) => {
 
       // Navigation buttons
       h('div', { className: 'flex justify-between' },
-        h('button', {
+        h(Button, {
+          variant: 'secondary',
           onClick: handleBack,
-          disabled: currentStep === 0 || isSaving,
-          className: `px-4 py-2 font-medium rounded-lg
-            ${currentStep === 0 || isSaving
-              ? 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
-              : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200'}
-            transition-colors`
+          disabled: currentStep === 0 || isSaving
         }, 'Back'),
         currentStep < steps.length - 1
-          ? h('button', {
+          ? h(Button, {
+              variant: 'primary',
               onClick: handleNext,
-              disabled: isSaving,
-              className: 'px-4 py-2 font-medium rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors'
+              disabled: isSaving
             }, 'Next')
-          : h('button', {
+          : h(Button, {
+              variant: 'success',
               onClick: handleComplete,
-              disabled: isSaving,
-              className: `px-4 py-2 font-medium rounded-lg
-                ${isSaving
-                  ? 'bg-gray-400 cursor-not-allowed'
-                  : 'bg-green-600 hover:bg-green-700'}
-                text-white transition-colors`
+              disabled: isSaving
             }, isSaving ? 'Saving...' : 'Complete Setup')
       )
     )

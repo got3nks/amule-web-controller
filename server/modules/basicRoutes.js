@@ -7,6 +7,7 @@ const express = require('express');
 const path = require('path');
 const config = require('./config');
 const BaseModule = require('../lib/BaseModule');
+const { getClientIP } = require('../lib/authUtils');
 
 class BasicRoutes extends BaseModule {
   constructor() {
@@ -28,9 +29,8 @@ class BasicRoutes extends BaseModule {
 
   // Request logging middleware
   requestLogger(req, res, next) {
-    const timestamp = new Date().toISOString();
     const userAgent = req.get('User-Agent') || 'Unknown';
-    const clientIp = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
+    const clientIp = getClientIP(req);
     const geoData = this.geoIPManager.getGeoIPData(clientIp);
     const locationInfo = this.geoIPManager.formatLocationInfo(geoData);
 
@@ -45,8 +45,8 @@ class BasicRoutes extends BaseModule {
     next();
   }
 
-  // Register all basic routes
-  registerRoutes(app) {
+  // Register public routes (before authentication)
+  registerPublicRoutes(app) {
     // Request logging middleware
     app.use((req, res, next) => this.requestLogger(req, res, next));
 
@@ -54,10 +54,24 @@ class BasicRoutes extends BaseModule {
     const appRoot = config.getAppRoot();
     app.use(express.static(appRoot));
     app.use('/static', express.static(path.join(appRoot, 'static')));
-    app.get('/', (req, res) => res.sendFile(path.join(appRoot, 'static', 'index.html')));
 
-    // Health check
+    // Health check (public)
     app.get('/health', (req, res) => this.healthCheck(req, res));
+
+    // Login page (public)
+    app.get('/login', (req, res) => {
+      res.sendFile(path.join(appRoot, 'static', 'index.html'));
+    });
+  }
+
+  // Register protected routes (after authentication)
+  registerRoutes(app) {
+    const appRoot = config.getAppRoot();
+
+    // Home page (protected)
+    app.get('/', (req, res) => {
+      res.sendFile(path.join(appRoot, 'static', 'index.html'));
+    });
   }
 }
 

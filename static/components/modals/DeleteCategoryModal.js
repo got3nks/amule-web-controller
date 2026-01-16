@@ -5,7 +5,7 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { Icon } from '../common/index.js';
+import { Icon, Portal, Button } from '../common/index.js';
 
 const { createElement: h } = React;
 
@@ -26,14 +26,15 @@ const DeleteCategoryModal = ({
 }) => {
   if (!show) return null;
 
-  return h('div', {
-    className: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4',
-    onClick: onClose
-  },
+  return h(Portal, null,
     h('div', {
-      className: 'bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6 transform transition-all',
-      onClick: (e) => e.stopPropagation()
+      className: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4',
+      onClick: onClose
     },
+      h('div', {
+        className: 'bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6 transform transition-all',
+        onClick: (e) => e.stopPropagation()
+      },
       h('div', { className: 'flex items-center gap-3 mb-4' },
         h('div', { className: 'flex-shrink-0 w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center' },
           h(Icon, { name: 'trash', size: 24, className: 'text-red-600 dark:text-red-400' })
@@ -52,20 +53,18 @@ const DeleteCategoryModal = ({
         'Files in this category will be moved to the default category.'
       ),
       h('div', { className: 'flex gap-3 justify-end' },
-        h('button', {
-          onClick: onClose,
-          className: 'px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all'
+        h(Button, {
+          variant: 'secondary',
+          onClick: onClose
         }, 'Cancel'),
-        h('button', {
-          onClick: onConfirm,
-          className: 'px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 transition-all flex items-center gap-2'
-        },
-          h(Icon, { name: 'trash', size: 16 }),
-          'Delete Category'
-        )
+        h(Button, {
+          variant: 'danger',
+          icon: 'trash',
+          onClick: onConfirm
+        }, 'Delete Category')
       )
     )
-  );
+  ));
 };
 
 export default DeleteCategoryModal;

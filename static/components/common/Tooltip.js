@@ -14,8 +14,9 @@ const { createElement: h, useState } = React;
  * @param {React.ReactNode} props.children - Element to wrap with tooltip
  * @param {string} props.content - Tooltip text content
  * @param {string} props.position - Tooltip position: 'top' | 'bottom' | 'left' | 'right'
+ * @param {boolean} props.showOnMobile - Whether to show tooltip on mobile (default: true)
  */
-const Tooltip = ({ children, content, position = 'top' }) => {
+const Tooltip = ({ children, content, position = 'top', showOnMobile = true }) => {
   const [isVisible, setIsVisible] = useState(false);
   const [isMobileActive, setIsMobileActive] = useState(false);
 
@@ -32,7 +33,7 @@ const Tooltip = ({ children, content, position = 'top' }) => {
   };
 
   const handleClick = (e) => {
-    // On mobile, toggle tooltip on click/tap
+    // On mobile, toggle tooltip on click/tap (only if showOnMobile is true)
     if ('ontouchstart' in window) {
       e.stopPropagation();
       setIsMobileActive(!isMobileActive);
@@ -74,10 +75,10 @@ const Tooltip = ({ children, content, position = 'top' }) => {
   },
     children,
     showTooltip && h('div', {
-      className: `absolute z-[9999] px-3 py-2 text-xs text-white bg-gray-900 dark:bg-gray-700 rounded-lg shadow-xl pointer-events-none ${positionClasses[position]}`,
+      className: `absolute z-[9999] px-3 py-2 text-xs text-white bg-gray-900 dark:bg-gray-700 rounded-lg shadow-xl pointer-events-none ${positionClasses[position]} ${showOnMobile ? '' : 'hidden sm:block'}`,
       style: {
+        width: 'max-content',
         maxWidth: '300px',
-        minWidth: '150px',
         whiteSpace: 'normal',
         wordWrap: 'break-word'
       }

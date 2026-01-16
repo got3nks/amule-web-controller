@@ -4,10 +4,56 @@
  */
 
 const BaseModule = require('../lib/BaseModule');
+const config = require('./config');
+const { getClientIP } = require('../lib/authUtils');
 
 class WebSocketHandlers extends BaseModule {
   constructor() {
     super();
+  }
+
+  /**
+   * Parse cookies from cookie header
+   * @param {string} cookieHeader - Cookie header string
+   * @returns {Object} Parsed cookies as key-value pairs
+   */
+  parseCookies(cookieHeader) {
+    if (!cookieHeader) return {};
+
+    return cookieHeader.split(';').reduce((acc, cookie) => {
+      const [key, value] = cookie.trim().split('=');
+      if (key && value) {
+        // URL decode the cookie value
+        acc[key] = decodeURIComponent(value);
+      }
+      return acc;
+    }, {});
+  }
+
+  /**
+   * Parse signed session cookie to extract session ID
+   * Express-session uses format: s:<sessionId>.<signature>
+   * @param {string} signedCookie - Signed cookie value
+   * @returns {string|null} Session ID or null if invalid
+   */
+  parseSignedCookie(signedCookie) {
+    if (!signedCookie) return null;
+
+    // Check if it starts with 's:' (signed cookie prefix)
+    if (!signedCookie.startsWith('s:')) {
+      return null;
+    }
+
+    // Remove 's:' prefix
+    const withoutPrefix = signedCookie.slice(2);
+
+    // Extract session ID (everything before the first '.')
+    const dotIndex = withoutPrefix.indexOf('.');
+    if (dotIndex === -1) {
+      return null;
+    }
+
+    return withoutPrefix.slice(0, dotIndex);
   }
 
   // Create client-specific logger
@@ -49,9 +95,52 @@ class WebSocketHandlers extends BaseModule {
 
   // Handle WebSocket connection
   handleConnection(ws, req) {
-    const username = req.headers['remote-user'] || 'unknown';
+    // Get username from configurable header (for proxy auth like Authelia)
+    // Falls back to 'remote-user' if not configured, then 'unknown'
+    const historyConfig = config.getConfig()?.history || {};
+    const usernameHeader = (historyConfig.usernameHeader || 'remote-user').toLowerCase();
+    const username = req.headers[usernameHeader] || 'unknown';
     const nickname = req.headers['remote-name'] || 'unknown';
-    const clientIp = req.socket.remoteAddress || req.connection.remoteAddress;
+    const clientIp = getClientIP(req);
+
+    // Check authentication if enabled
+    const authEnabled = config.getAuthEnabled();
+    if (authEnabled) {
+      // Parse cookies from WebSocket upgrade request
+      const cookieHeader = req.headers.cookie;
+      if (!cookieHeader) {
+        ws.close(1008, 'Authentication required');
+        this.log(`🚫 WebSocket rejected from ${clientIp}: No cookies`);
+        return;
+      }
+
+      // Parse session cookie
+      const cookies = this.parseCookies(cookieHeader);
+      const signedSessionCookie = cookies['amule.sid'];
+
+      if (!signedSessionCookie) {
+        ws.close(1008, 'Authentication required');
+        this.log(`🚫 WebSocket rejected from ${clientIp}: No session cookie`);
+        return;
+      }
+
+      // Parse signed cookie to extract session ID
+      const sessionId = this.parseSignedCookie(signedSessionCookie);
+
+      if (!sessionId) {
+        ws.close(1008, 'Authentication required');
+        this.log(`🚫 WebSocket rejected from ${clientIp}: Invalid session cookie format`);
+        return;
+      }
+
+      // Validate session
+      if (!this.authManager.validateSession(sessionId)) {
+        ws.close(1008, 'Authentication required');
+        this.log(`🚫 WebSocket rejected from ${clientIp}: Invalid or expired session`);
+        return;
+      }
+    }
+
     const geoData = this.geoIPManager.getGeoIPData(clientIp);
     const locationInfo = this.geoIPManager.formatLocationInfo(geoData);
 
@@ -84,6 +173,7 @@ class WebSocketHandlers extends BaseModule {
         case 'getPreviousSearchResults': await this.handleGetPreviousSearchResults(context); break;
         case 'getDownloads': await this.handleGetDownloads(context); break;
         case 'getShared': await this.handleGetShared(context); break;
+        case 'refreshSharedFiles': await this.handleRefreshSharedFiles(context); break;
         case 'getServersList': await this.handleGetServersList(context); break;
         case 'serverDoAction': await this.handleServerDoAction(data, context); break;
         case 'getStats': await this.handleGetStats(context); break;
@@ -162,6 +252,21 @@ class WebSocketHandlers extends BaseModule {
     } catch (err) {
       context.log('Get shared error:', err);
       context.send({ type: 'error', message: 'Failed to fetch shared files: ' + err.message });
+    }
+  }
+
+  async handleRefreshSharedFiles(context) {
+    try {
+      await context.amuleManager.getClient().refreshSharedFiles();
+      context.send({ type: 'shared-files-refreshed', message: 'Shared files reloaded successfully' });
+      context.log('Shared files refresh command sent to aMule');
+      // Automatically fetch updated list after refresh
+      setTimeout(async () => {
+        await this.handleGetShared(context);
+      }, 100);
+    } catch (err) {
+      context.log('Refresh shared files error:', err);
+      context.send({ type: 'error', message: 'Failed to refresh shared files: ' + err.message });
     }
   }
 
@@ -264,10 +369,9 @@ class WebSocketHandlers extends BaseModule {
   async handleGetUploads(context) {
     try {
       const uploadsData = await context.amuleManager.getClient().getUploadingQueue();
-      const uploads = (uploadsData?.EC_TAG_CLIENT) || [];
-      const enrichedUploads = this.geoIPManager.enrichUploadsWithGeo(uploads);
+      const enrichedUploads = this.normalizeAndEnrichUploads(uploadsData);
       context.send({ type: 'uploads-update', data: enrichedUploads });
-      context.log(`Uploads fetched: ${uploads.length} active uploads`);
+      context.log(`Uploads fetched: ${enrichedUploads.length} active uploads`);
     } catch (err) {
       context.log('Get uploads error:', err);
       context.send({ type: 'error', message: 'Failed to fetch uploads: ' + err.message });
@@ -277,7 +381,32 @@ class WebSocketHandlers extends BaseModule {
   async handleDownload(data, context) {
     try {
       const categoryId = data.categoryId || 0;
-      const success = await context.amuleManager.getClient().downloadSearchResult(data.fileHash, categoryId);
+      const client = context.amuleManager.getClient();
+      const username = context.clientInfo.username !== 'unknown' ? context.clientInfo.username : null;
+
+      // Set up file info callback to get filename/size from search results
+      client.setFileInfoCallback(async (hash) => {
+        try {
+          const searchResults = await client.getSearchResults();
+          const results = searchResults?.results || [];
+
+          const file = results.find(r => {
+            const resultHash = r.fileHash || r.raw?.EC_TAG_SEARCHFILE_HASH;
+            return resultHash?.toLowerCase() === hash.toLowerCase();
+          });
+
+          if (file) {
+            const filename = file.fileName || file.raw?.EC_TAG_PARTFILE_NAME || 'Unknown';
+            const size = file.fileSize || file.raw?.EC_TAG_PARTFILE_SIZE_FULL || null;
+            return { filename, size };
+          }
+        } catch (err) {
+          // Silently fail - filename will be 'Unknown'
+        }
+        return { filename: 'Unknown', size: null };
+      });
+
+      const success = await client.downloadSearchResult(data.fileHash, categoryId, username);
       context.send({ type: 'download-started', success, fileHash: data.fileHash });
       context.log(`Download ${success ? 'started' : 'failed'} for: ${data.fileHash} (category: ${categoryId})`);
     } catch (err) {
@@ -301,6 +430,7 @@ class WebSocketHandlers extends BaseModule {
     try {
       const links = data.links;
       const categoryId = data.categoryId || 0;
+      const username = context.clientInfo.username !== 'unknown' ? context.clientInfo.username : null;
 
       const cleaned = links
         .map(s => String(s).trim())
@@ -315,7 +445,7 @@ class WebSocketHandlers extends BaseModule {
       for (const link of cleaned) {
         context.log(`Adding ED2K link: ${link} (category: ${categoryId})`);
         // Process links sequentially using the existing queue to maintain order and avoid saturating aMule
-        const success = await context.amuleManager.getClient().addEd2kLink(link, categoryId);
+        const success = await context.amuleManager.getClient().addEd2kLink(link, categoryId, username);
         results.push({ link, success });
       }
 

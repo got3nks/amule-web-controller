@@ -3,190 +3,265 @@
  * Orchestrates all modules and starts server
  */
 
+// ============================================================================
+// DEPENDENCIES
+// ============================================================================
+
+// Express and HTTP
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
-const fs = require('fs');
 const bodyParser = require('body-parser');
 const cookieParser = require('cookie-parser');
+const session = require('express-session');
+const SQLiteStore = require('better-sqlite3-session-store')(session);
 
-// Import modules
+// Application modules
 const config = require('./modules/config');
-const configManager = require('./modules/configManager');
 const configAPI = require('./modules/configAPI');
+const authManager = require('./modules/authManager');
+const authAPI = require('./modules/authAPI');
 const amuleManager = require('./modules/amuleManager');
 const geoIPManager = require('./modules/geoIPManager');
 const arrManager = require('./modules/arrManager');
 const metricsAPI = require('./modules/metricsAPI');
+const historyAPI = require('./modules/historyAPI');
 const torznabAPI = require('./modules/torznabAPI');
 const qbittorrentAPI = require('./modules/qbittorrentAPI');
 const webSocketHandlers = require('./modules/webSocketHandlers');
 const autoRefreshManager = require('./modules/autoRefreshManager');
 const basicRoutes = require('./modules/basicRoutes');
+const versionAPI = require('./modules/versionAPI');
 
-// Import utilities
+// Middleware
+const requireAuth = require('./middleware/auth');
+
+// Utilities
 const MetricsDB = require('./database');
-const HashStore = require('./lib/hashStore');
+const HashStore = require('./lib/qbittorrent/hashStore');
+const DownloadHistory = require('./lib/downloadHistory');
+const HostnameResolver = require('./lib/hostnameResolver');
+const logger = require('./lib/logger');
 
-// Create logs directory if it doesn't exist
+// ============================================================================
+// LOGGING SETUP
+// ============================================================================
+
+// Initialize centralized logger
 const logDir = config.getLogDir();
-if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
+logger.init(logDir);
 
-// Create a write stream for the log file
-const logFile = require('path').join(logDir, 'server.log');
-const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+// Create bound log function for local use
+const log = logger.log.bind(logger);
 
-// Logging helper
-function log(...args) {
-  const timestamp = new Date().toISOString();
-  const message = args.map(String).join(' ');
-  logStream.write(`[${timestamp}] ${message}\n`);
-  console.log(`[${timestamp}]`, ...args);
-}
+// ============================================================================
+// EXPRESS & WEBSOCKET SETUP
+// ============================================================================
 
-// Initialize Express app
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Middleware
+// Express middleware
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// Initialize databases and stores
-const dbPath = config.getMetricsDbPath();
-const metricsDB = new MetricsDB(dbPath);
-log('📊 Metrics database initialized:', dbPath);
+// Session middleware (will be configured after config loading)
+let sessionMiddleware = null;
 
-const hashDbPath = config.getHashDbPath();
-const hashStore = new HashStore(hashDbPath);
-log('🔗 Hash store initialized:', hashDbPath);
-
-// Setup module dependencies
-configManager.setLogger(log);
-configAPI.setLogger(log);
-configAPI.setAmuleManager(amuleManager);
-configAPI.setConfigModule(config);
-amuleManager.setLogger(log);
-geoIPManager.setLogger(log);
-arrManager.setLogger(log);
-metricsAPI.setLogger(log);
-metricsAPI.setMetricsDB(metricsDB);
-torznabAPI.setLogger(log);
-torznabAPI.setAmuleManager(amuleManager);
-qbittorrentAPI.setLogger(log);
-qbittorrentAPI.setAmuleManager(amuleManager);
-qbittorrentAPI.setHashStore(hashStore);
-qbittorrentAPI.setConfigManager(configManager);
-webSocketHandlers.setLogger(log);
-autoRefreshManager.setLogger(log);
-basicRoutes.setLogger(log);
-
-// Create shared broadcast function
+// --- WebSocket broadcast setup ---
 const createBroadcaster = (wss) => (msg) => {
-  wss.clients.forEach(c => {
-    if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify(msg));
-  });
+    wss.clients.forEach(c => {
+        if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify(msg));
+    });
 };
 const broadcastFn = createBroadcaster(wss);
 
-// Setup cross-module dependencies
-arrManager.setAmuleManager(amuleManager);
-arrManager.setBroadcast(broadcastFn);
+// ============================================================================
+// DATABASE & STORE INITIALIZATION
+// ============================================================================
 
-webSocketHandlers.setAmuleManager(amuleManager);
-webSocketHandlers.setGeoIPManager(geoIPManager);
-webSocketHandlers.setBroadcast(broadcastFn);
+const dbPath = config.getMetricsDbPath();
+const metricsDB = new MetricsDB(dbPath);
 
-autoRefreshManager.setAmuleManager(amuleManager);
-autoRefreshManager.setGeoIPManager(geoIPManager);
-autoRefreshManager.setMetricsDB(metricsDB);
-autoRefreshManager.setBroadcast(broadcastFn);
-autoRefreshManager.setWebSocketServer(wss);
+const hashDbPath = config.getHashDbPath();
+const hashStore = new HashStore(hashDbPath);
 
-basicRoutes.setWebSocketServer(wss);
-basicRoutes.setGeoIPManager(geoIPManager);
-basicRoutes.setAmuleManager(amuleManager);
+// Download history database
+const historyDbPath = config.getHistoryDbPath();
+const downloadHistory = new DownloadHistory(historyDbPath);
 
-// Broadcast helper (for external use)
-function broadcast(msg) {
-  wss.clients.forEach(c => {
-    if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify(msg));
-  });
-}
+// Hostname resolver for peer IPs
+const hostnameResolver = new HostnameResolver({
+  ttl: 60 * 60 * 1000,        // 1 hour cache TTL
+  failedTtl: 10 * 60 * 1000,  // 10 minutes for failed lookups
+  maxCacheSize: 5000,         // Max cached entries
+  timeout: 3000               // 3 second DNS timeout
+});
 
-// Register routes
-basicRoutes.registerRoutes(app);
-configAPI.registerRoutes(app); // Configuration API (always available)
-metricsAPI.registerRoutes(app);
-torznabAPI.registerRoutes(app);
-qbittorrentAPI.registerRoutes(app);
+// ============================================================================
+// MODULE DEPENDENCY INJECTION
+// ============================================================================
 
-// WebSocket handler
+// Common dependencies object - modules pick what they need via inject()
+const deps = {
+  amuleManager,
+  authManager,
+  geoIPManager,
+  hostnameResolver,
+  metricsDB,
+  downloadHistoryDB: downloadHistory,
+  configManager: config,
+  hashStore,
+  wss,
+  broadcast: broadcastFn
+};
+
+// Inject dependencies into each module (each module only uses what it needs)
+metricsAPI.inject(deps);
+autoRefreshManager.inject(deps);
+historyAPI.inject(deps);
+amuleManager.inject(deps);
+qbittorrentAPI.inject(deps);
+authAPI.inject(deps);
+webSocketHandlers.inject(deps);
+configAPI.inject(deps);
+basicRoutes.inject(deps);
+arrManager.inject(deps);
+torznabAPI.inject(deps);
+
+// ============================================================================
+// ROUTE REGISTRATION (ORDER MATTERS!)
+// ============================================================================
+
+// --- Public routes (no authentication required) ---
+
+// Basic public routes (request logging, static files, /login page)
+basicRoutes.registerPublicRoutes(app);
+
+// Unprotected API routes (for external integrations)
+torznabAPI.registerRoutes(app);       // Torznab indexer API
+qbittorrentAPI.registerRoutes(app);   // qBittorrent API
+versionAPI.registerRoutes(app);       // Version info API (public)
+
+// --- Session middleware ---
+// Apply session middleware (needed for auth API and protected routes)
+app.use((req, res, next) => {
+  if (sessionMiddleware) {
+    sessionMiddleware(req, res, next);
+  } else {
+    // Session not yet initialized - allow through (first run mode)
+    next();
+  }
+});
+
+// --- Auth API routes ---
+// These routes need session but not requireAuth (handles their own auth)
+authAPI.registerRoutes(app);
+
+// --- Authentication middleware ---
+// Apply to all subsequent routes (protects web UI and internal APIs)
+app.use(requireAuth);
+
+// --- Protected routes ---
+basicRoutes.registerRoutes(app);    // Protected basic routes (home, health)
+configAPI.registerRoutes(app);      // Configuration management API
+metricsAPI.registerRoutes(app);     // Metrics API
+historyAPI.registerRoutes(app);     // Download history API
+versionAPI.registerProtectedRoutes(app); // Version seen tracking (protected)
+
+// ============================================================================
+// WEBSOCKET SETUP
+// ============================================================================
+
 wss.on('connection', (ws, req) => {
   webSocketHandlers.handleConnection(ws, req);
 });
 
-// Schedule daily cleanup at 3 AM
-function scheduleCleanup() {
-  const now = new Date();
-  const next3AM = new Date(now);
-  next3AM.setHours(config.CLEANUP_HOUR, 0, 0, 0);
-  if (next3AM <= now) {
-    next3AM.setDate(next3AM.getDate() + 1);
-  }
-  const msUntil3AM = next3AM - now;
+// ============================================================================
+// SERVICE INITIALIZATION
+// ============================================================================
 
-  setTimeout(() => {
-    const deleted = metricsDB.cleanupOldData(config.CLEANUP_DAYS);
-    log(`🧹 Cleaned up ${deleted} old metrics records (older than ${config.CLEANUP_DAYS} days)`);
-    scheduleCleanup(); // Schedule next cleanup
-  }, msUntil3AM);
+/**
+ * Initialize session middleware with authentication support
+ */
+function initializeSessionMiddleware() {
+  const sessionDB = authManager.getSessionDB();
+  const sessionSecret = config.getSessionSecret();
 
-  log(`⏰ Scheduled next cleanup at ${next3AM.toISOString()}`);
+  sessionMiddleware = session({
+    store: new SQLiteStore({
+      client: sessionDB,
+      expired: {
+        clear: true,
+        intervalMs: 900000 // 15 minutes
+      }
+    }),
+    secret: sessionSecret || 'fallback-secret-key',
+    name: 'amule.sid',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: false,     // Allow cookies over HTTP (for Docker/development)
+      sameSite: 'lax',   // Less restrictive than 'strict', but still secure
+      maxAge: null       // Set dynamically in login based on rememberMe
+    }
+  });
+
+  log('🔐 Session middleware initialized');
 }
 
-scheduleCleanup();
-
-// Initialize all application services
+/**
+ * Initialize all application services
+ * Called after first-run configuration or on normal startup
+ */
 async function initializeServices() {
   log('🚀 Initializing services...');
 
-  // Initialize GeoIP
+  // Initialize session and authentication
+  initializeSessionMiddleware();
+  authManager.start();
+
+  // Initialize GeoIP database
   await geoIPManager.initGeoIP();
 
-  // Start watching GeoIP files after a short delay
+  // Start watching GeoIP files after a short delay (prevents initial reload)
   setTimeout(() => {
     geoIPManager.watchGeoIPFiles();
   }, 5000);
 
-  // Start aMule connection
-  await amuleManager.startConnection();
+  // Start aMule connection with auto-reconnect (non-blocking)
+  // Connection happens in background - server starts immediately
+  amuleManager.startConnection();
 
-  // Start auto-refresh
+  // Start auto-refresh loop for stats/downloads/uploads
   autoRefreshManager.start();
 
-  // Schedule automatic searches
+  // Schedule automatic searches for Sonarr/Radarr
   arrManager.scheduleAutomaticSearches();
 
   log('✅ All services initialized successfully');
 }
 
-// Initialize and start services
+// ============================================================================
+// SERVER STARTUP
+// ============================================================================
+
+/**
+ * Initialize configuration and start server
+ */
 async function startServer() {
-  // Step 1: Load configuration from ConfigManager
+  // Load configuration from file or environment variables
   log('⚙️  Loading configuration...');
-  await configManager.loadConfig();
+  await config.loadConfig();
 
-  // Update config module with loaded configuration
-  config.updateFromConfigManager(configManager);
-
-  // Pass initializeServices to configAPI so it can initialize services after first-run setup
+  // Pass initializeServices to configAPI so it can initialize after first-run setup
   configAPI.setInitializeServices(initializeServices);
 
-  // Step 2: Check if this is the first run
-  const isFirstRun = await configManager.isFirstRun();
+  // Check if this is the first run (no config file exists)
+  const isFirstRun = await config.isFirstRun();
 
   // Track connections for graceful shutdown
   const connections = new Set();
@@ -196,24 +271,33 @@ async function startServer() {
   });
 
   if (isFirstRun) {
+    // FIRST RUN MODE
     log('🎯 First run detected - setup wizard required');
     log('⚠️  Services will NOT be initialized until configuration is complete');
     log('📝 Please access the web interface to complete the setup');
 
-    // In first-run mode, only start the HTTP server and WebSocket
-    // Don't initialize aMule, GeoIP, or Arr services
+    // If auth is enabled via env vars, we need session middleware for login
+    if (config.getAuthEnabled()) {
+      log('🔐 Auth enabled via environment - initializing session middleware');
+      initializeSessionMiddleware();
+      authManager.start();
+    }
+
+    // In first-run mode, only start HTTP server and WebSocket
+    // Don't initialize aMule, GeoIP, or Arr services until configured
     server.listen(config.PORT, () => {
       log(`🚀 aMule Web Controller running on http://localhost:${config.PORT}`);
       log(`📊 WebSocket server ready`);
       log(`⚙️  SETUP MODE - Complete configuration via web interface`);
     });
   } else {
+    // NORMAL STARTUP
     log('✅ Configuration loaded successfully');
 
-    // Normal startup flow - initialize all services
+    // Initialize all services
     await initializeServices();
 
-    // Start server
+    // Start HTTP server
     server.listen(config.PORT, () => {
       log(`🚀 aMule Web Controller running on http://localhost:${config.PORT}`);
       log(`📊 WebSocket server ready`);
@@ -221,38 +305,58 @@ async function startServer() {
     });
   }
 
-  // Graceful shutdown
+  // ============================================================================
+  // GRACEFUL SHUTDOWN
+  // ============================================================================
+
   ['SIGTERM', 'SIGINT'].forEach(signal => {
     process.on(signal, () => {
-      log(`${signal} received, closing server...`);
+      log(`${signal} received, shutting down gracefully...`);
 
+      // Destroy all active connections
       connections.forEach((conn) => conn.destroy());
 
+      // Close HTTP server
       server.close(() => {
-        log('Server closed');
-        
-        // Shutdown modules
+        log('HTTP server closed');
+
+        // Stop background tasks
+        authManager.stop();
         autoRefreshManager.stop();
-        amuleManager.shutdown();
-        
-        // Close databases
-        metricsDB.close();
-        log('Database closed');
-        
-        hashStore.close();
-        log('Hash store closed');
-        
-        // Close GeoIP
-        geoIPManager.shutdown().then(() => {
-          log('GeoIP closed');
-          process.exit(0);
+
+        // Shutdown aMule connection
+        amuleManager.shutdown().then(() => {
+          log('aMule connection closed');
+
+          // Close databases
+          metricsDB.close();
+          log('Metrics database closed');
+
+          hashStore.close();
+          log('Hash store closed');
+
+          downloadHistory.close();
+          log('Download history closed');
+
+          // Close GeoIP
+          geoIPManager.shutdown().then(() => {
+            log('GeoIP manager closed');
+            log('✅ Graceful shutdown complete');
+
+            // Close logger last
+            logger.close();
+            process.exit(0);
+          });
         });
       });
     });
   });
 }
 
-// Start server
+// ============================================================================
+// ENTRY POINT
+// ============================================================================
+
 startServer().catch(err => {
   log('❌ Failed to start server:', err);
   process.exit(1);

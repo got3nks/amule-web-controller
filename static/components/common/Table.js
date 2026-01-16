@@ -5,10 +5,8 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import Icon from './Icon.js';
 import { sortFiles, calculatePagination } from '../../utils/index.js';
 import { PaginationControls } from './PaginationControls.js';
-import { SortControls } from './SortControls.js';
 
 const { createElement: h } = React;
 
@@ -23,8 +21,15 @@ const { createElement: h } = React;
  * @param {number} page - Current page number
  * @param {function} onPageChange - Page change handler
  * @param {number} pageSize - Items per page
- * @param {React.ReactNode|null} mobileControls - Additional mobile controls to display
- * @param {boolean} mobileControlsSameRow - Whether to show mobile controls on same row as sort (default: false)
+ * @param {function} onPageSizeChange - Page size change handler (optional, enables page size selector)
+ * @param {function|null} getRowClassName - Function to get additional className for each row (receives item, idx)
+ * @param {function|null} onRowContextMenu - Handler for right-click context menu (receives event, item)
+ * @param {React.ReactNode|null} beforePagination - Content to render between table and pagination
+ * @param {boolean} serverSide - When true, skip internal sorting/pagination (data comes pre-sorted/paginated)
+ * @param {number|null} totalCount - Total item count for server-side pagination
+ * @param {function|null} getRowKey - Function to get unique key for each row (receives item, idx)
+ * @param {string} breakpoint - Breakpoint for mobile/desktop switch ('sm', 'md', 'lg', 'xl'), default 'md'
+ * @param {function|null} mobileCardRender - Custom mobile card renderer (receives item, idx), overrides default card view
  */
 const Table = ({
   data,
@@ -36,8 +41,15 @@ const Table = ({
   page,
   onPageChange,
   pageSize,
-  mobileControls = null,
-  mobileControlsSameRow = false
+  onPageSizeChange = null,
+  getRowClassName = null,
+  onRowContextMenu = null,
+  beforePagination = null,
+  serverSide = false,
+  totalCount = null,
+  getRowKey = null,
+  breakpoint = 'md',
+  mobileCardRender = null
 }) => {
   // Safety check: ensure data is an array
   if (!Array.isArray(data)) {
@@ -47,53 +59,50 @@ const Table = ({
     );
   }
 
-  const { pagesCount, paginatedData } = calculatePagination(
-    sortFiles(data, currentSortBy, currentSortDirection),
-    page,
-    pageSize
-  );
+  // Server-side mode: data comes pre-sorted and pre-paginated
+  // Client-side mode: sort and paginate locally
+  let pagesCount, paginatedData;
+  if (serverSide) {
+    // Data is already sorted and paginated by server
+    paginatedData = data;
+    pagesCount = totalCount != null ? Math.ceil(totalCount / pageSize) : 1;
+  } else {
+    // Client-side sorting and pagination
+    const result = calculatePagination(
+      sortFiles(data, currentSortBy, currentSortDirection),
+      page,
+      pageSize
+    );
+    pagesCount = result.pagesCount;
+    paginatedData = result.paginatedData;
+  }
+
+  // Helper to get unique row key
+  const getKey = (item, idx) => {
+    if (getRowKey) return getRowKey(item, idx);
+    return item.fileHash || item.hash || item.EC_TAG_CLIENT_HASH || item._value || idx;
+  };
+
+  // Breakpoint-aware class names
+  const mobileClass = `${breakpoint}:hidden`;
+  const desktopClass = `hidden ${breakpoint}:block`;
 
   return h('div', { className: 'space-y-2' },
 
-    // Mobile sort control
-    mobileControlsSameRow ?
-      // Same row layout (for Search pages)
-      h('div', { className: 'md:hidden flex flex-wrap items-center gap-2' },
-        h(SortControls, {
-          columns,
-          sortBy: currentSortBy,
-          sortDirection: currentSortDirection,
-          onSortChange,
-          showLabel: true,
-          fullWidth: false
-        }),
-        mobileControls && h('div', { className: 'flex items-center gap-2' }, mobileControls)
-      ) :
-      // Separate rows layout (for Downloads page)
-      h('div', { className: 'md:hidden' },
-        h('div', { className: 'flex flex-wrap items-center gap-2 mb-2' },
-          h(SortControls, {
-            columns,
-            sortBy: currentSortBy,
-            sortDirection: currentSortDirection,
-            onSortChange,
-            showLabel: true,
-            fullWidth: true
-          })
-        ),
-        // Additional mobile controls (like Download to) on second row
-        mobileControls && h('div', { className: 'flex items-center gap-2' }, mobileControls)
-      ),
-
     // Mobile card view
-    h('div', { className: 'block md:hidden space-y-2' },
+    h('div', { className: `block ${mobileClass} space-y-2` },
       paginatedData.map((item, idx) => {
-        // Title based on item type
-        const title = item.EC_TAG_SERVER_NAME || item.fileName || item.EC_TAG_PARTFILE_NAME || 'N/A';
+        // Use custom mobile card renderer if provided
+        if (mobileCardRender) {
+          return h('div', { key: getKey(item, idx) }, mobileCardRender(item, idx));
+        }
 
+        // Default mobile card rendering
+        const title = item.EC_TAG_SERVER_NAME || item.fileName || item.EC_TAG_PARTFILE_NAME || 'N/A';
+        const extraClassName = getRowClassName ? getRowClassName(item, idx) : '';
         return h('div', {
-          key: item.fileHash || item.EC_TAG_CLIENT_HASH || item._value || idx,
-          className: `p-2 sm:p-3 rounded-lg ${idx % 2 === 0 ? 'bg-gray-50 dark:bg-gray-700/50' : 'bg-white dark:bg-gray-800/50'} border border-gray-200 dark:border-gray-700`
+          key: getKey(item, idx),
+          className: `p-2 sm:p-3 rounded-lg ${idx % 2 === 0 ? 'bg-gray-50 dark:bg-gray-700/50' : 'bg-white dark:bg-gray-800/50'} border border-gray-200 dark:border-gray-700 ${extraClassName}`
         },
           h('div', {
             className: 'font-medium text-xs sm:text-sm mb-1.5 break-all text-gray-900 dark:text-gray-100'
@@ -105,7 +114,7 @@ const Table = ({
                 key: cidx,
                 className: 'text-gray-700 dark:text-gray-300'
               },
-                col.key != 'progress' && h('span', { className: 'font-medium text-gray-600 dark:text-gray-400' }, col.label + ': '),
+                col.key !== 'progress' && h('span', { className: 'font-medium text-gray-600 dark:text-gray-400' }, col.label + ': '),
                 h('span', { className: 'text-gray-900 dark:text-gray-100' },
                   col.render ? col.render(item) : item[col.key]
                 )
@@ -120,7 +129,7 @@ const Table = ({
     ),
 
     // Desktop table view
-    h('div', { className: 'hidden md:block overflow-x-auto' },
+    h('div', { className: `${desktopClass} overflow-x-auto` },
       h('table', { className: 'w-full' },
         h('thead', null,
           h('tr', { className: 'border-b-2 border-gray-300 dark:border-gray-600' },
@@ -153,13 +162,16 @@ const Table = ({
           )
         ),
         h('tbody', null,
-          paginatedData.map((item, idx) =>
-            h('tr', {
-              key: item.fileHash || item.EC_TAG_CLIENT_HASH || idx,
+          paginatedData.map((item, idx) => {
+            const extraClassName = getRowClassName ? getRowClassName(item, idx) : '';
+            return h('tr', {
+              key: getKey(item, idx),
               className: `
                 ${idx % 2 === 0 ? 'bg-gray-50 dark:bg-gray-800' : 'bg-white dark:bg-gray-900'}
                 hover:bg-indigo-100 dark:hover:bg-indigo-700 transition-colors duration-200
-              `
+                ${extraClassName}
+              `,
+              onContextMenu: onRowContextMenu ? (e) => onRowContextMenu(e, item) : undefined
             },
               columns.map((col, cidx) =>
                 h('td', {
@@ -173,17 +185,22 @@ const Table = ({
               actions && h('td', { className: 'p-2' },
                 h('div', { className: 'flex gap-2' }, actions(item))
               )
-            )
-          )
+            );
+          })
         )
       )
     ),
+
+    // Before pagination content (e.g., bulk action footer)
+    beforePagination,
 
     // Enhanced Pagination
     h(PaginationControls, {
       page,
       onPageChange,
       pagesCount,
+      pageSize,
+      onPageSizeChange,
       options: { showFirstLast: true, showPageSelector: true }
     })
   );

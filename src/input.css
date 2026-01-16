@@ -2,6 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
+/* App layout */
+html, body {
+  height: 100%;
+  min-height: 100vh;
+  min-height: 100dvh; /* Dynamic viewport height for mobile browsers */
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh; /* Dynamic viewport height for mobile browsers */
+}
+
 /* Custom styles */
 .loader {
   border: 3px solid #f3f3f3;
@@ -15,4 +29,126 @@
 @keyframes spin {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
+}
+
+/* Context menu animation */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.15s ease-out forwards;
+}
+
+/* Safe area for iPhone notch/home indicator */
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+/* Font size system */
+:root {
+  --font-size-base: 14px;
+  --font-size-scale: 1;
+  --font-size-form-scale: 1;
+}
+
+/* Base font size classes */
+body.text-size-small {
+  font-size: 13px;
+}
+
+body.text-size-medium {
+  font-size: 14px;
+}
+
+body.text-size-large {
+  font-size: 16px;
+}
+
+/* Scale form elements based on font size setting */
+body.text-size-small input,
+body.text-size-small select,
+body.text-size-small textarea,
+body.text-size-small button {
+  font-size: 0.9em;
+}
+
+body.text-size-large input,
+body.text-size-large select,
+body.text-size-large textarea,
+body.text-size-large button {
+  font-size: 1.05em;
+}
+
+/* Prevent iOS auto-zoom on input focus - minimum 16px on mobile regardless of font size setting */
+@media (max-width: 639px) {
+  input, textarea, select {
+    font-size: 16px !important;
+  }
+}
+
+/* Scale specific UI elements (including responsive variants) */
+body.text-size-small .text-xs,
+body.text-size-small .sm\:text-xs,
+body.text-size-small .md\:text-xs,
+body.text-size-small .lg\:text-xs { font-size: 0.6rem; }
+
+body.text-size-small .text-sm,
+body.text-size-small .sm\:text-sm,
+body.text-size-small .md\:text-sm,
+body.text-size-small .lg\:text-sm { font-size: 0.7rem; }
+
+body.text-size-small .text-base,
+body.text-size-small .sm\:text-base,
+body.text-size-small .md\:text-base,
+body.text-size-small .lg\:text-base { font-size: 0.8rem; }
+
+body.text-size-small .text-lg,
+body.text-size-small .sm\:text-lg,
+body.text-size-small .md\:text-lg,
+body.text-size-small .lg\:text-lg { font-size: 0.9rem; }
+
+body.text-size-small .text-xl,
+body.text-size-small .sm\:text-xl,
+body.text-size-small .md\:text-xl,
+body.text-size-small .lg\:text-xl { font-size: 1rem; }
+
+body.text-size-large .text-xs,
+body.text-size-large .sm\:text-xs,
+body.text-size-large .md\:text-xs,
+body.text-size-large .lg\:text-xs { font-size: 0.8rem; }
+
+body.text-size-large .text-sm,
+body.text-size-large .sm\:text-sm,
+body.text-size-large .md\:text-sm,
+body.text-size-large .lg\:text-sm { font-size: 0.95rem; }
+
+body.text-size-large .text-base,
+body.text-size-large .sm\:text-base,
+body.text-size-large .md\:text-base,
+body.text-size-large .lg\:text-base { font-size: 1.05rem; }
+
+body.text-size-large .text-lg,
+body.text-size-large .sm\:text-lg,
+body.text-size-large .md\:text-lg,
+body.text-size-large .lg\:text-lg { font-size: 1.25rem; }
+
+body.text-size-large .text-xl,
+body.text-size-large .sm\:text-xl,
+body.text-size-large .md\:text-xl,
+body.text-size-large .lg\:text-xl { font-size: 1.4rem; }
+
+/* Monospace log text - scales with font size setting */
+.log-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  word-break: break-word;
 }

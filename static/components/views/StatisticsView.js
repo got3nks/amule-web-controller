@@ -2,52 +2,112 @@
  * StatisticsView Component
  *
  * Displays historical statistics with charts and statistics tree
+ * Uses contexts directly for all data and actions
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { StatsTree, SpeedChart, TransferChart, Icon } from '../common/index.js';
+import { StatsTree, Icon, Button } from '../common/index.js';
 import { formatBytes, formatSpeed } from '../../utils/index.js';
+import { useAppState } from '../../contexts/AppStateContext.js';
+import { useStaticData } from '../../contexts/StaticDataContext.js';
+import { useDataFetch } from '../../contexts/DataFetchContext.js';
+import { useTheme } from '../../contexts/ThemeContext.js';
 
-const { createElement: h } = React;
+const { createElement: h, useCallback, useEffect, lazy, Suspense } = React;
+
+// Lazy load chart components for better initial page load performance
+const SpeedChart = lazy(() => import('../common/SpeedChart.js'));
+const TransferChart = lazy(() => import('../common/TransferChart.js'));
 
 /**
- * Statistics view component
- * @param {boolean} loading - Loading state
- * @param {boolean} loadingHistory - Loading history state
- * @param {string} historicalRange - Current historical range (24h/7d/30d)
- * @param {function} onFetchHistoricalData - Fetch historical data handler (range)
- * @param {object} historicalStats - Historical statistics summary
- * @param {object} historicalData - Historical data for charts
- * @param {object} speedData - Speed history data
- * @param {object} statsTree - Statistics tree data
- * @param {string} theme - Current theme (dark/light)
+ * Statistics view component - now uses contexts directly
  */
-const StatisticsView = ({
-  loading,
-  loadingHistory,
-  historicalRange,
-  onFetchHistoricalData,
-  historicalStats,
-  historicalData,
-  speedData,
-  statsTree,
-  theme
-}) => {
-  return h('div', { className: 'space-y-3 sm:space-y-4' },
-    // Historical Statistics Header
-    h('div', { className: 'flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3' },
+const StatisticsView = () => {
+  // Get data from contexts
+  const { appStatsState, setAppStatsState, setAppError } = useAppState();
+  const { dataStatsTree } = useStaticData();
+  const { fetchStatsTree } = useDataFetch();
+  const { theme } = useTheme();
+
+  // Defer chart rendering until after initial paint
+  const [shouldRenderCharts, setShouldRenderCharts] = React.useState(false);
+  React.useEffect(() => {
+    // Use requestIdleCallback for better performance, fallback to setTimeout
+    if (typeof requestIdleCallback !== 'undefined') {
+      requestIdleCallback(() => setShouldRenderCharts(true));
+    } else {
+      setTimeout(() => setShouldRenderCharts(true), 0);
+    }
+  }, []);
+
+  // Aliases for readability
+  const loadingHistory = appStatsState.loadingHistory;
+  const historicalRange = appStatsState.historicalRange;
+  const historicalStats = appStatsState.historicalStats;
+  const historicalData = appStatsState.historicalData;
+  const speedData = appStatsState.speedData;
+  const statsTree = dataStatsTree;
+
+  // Fetch historical data for statistics
+  const fetchHistoricalData = useCallback(async (range, showLoading = true) => {
+    if (showLoading) setAppStatsState(prev => ({ ...prev, loadingHistory: true }));
+    try {
+      const [speedRes, historyRes, statsRes] = await Promise.all([
+        fetch(`/api/metrics/speed-history?range=${range}`),
+        fetch(`/api/metrics/history?range=${range}`),
+        fetch(`/api/metrics/stats?range=${range}`)
+      ]);
+
+      const speedHistoryData = await speedRes.json();
+      const historyData = await historyRes.json();
+      const statsData = await statsRes.json();
+
+      setAppStatsState({
+        speedData: speedHistoryData,
+        historicalData: historyData,
+        historicalStats: statsData,
+        historicalRange: range,
+        loadingHistory: false
+      });
+    } catch (err) {
+      console.error('Error fetching historical data:', err);
+      setAppError('Failed to load historical data');
+      if (showLoading) setAppStatsState(prev => ({ ...prev, loadingHistory: false }));
+    }
+  }, [setAppStatsState, setAppError]);
+
+  // Local handlers
+  const onFetchHistoricalData = fetchHistoricalData;
+
+  // Fetch initial data on mount
+  useEffect(() => {
+    fetchStatsTree();
+    fetchHistoricalData(historicalRange, true);
+
+    // Set up auto-refresh intervals
+    const STATISTICS_REFRESH_INTERVAL = 30000; // 30 seconds
+    const statsTreeInterval = setInterval(fetchStatsTree, STATISTICS_REFRESH_INTERVAL);
+    const historicalDataInterval = setInterval(() => {
+      fetchHistoricalData(historicalRange, false);
+    }, STATISTICS_REFRESH_INTERVAL);
+
+    return () => {
+      clearInterval(statsTreeInterval);
+      clearInterval(historicalDataInterval);
+    };
+  }, [fetchStatsTree, fetchHistoricalData, historicalRange]);
+
+  return h('div', { className: 'space-y-2 sm:space-y-3' },
+    // Header
+    h('div', { className: 'flex justify-between items-center gap-2 pl-1 lg:pl-2' },
       h('h2', { className: 'text-base sm:text-lg font-bold text-gray-800 dark:text-gray-100' }, 'Historical Statistics'),
       h('div', { className: 'flex gap-2' },
         ['24h', '7d', '30d'].map(range =>
-          h('button', {
+          h(Button, {
             key: range,
+            variant: historicalRange === range ? 'primary' : 'secondary',
             onClick: () => onFetchHistoricalData(range, false),
-            disabled: loadingHistory,
-            className: `px-3 py-1.5 rounded transition-all text-sm ${
-              historicalRange === range
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
-            } disabled:opacity-50`
+            disabled: loadingHistory
           }, range.toUpperCase())
         )
       )
@@ -117,7 +177,21 @@ const StatisticsView = ({
     !loadingHistory && h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700' },
       h('h3', { className: 'text-sm font-semibold mb-3 text-gray-700 dark:text-gray-300' }, 'Speed Over Time'),
       h('div', { className: 'w-full', style: { height: '300px' } },
-        h(SpeedChart, { speedData, theme, historicalRange })
+        shouldRenderCharts
+          ? h(Suspense, {
+              fallback: h('div', {
+                className: 'h-full flex items-center justify-center'
+              },
+                h('div', { className: 'loader' })
+              )
+            },
+              h(SpeedChart, { speedData, theme, historicalRange })
+            )
+          : h('div', {
+              className: 'h-full flex items-center justify-center'
+            },
+              h('div', { className: 'loader' })
+            )
       )
     ),
 
@@ -125,7 +199,21 @@ const StatisticsView = ({
     !loadingHistory && h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700' },
       h('h3', { className: 'text-sm font-semibold mb-3 text-gray-700 dark:text-gray-300' }, 'Data Transferred Over Time'),
       h('div', { className: 'w-full', style: { height: '300px' } },
-        h(TransferChart, { historicalData, theme, historicalRange })
+        shouldRenderCharts
+          ? h(Suspense, {
+              fallback: h('div', {
+                className: 'h-full flex items-center justify-center'
+              },
+                h('div', { className: 'loader' })
+              )
+            },
+              h(TransferChart, { historicalData, theme, historicalRange })
+            )
+          : h('div', {
+              className: 'h-full flex items-center justify-center'
+            },
+              h('div', { className: 'loader' })
+            )
       )
     ),
 
@@ -136,7 +224,7 @@ const StatisticsView = ({
     ),
 
     // Statistics Tree (original content) - auto-refreshes every 5 seconds
-    h(StatsTree, { statsTree, loading })
+    h(StatsTree, { statsTree, loading: statsTree === null })
   );
 };
 

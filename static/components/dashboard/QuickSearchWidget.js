@@ -5,7 +5,7 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { Icon } from '../common/index.js';
+import { Icon, Button, Input } from '../common/index.js';
 
 const { createElement: h } = React;
 
@@ -17,6 +17,7 @@ const { createElement: h } = React;
  * @param {function} onSearchQueryChange - Search query change handler
  * @param {function} onSearch - Search submit handler
  * @param {boolean} searchLocked - Whether search is in progress
+ * @param {boolean} noBorder - Whether to hide the outer border/padding (default: false)
  */
 const QuickSearchWidget = ({
   searchType,
@@ -24,7 +25,8 @@ const QuickSearchWidget = ({
   searchQuery,
   onSearchQueryChange,
   onSearch,
-  searchLocked
+  searchLocked,
+  noBorder = false
 }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -40,54 +42,53 @@ const QuickSearchWidget = ({
   ];
 
   return h('div', {
-    className: 'bg-white dark:bg-gray-800 rounded-lg p-3 border border-gray-200 dark:border-gray-700'
+    className: noBorder ? '' : 'bg-white dark:bg-gray-800 rounded-lg p-3 border border-gray-200 dark:border-gray-700'
   },
-    h('h3', {
-      className: 'text-sm font-semibold mb-2 text-gray-700 dark:text-gray-300'
-    }, 'Quick Search'),
     h('form', {
       onSubmit: handleSubmit,
-      className: 'flex flex-col sm:flex-row gap-2'
+      className: 'flex flex-col gap-2'
     },
-      // Search type selector
+      // Row 1: Search type selector (full width)
       h('div', {
         className: 'flex gap-1'
       },
         ...searchTypes.map(type =>
-          h('button', {
+          h(Button, {
             key: type.value,
             type: 'button',
+            variant: searchType === type.value ? 'primary' : 'secondary',
             onClick: () => onSearchTypeChange(type.value),
             disabled: searchLocked,
-            className: `px-3 py-2 rounded-lg transition-colors text-xs font-medium ${
-              searchType === type.value
-                ? 'bg-blue-600 dark:bg-blue-500 text-white'
-                : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
-            } disabled:opacity-50 disabled:cursor-not-allowed`
+            className: 'flex-1 justify-center'
           },
             `${type.emoji} ${type.label}`
           )
         )
       ),
 
-      // Search input
-      h('input', {
-        type: 'text',
-        value: searchQuery,
-        onChange: (e) => onSearchQueryChange(e.target.value),
-        placeholder: 'Enter search query...',
-        disabled: searchLocked,
-        className: 'flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed'
-      }),
+      // Row 2: Search input + button
+      h('div', { className: 'flex gap-2' },
+        h(Input, {
+          type: 'text',
+          value: searchQuery,
+          onChange: (e) => onSearchQueryChange(e.target.value),
+          placeholder: 'Enter search query...',
+          disabled: searchLocked,
+          className: 'flex-1 min-w-0'
+        }),
 
-      // Search button
-      h('button', {
-        type: 'submit',
-        disabled: searchLocked || !searchQuery.trim(),
-        className: 'px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 text-sm font-medium whitespace-nowrap'
-      },
-        h(Icon, { name: 'search', size: 16 }),
-        h('span', {}, searchLocked ? 'Searching...' : 'Search')
+        // Search button
+        h(Button, {
+          type: 'submit',
+          variant: 'primary',
+          disabled: searchLocked || !searchQuery.trim(),
+          className: 'whitespace-nowrap'
+        },
+          searchLocked
+            ? h('div', { className: 'loader' })
+            : h(Icon, { name: 'search', size: 16 }),
+          h('span', {}, searchLocked ? 'Searching...' : 'Search')
+        )
       )
     )
   );

@@ -10,4 +10,5 @@ export { default as TestButton } from './TestButton.js';
 export { default as TestResultIndicator } from './TestResultIndicator.js';
 export { default as PasswordField } from './PasswordField.js';
 export { default as EnableToggle } from './EnableToggle.js';
-export { default as DockerWarning } from './DockerWarning.js';
+export { default as TestSummary } from './TestSummary.js';
+export { default as IntegrationConfigInfo } from './IntegrationConfigInfo.js';

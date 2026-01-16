@@ -6,6 +6,7 @@
 
 import React from 'https://esm.sh/react@18.2.0';
 import Icon from './Icon.js';
+import { Button } from './FormControls.js';
 import { formatStatsValue } from '../../utils/index.js';
 
 const { createElement: h, useState, useEffect, useRef } = React;
@@ -144,16 +145,19 @@ const StatsTree = ({ statsTree, loading }) => {
   };
 
   return h('div', { className: 'space-y-3' },
+    // Header
     h('div', { className: 'flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3' },
       h('h2', { className: 'text-base sm:text-lg font-bold text-gray-800 dark:text-gray-100' }, 'Statistics Tree'),
       h('div', { className: 'flex gap-2 w-full sm:w-auto' },
-        h('button', {
+        h(Button, {
+          variant: 'secondary',
           onClick: expandAll,
-          className: 'flex-1 sm:flex-none px-3 py-1.5 bg-gray-600 text-white rounded hover:bg-gray-700 transition-all active:scale-95 text-sm'
+          className: 'flex-1 sm:flex-none'
         }, 'Expand All'),
-        h('button', {
+        h(Button, {
+          variant: 'secondary',
           onClick: collapseAll,
-          className: 'flex-1 sm:flex-none px-3 py-1.5 bg-gray-600 text-white rounded hover:bg-gray-700 transition-all active:scale-95 text-sm'
+          className: 'flex-1 sm:flex-none'
         }, 'Collapse All')
       )
     ),
@@ -168,4 +172,5 @@ const StatsTree = ({ statsTree, loading }) => {
   );
 };
 
-export default StatsTree;
+// Memoize to prevent unnecessary re-renders
+export default React.memo(StatsTree);

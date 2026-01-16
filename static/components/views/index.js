@@ -16,3 +16,5 @@ export { default as DownloadsView } from './DownloadsView.js';
 export { default as StatisticsView } from './StatisticsView.js';
 export { default as SettingsView } from './SettingsView.js';
 export { default as SetupWizardView } from './SetupWizardView.js';
+export { default as LoginView } from './LoginView.js';
+export { default as HistoryView } from './HistoryView.js';

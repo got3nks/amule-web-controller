@@ -133,11 +133,10 @@ export const useConfig = () => {
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+        throw new Error(errorData.message || errorData.error || `HTTP ${response.status}: ${response.statusText}`);
       }
 
-      const data = await response.json();
-      return data;
+      return await response.json();
     } catch (err) {
       setError(err.message);
       throw err;

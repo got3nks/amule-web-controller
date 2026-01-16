@@ -4,15 +4,17 @@
  * Manages modal state with open/close functionality
  */
 
-import { useState, useCallback } from 'https://esm.sh/react@18.2.0';
+import { useState, useCallback, useMemo } from 'https://esm.sh/react@18.2.0';
 
 /**
  * Custom hook for modal state management
  * @param {object} initialState - Initial state for the modal (default fields)
  * @returns {object} { modal, open, close, update }
  */
-export const useModal = (initialState = {}) => {
-  const defaultState = { show: false, ...initialState };
+export const useModal = (initialState) => {
+  // Memoize the default state to prevent new references on every render
+  const defaultState = useMemo(() => ({ show: false, ...initialState }), []);
+
   const [modal, setModal] = useState(defaultState);
 
   /**
@@ -20,8 +22,8 @@ export const useModal = (initialState = {}) => {
    * @param {object} data - Data to merge into modal state
    */
   const open = useCallback((data = {}) => {
-    setModal({ show: true, ...initialState, ...data });
-  }, [initialState]);
+    setModal(prev => ({ ...defaultState, show: true, ...data }));
+  }, [defaultState]);
 
   /**
    * Close the modal and reset to initial state

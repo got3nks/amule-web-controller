@@ -53,20 +53,6 @@ export const formatStatsValue = (value) => {
 };
 
 /**
- * Calculate dynamic font size based on filename length for mobile view
- * @param {string} filename - File name
- * @returns {string} Font size in pixels (e.g., "14px")
- */
-export const getDynamicFontSize = (filename) => {
-  if(!filename) return '14px';
-  const length = filename.length;
-  if (length < 70) return '14px';      // text-sm - short filenames
-  if (length < 100) return '13px';     // slightly smaller - medium filenames
-  if (length < 130) return '12px';     // smaller - long filenames
-  return '11px';                       // smallest - very long filenames
-};
-
-/**
  * Format timestamp to human-readable date and time
  * @param {number} timestamp - Unix timestamp in milliseconds
  * @returns {string} Formatted date and time string
@@ -128,4 +114,20 @@ export const getTimeBasedColor = (timestamp) => {
   } else {
     return 'text-red-600 dark:text-red-400';
   }
+};
+
+/**
+ * Convert IP address from integer to dotted quad string
+ * aMule sends IPs as little-endian 32-bit integers
+ * @param {number} ip - IP as integer
+ * @returns {string} Formatted IP address (e.g., "192.168.1.1") or "N/A" if invalid
+ */
+export const ipToString = (ip) => {
+  if (!ip) return 'N/A';
+  return [
+    ip & 0xFF,
+    (ip >>> 8) & 0xFF,
+    (ip >>> 16) & 0xFF,
+    (ip >>> 24) & 0xFF
+  ].join('.');
 };

@@ -6,8 +6,9 @@
 
 import React from 'https://esm.sh/react@18.2.0';
 import { formatSpeed } from '../../utils/index.js';
+import { loadChartJs } from '../../utils/chartLoader.js';
 
-const { createElement: h, useEffect, useRef } = React;
+const { createElement: h, useEffect, useRef, useState } = React;
 
 /**
  * SpeedChart component
@@ -18,10 +19,20 @@ const { createElement: h, useEffect, useRef } = React;
 const SpeedChart = ({ speedData, theme, historicalRange }) => {
   const canvasRef = useRef(null);
   const chartInstance = useRef(null);
+  const [chartReady, setChartReady] = useState(false);
+
+  // Load Chart.js library on mount
+  useEffect(() => {
+    loadChartJs().then(() => {
+      setChartReady(true);
+    }).catch(err => {
+      console.error('Failed to load Chart.js:', err);
+    });
+  }, []);
 
   // Effect 1: Create chart once on mount, destroy on unmount
   useEffect(() => {
-    if (!canvasRef.current || !window.Chart) return;
+    if (!chartReady || !canvasRef.current || !window.Chart) return;
 
     const ctx = canvasRef.current.getContext('2d');
     const isDark = theme === 'dark';
@@ -105,7 +116,7 @@ const SpeedChart = ({ speedData, theme, historicalRange }) => {
         chartInstance.current = null;
       }
     };
-  }, []); // Run only once on mount
+  }, [chartReady]); // Run when Chart.js is loaded
 
   // Effect 2: Update chart data when speedData, theme, or range changes
   useEffect(() => {
@@ -154,7 +165,7 @@ const SpeedChart = ({ speedData, theme, historicalRange }) => {
 
     // Update without animation to prevent bounce
     chartInstance.current.update('none');
-  }, [speedData, theme, historicalRange]);
+  }, [chartReady, speedData, theme, historicalRange]); // Include chartReady so this runs when chart is created
 
   if (!speedData || !speedData.data || speedData.data.length === 0) {
     return h('p', { className: 'text-center text-gray-500 dark:text-gray-400 text-sm py-8' }, 'No data available');

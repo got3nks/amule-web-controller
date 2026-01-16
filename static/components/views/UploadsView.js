@@ -2,72 +2,60 @@
  * UploadsView Component
  *
  * Displays current uploads with client information
+ * Uses contexts directly for all data and actions
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { Icon, Table, FlagIcon, PaginationControls, SortControls } from '../common/index.js';
-import { formatBytes, formatSpeed, getDynamicFontSize, sortFiles, calculatePagination } from '../../utils/index.js';
+import { Icon, Table, FlagIcon, FilterInput, Tooltip, MobileOptionsPopover, ExpandableSearch } from '../common/index.js';
+import { formatBytes, formatSpeed, ipToString, CLIENT_SOFTWARE_LABELS } from '../../utils/index.js';
+import { useLiveData } from '../../contexts/LiveDataContext.js';
+import { useTableState, useDynamicFontSize } from '../../hooks/index.js';
 
-const { createElement: h, useMemo } = React;
-
-/**
- * Convert IP address from number to string
- */
-const ipToString = (ip) => {
-    if (!ip) return 'N/A';
-    return [
-        (ip & 0xFF),         // lowest byte first
-        (ip >>> 8) & 0xFF,
-        (ip >>> 16) & 0xFF,
-        (ip >>> 24) & 0xFF   // highest byte last
-    ].join('.');
-};
+const { createElement: h, useCallback } = React;
 
 /**
  * Get client software name from ID
  */
 const getClientSoftware = (software) => {
-  const softwareMap = {
-    0: 'eMule',
-    1: 'aMule',
-    2: 'xMule',
-    3: 'aMule',
-    4: 'MLDonkey',
-    5: 'Shareaza'
-  };
-  return softwareMap[software] || 'Unknown';
+  return CLIENT_SOFTWARE_LABELS[software] || 'Unknown';
 };
 
 /**
- * Uploads view component
- * @param {Array} uploads - List of current uploads
- * @param {boolean} loading - Loading state
- * @param {function} onRefresh - Refresh handler
- * @param {object} sortConfig - Current sort configuration
- * @param {function} onSortChange - Sort change handler
- * @param {number} page - Current page number
- * @param {function} onPageChange - Page change handler
- * @param {number} pageSize - Items per page
+ * Uploads view component - uses useTableState hook for table logic
  */
-const UploadsView = ({
-  uploads,
-  loading,
-  onRefresh,
-  sortConfig,
-  onSortChange,
-  page,
-  onPageChange,
-  pageSize
-}) => {
-  // Memoize sorted data to avoid double sorting
-  const sortedUploads = useMemo(() =>
-    sortFiles(uploads, sortConfig.sortBy, sortConfig.sortDirection),
-    [uploads, sortConfig.sortBy, sortConfig.sortDirection]
-  );
+const UploadsView = () => {
+  // Get data from context
+  const { dataUploads, dataLoaded } = useLiveData();
+
+  // Dynamic font size hook for responsive filename sizing
+  const getDynamicFontSize = useDynamicFontSize();
+
+  // Use table state hook for filtering, sorting, pagination
+  const {
+    filteredData: uploads,
+    sortedData: sortedUploads,
+    paginatedData,
+    totalCount,
+    filterText,
+    setFilterText,
+    clearFilter,
+    sortConfig,
+    onSortChange,
+    page,
+    pageSize,
+    pagesCount,
+    onPageChange,
+    onPageSizeChange
+  } = useTableState({
+    data: dataUploads,
+    viewKey: 'uploads',
+    filterField: 'EC_TAG_PARTFILE_NAME',
+    defaultSort: { sortBy: 'EC_TAG_PARTFILE_NAME', sortDirection: 'asc' }
+  });
 
   const columns = [
     {
-      label: 'File',
+      label: 'File Name',
       key: 'EC_TAG_PARTFILE_NAME',
       sortable: true,
       width: 'auto',
@@ -81,29 +69,33 @@ const UploadsView = ({
       label: 'Upload Speed',
       key: 'EC_TAG_CLIENT_UP_SPEED',
       sortable: true,
-      width: '110px',
-      render: (item) => h('span', { className: 'font-mono text-sm text-green-600 dark:text-green-400' }, formatSpeed(item.EC_TAG_CLIENT_UP_SPEED || 0))
+      render: (item) => h('span', { className: 'font-mono text-sm text-green-600 dark:text-green-400 whitespace-nowrap' }, formatSpeed(item.EC_TAG_CLIENT_UP_SPEED || 0))
     },
     {
       label: 'Client',
       key: 'EC_TAG_CLIENT_NAME',
       sortable: true,
-      width: '200px',
       render: (item) =>
         h('div', { className: 'space-y-1' }, [
           h('div', null,
             h('span', { className: 'font-medium text-sm align-baseline' }, getClientSoftware(item.EC_TAG_CLIENT_SOFTWARE)),
-            h('span', { className: 'text-xs text-gray-500 dark:text-gray-400 align-baseline ml-1' }, item.EC_TAG_CLIENT_SOFT_VER_STR || 'N/A')
+            (item.EC_TAG_CLIENT_SOFT_VER_STR && item.EC_TAG_CLIENT_SOFT_VER_STR !== 'Unknown') &&
+              h('span', { className: 'text-xs text-gray-500 dark:text-gray-400 align-baseline ml-1' }, item.EC_TAG_CLIENT_SOFT_VER_STR)
           ),
           h('div', null,
-            h('span', { className: 'font-mono text-xs inline-flex items-center gap-1' }, ipToString(item.EC_TAG_CLIENT_USER_IP),
+            item.hostname
+              ? h(Tooltip, { content: ipToString(item.EC_TAG_CLIENT_USER_IP), position: 'top' },
+                  h('span', { className: 'font-mono text-xs cursor-help break-all' }, item.hostname)
+                )
+              : h('span', { className: 'font-mono text-xs break-all' }, ipToString(item.EC_TAG_CLIENT_USER_IP))
+          ),
+          (item.geoData?.countryCode || item.geoData?.city) && h('div', { className: 'flex items-center gap-1' },
             item.geoData?.countryCode ? h(FlagIcon, {
                 countryCode: item.geoData.countryCode,
                 size: 16,
-                className: 'ml-1',
                 title: item.geoData.countryCode
             }) : null,
-            item.geoData?.city ? h('span', { className: 'text-xs text-gray-500 dark:text-gray-400 ml-1' }, `(${item.geoData.city})`) : null)
+            item.geoData?.city ? h('span', { className: 'text-xs text-gray-500 dark:text-gray-400' }, `${item.geoData.city}`) : null
           )
         ])
     },
@@ -111,126 +103,121 @@ const UploadsView = ({
       label: 'Session Upload',
       key: 'EC_TAG_CLIENT_UPLOAD_SESSION',
       sortable: true,
-      width: '100px',
-      render: (item) => formatBytes(item.EC_TAG_CLIENT_UPLOAD_SESSION || 0)
+      render: (item) => h('span', { className: 'whitespace-nowrap' }, formatBytes(item.EC_TAG_CLIENT_UPLOAD_SESSION || 0))
     },
     {
       label: 'Total Upload',
       key: 'EC_TAG_CLIENT_UPLOAD_TOTAL',
       sortable: true,
-      width: '100px',
-      render: (item) => formatBytes(item.EC_TAG_CLIENT_UPLOAD_TOTAL || 0)
+      render: (item) => h('span', { className: 'whitespace-nowrap' }, formatBytes(item.EC_TAG_CLIENT_UPLOAD_TOTAL || 0))
     }
   ];
 
-  const { pagesCount, paginatedData } = calculatePagination(
-    sortedUploads,
-    page,
-    pageSize
-  );
+  // Mobile card renderer
+  const renderMobileCard = useCallback((item, idx) => {
+    const fileName = item.EC_TAG_PARTFILE_NAME || 'Unknown';
+    const fileSize = item.EC_TAG_PARTFILE_SIZE_FULL;
+    const hasGeoData = item.geoData?.countryCode || item.geoData?.city;
+
+    return h('div', {
+      className: `p-3 rounded-lg ${idx % 2 === 0 ? 'bg-gray-50 dark:bg-gray-700/50' : 'bg-white dark:bg-gray-800/50'} border border-gray-200 dark:border-gray-700`
+    },
+      // File name with size
+      h('div', {
+        className: 'font-medium text-sm mb-2 text-gray-900 dark:text-gray-100',
+        style: {
+          fontSize: getDynamicFontSize(fileName),
+          wordBreak: 'break-all',
+          overflowWrap: 'anywhere',
+          lineHeight: '1.4'
+        }
+      },
+        fileSize ? `${fileName} (${formatBytes(fileSize)})` : fileName
+      ),
+      // Upload Speed + Client on same line
+      h('div', { className: 'flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300 mb-1' },
+        h(Icon, { name: 'upload', size: 12, className: 'text-green-600 dark:text-green-400 flex-shrink-0' }),
+        h('span', { className: 'font-mono text-green-600 dark:text-green-400' }, formatSpeed(item.EC_TAG_CLIENT_UP_SPEED || 0)),
+        h('span', { className: 'text-gray-400' }, '·'),
+        h('span', null, getClientSoftware(item.EC_TAG_CLIENT_SOFTWARE)),
+        (item.EC_TAG_CLIENT_SOFT_VER_STR && item.EC_TAG_CLIENT_SOFT_VER_STR !== 'Unknown') && h('span', { className: 'text-gray-500 dark:text-gray-400' }, item.EC_TAG_CLIENT_SOFT_VER_STR)
+      ),
+      // IP/Hostname + GeoIP on same line
+      h('div', { className: 'flex items-center gap-1 text-xs text-gray-700 dark:text-gray-300 mb-1' },
+        h(Icon, { name: 'mapPin', size: 12, className: 'text-gray-500 dark:text-gray-400 flex-shrink-0' }),
+        item.hostname
+          ? h('span', { className: 'font-mono', title: ipToString(item.EC_TAG_CLIENT_USER_IP) }, item.hostname)
+          : h('span', { className: 'font-mono' }, ipToString(item.EC_TAG_CLIENT_USER_IP)),
+        hasGeoData && h('span', { className: 'text-gray-400' }, '·'),
+        item.geoData?.countryCode && h(FlagIcon, {
+          countryCode: item.geoData.countryCode,
+          size: 14,
+          title: item.geoData.countryCode
+        }),
+        item.geoData?.city && h('span', { className: 'text-gray-500 dark:text-gray-400' }, item.geoData.city)
+      ),
+      // Session / Total Upload - compact format with icon and short labels
+      h('div', { className: 'flex items-center gap-1 text-xs text-gray-700 dark:text-gray-300' },
+        h(Icon, { name: 'upload', size: 12, className: 'text-gray-500 dark:text-gray-400 flex-shrink-0' }),
+        h('span', { className: 'text-gray-500 dark:text-gray-400' }, 'Session:'),
+        h('span', null, formatBytes(item.EC_TAG_CLIENT_UPLOAD_SESSION || 0)),
+        h('span', { className: 'text-gray-400' }, '·'),
+        h('span', { className: 'text-gray-500 dark:text-gray-400' }, 'Total:'),
+        h('span', null, formatBytes(item.EC_TAG_CLIENT_UPLOAD_TOTAL || 0))
+      )
+    );
+  }, [getDynamicFontSize]);
 
   return h('div', { className: 'space-y-2 sm:space-y-3' },
-    h('div', { className: 'flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3' },
-      h('h2', { className: 'text-base sm:text-lg font-bold text-gray-800 dark:text-gray-100' }, `Current Uploads (${uploads.length})`),
-      h('button', {
-        onClick: onRefresh,
-        disabled: loading,
-        className: 'hidden sm:block px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 transition-all active:scale-95 text-sm sm:text-base w-full sm:w-auto'
-      },
-        loading ? h('span', { className: 'flex items-center justify-center gap-2' },
-          h('div', { className: 'loader' }),
-          'Loading...'
-        ) : h('span', null,
-          h(Icon, { name: 'refresh', size: 16, className: 'inline mr-1' }),
-          'Refresh'
-        )
-      )
+    // Mobile/tablet header with title + compact controls
+    h('div', { className: 'flex lg:hidden items-center gap-2 pl-1' },
+      h('h2', { className: 'text-base font-bold text-gray-800 dark:text-gray-100 whitespace-nowrap' }, `Uploads (${uploads.length})`),
+      h('div', { className: 'flex-1' }),
+      h(ExpandableSearch, {
+        value: filterText,
+        onChange: setFilterText,
+        onClear: clearFilter,
+        placeholder: 'Filter...',
+        hiddenWhenExpanded: [
+          h(MobileOptionsPopover, {
+            key: 'options',
+            columns,
+            sortBy: sortConfig.sortBy,
+            sortDirection: sortConfig.sortDirection,
+            onSortChange
+          })
+        ]
+      })
     ),
-    uploads.length === 0 ? h('div', { className: 'text-center py-6 text-xs sm:text-sm text-gray-500 dark:text-gray-400' },
-      loading ? 'Loading uploads...' : 'No active uploads'
-    ) : h('div', null,
-      // Mobile sort control
-      h('div', { className: 'md:hidden flex flex-wrap items-center justify-between gap-2 mb-2' },
-        h(SortControls, {
-          columns,
-          sortBy: sortConfig.sortBy,
-          sortDirection: sortConfig.sortDirection,
-          onSortChange,
-          showLabel: true,
-          fullWidth: true
-        })
-      ),
-      // Mobile card view
-      h('div', { className: 'block md:hidden space-y-2' },
-        paginatedData.map((item, idx) => {
-          const fileName = item.EC_TAG_PARTFILE_NAME || 'Unknown';
-          const fileSize = item.EC_TAG_PARTFILE_SIZE_FULL;
+    // Desktop header
+    h('div', { className: 'hidden lg:flex justify-between items-center gap-3 pl-2' },
+      h('h2', { className: 'text-base sm:text-lg font-bold text-gray-800 dark:text-gray-100' }, `Uploads (${uploads.length})`),
+      h(FilterInput, {
+        value: filterText,
+        onChange: setFilterText,
+        onClear: clearFilter,
+        placeholder: 'Filter by file name...',
+        className: 'w-56'
+      })
+    ),
 
-          return h('div', {
-            key: item.EC_TAG_CLIENT_HASH || idx,
-            className: `p-3 rounded-lg ${idx % 2 === 0 ? 'bg-gray-50 dark:bg-gray-700/50' : 'bg-white dark:bg-gray-800/50'} border border-gray-200 dark:border-gray-700`
-          },
-            // File name with size
-            h('div', {
-              className: 'font-medium text-sm mb-2 text-gray-900 dark:text-gray-100',
-              style: {
-                fontSize: getDynamicFontSize(fileName),
-                wordBreak: 'break-all',
-                overflowWrap: 'anywhere',
-                lineHeight: '1.4'
-              }
-            },
-              fileSize ? `${fileName} (${formatBytes(fileSize)})` : fileName
-            ),
-            // Upload Speed
-            h('div', { className: 'text-xs text-gray-700 dark:text-gray-300 mb-1' },
-              h('span', { className: 'font-medium text-gray-600 dark:text-gray-400' }, 'Upload Speed: '),
-              h('span', { className: 'font-mono text-green-600 dark:text-green-400' }, formatSpeed(item.EC_TAG_CLIENT_UP_SPEED || 0))
-            ),
-            // Client with IP
-            h('div', { className: 'text-xs text-gray-700 dark:text-gray-300 mb-1' },
-              h('span', { className: 'font-medium text-gray-600 dark:text-gray-400' }, 'Client: '),
-              h('span', null, getClientSoftware(item.EC_TAG_CLIENT_SOFTWARE)),
-              h('span', { className: 'text-gray-500 dark:text-gray-400 ml-1' }, item.EC_TAG_CLIENT_SOFT_VER_STR || ''),
-              h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2' }, '('),
-              h('span', { className: 'font-mono' }, ipToString(item.EC_TAG_CLIENT_USER_IP)),
-              item.geoData?.countryCode ? h(FlagIcon, {
-                  countryCode: item.geoData.countryCode,
-                  size: 16,
-                  className: 'ml-1',
-                  title: item.geoData.countryCode
-              }) : null,
-              item.geoData?.city ? h('span', { className: 'text-xs text-gray-500 dark:text-gray-400 ml-1' }, item.geoData.city) : null,
-              h('span', { className: 'text-gray-500 dark:text-gray-400' }, ')')
-            ),
-            // Session / Total Upload in one line
-            h('div', { className: 'text-xs text-gray-700 dark:text-gray-300' },
-              h('span', { className: 'font-medium text-gray-600 dark:text-gray-400' }, 'Session Upload: '),
-              h('span', null, formatBytes(item.EC_TAG_CLIENT_UPLOAD_SESSION || 0)),
-              h('span', { className: 'mx-2 text-gray-400' }, '/'),
-              h('span', { className: 'font-medium text-gray-600 dark:text-gray-400' }, 'Total Upload: '),
-              h('span', null, formatBytes(item.EC_TAG_CLIENT_UPLOAD_TOTAL || 0))
-            )
-          );
-        })
-      ),
-      // Mobile pagination
-      h(PaginationControls, { page, onPageChange, pagesCount, options: { mobileOnly: true } }),
-      // Desktop table view
-      h('div', { className: 'hidden md:block' },
-        h(Table, {
-          data: sortedUploads,
-          columns,
-          actions: null,
-          currentSortBy: sortConfig.sortBy,
-          currentSortDirection: sortConfig.sortDirection,
-          onSortChange,
-          page,
-          onPageChange,
-          pageSize
-        })
-      )
-    )
+    uploads.length === 0 ? h('div', { className: 'text-center py-6 text-xs sm:text-sm text-gray-500 dark:text-gray-400' },
+      !dataLoaded.uploads ? 'Loading uploads...' : (filterText ? 'No uploads match the filter' : 'No active uploads')
+    ) : h(Table, {
+      data: sortedUploads,
+      columns,
+      actions: null,
+      currentSortBy: sortConfig.sortBy,
+      currentSortDirection: sortConfig.sortDirection,
+      onSortChange,
+      page,
+      onPageChange,
+      pageSize,
+      onPageSizeChange,
+      getRowKey: (item) => item.EC_TAG_CLIENT_HASH,
+      breakpoint: 'lg',
+      mobileCardRender: renderMobileCard
+    })
   );
 };
 

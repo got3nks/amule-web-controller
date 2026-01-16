@@ -153,12 +153,13 @@ async function testAmuleConnection(host, port, password) {
 }
 
 /**
- * Test Sonarr API connection
- * @param {string} url - Sonarr URL
- * @param {string} apiKey - Sonarr API key
+ * Generic function to test *arr API connection (Sonarr, Radarr, etc.)
+ * @param {string} serviceName - Name of the service (for error messages)
+ * @param {string} url - Service URL
+ * @param {string} apiKey - Service API key
  * @returns {Promise<{success: boolean, reachable: boolean, authenticated: boolean, version: string|null, error: string|null}>}
  */
-async function testSonarrAPI(url, apiKey) {
+async function testArrAPI(serviceName, url, apiKey) {
   const result = {
     success: false,
     reachable: false,
@@ -219,6 +220,26 @@ async function testSonarrAPI(url, apiKey) {
     }
     return result;
   }
+}
+
+/**
+ * Test Sonarr API connection
+ * @param {string} url - Sonarr URL
+ * @param {string} apiKey - Sonarr API key
+ * @returns {Promise<{success: boolean, reachable: boolean, authenticated: boolean, version: string|null, error: string|null}>}
+ */
+async function testSonarrAPI(url, apiKey) {
+  return testArrAPI('Sonarr', url, apiKey);
+}
+
+/**
+ * Test Radarr API connection
+ * @param {string} url - Radarr URL
+ * @param {string} apiKey - Radarr API key
+ * @returns {Promise<{success: boolean, reachable: boolean, authenticated: boolean, version: string|null, error: string|null}>}
+ */
+async function testRadarrAPI(url, apiKey) {
+    return testArrAPI('Radarr', url, apiKey);
 }
 
 /**
@@ -293,75 +314,6 @@ async function testGeoIPDatabase(dirPath) {
     return result;
   } catch (err) {
     result.warning = `Error checking GeoIP databases: ${err.message}. GeoIP features will be disabled.`;
-    return result;
-  }
-}
-
-/**
- * Test Radarr API connection
- * @param {string} url - Radarr URL
- * @param {string} apiKey - Radarr API key
- * @returns {Promise<{success: boolean, reachable: boolean, authenticated: boolean, version: string|null, error: string|null}>}
- */
-async function testRadarrAPI(url, apiKey) {
-  const result = {
-    success: false,
-    reachable: false,
-    authenticated: false,
-    version: null,
-    error: null
-  };
-
-  if (!url || !apiKey) {
-    result.error = 'URL and API key are required';
-    return result;
-  }
-
-  try {
-    // Remove trailing slash from URL
-    const baseUrl = url.replace(/\/$/, '');
-    const endpoint = `${baseUrl}/api/v3/system/status`;
-
-    const response = await fetch(endpoint, {
-      method: 'GET',
-      headers: {
-        'X-Api-Key': apiKey
-      },
-      signal: AbortSignal.timeout(10000) // 10 second timeout
-    });
-
-    result.reachable = true;
-
-    if (response.status === 401 || response.status === 403) {
-      result.error = 'Authentication failed - invalid API key';
-      return result;
-    }
-
-    if (!response.ok) {
-      const text = await response.text();
-      result.error = `HTTP ${response.status}: ${text}`;
-      return result;
-    }
-
-    const data = await response.json();
-    result.authenticated = true;
-
-    if (data.version) {
-      result.version = data.version;
-    }
-
-    result.success = true;
-    return result;
-  } catch (err) {
-    if (err.name === 'AbortError' || err.message.includes('timeout')) {
-      result.error = 'Connection timeout - server not reachable';
-    } else if (err.message.includes('ECONNREFUSED')) {
-      result.error = 'Connection refused - server not running or wrong port';
-    } else if (err.message.includes('ENOTFOUND')) {
-      result.error = 'Host not found - check URL';
-    } else {
-      result.error = err.message;
-    }
     return result;
   }
 }

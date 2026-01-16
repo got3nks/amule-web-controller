@@ -18,6 +18,7 @@ const { createElement: h } = React;
  * @param {Object} [options] - Additional options
  * @param {boolean} [options.excludeTitleFromDetails=true] - Exclude title column from details
  * @param {function} [options.customRender] - Custom card render function
+ * @param {string} [options.breakpoint='lg'] - Breakpoint at which to hide (lg or xl)
  */
 export const MobileCardView = ({
   data,
@@ -29,8 +30,12 @@ export const MobileCardView = ({
 }) => {
   const {
     excludeTitleFromDetails = true,
-    customRender = null
+    customRender = null,
+    breakpoint = 'lg'
   } = options;
+
+  // Determine visibility class based on breakpoint
+  const visibilityClass = breakpoint === 'xl' ? 'block xl:hidden' : 'block lg:hidden';
 
   if (!Array.isArray(data) || data.length === 0) {
     return null;
@@ -55,8 +60,8 @@ export const MobileCardView = ({
 
   // Custom render override
   if (customRender) {
-    return h('div', { className: 'block md:hidden space-y-2' },
-      data.map((item, idx) => 
+    return h('div', { className: `${visibilityClass} space-y-2` },
+      data.map((item, idx) =>
         h('div', { key: keyFn(item, idx) },
           customRender(item, idx)
         )
@@ -65,7 +70,7 @@ export const MobileCardView = ({
   }
 
   // Default card render
-  return h('div', { className: 'block md:hidden space-y-2' },
+  return h('div', { className: `${visibilityClass} space-y-2` },
     data.map((item, idx) => {
       const title = titleFn(item);
       const titleColumnKeys = ['fileName', 'EC_TAG_PARTFILE_NAME', 'EC_TAG_SERVER_NAME'];

@@ -30,16 +30,19 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=${PORT:-4000}
-      - AMULE_HOST=amule  # aMule container service name
       # Optional: Uncomment to pre-configure via environment variables
-      # - AMULE_PORT=4712
-      # - AMULE_PASSWORD=${AMULE_PASSWORD}
+      # Web UI Authentication
+      # - WEB_AUTH_ENABLED=true
+      # - WEB_AUTH_PASSWORD=your_secure_password
+      # aMule Connection
+      - AMULE_HOST=amule  # aMule container service name
+      - AMULE_PORT=4712
+      - AMULE_PASSWORD=${AMULE_PASSWORD:-admin}  # Must match GUI_PWD in amule container
+      # Sonarr/Radarr Integration
       # - SONARR_URL=http://sonarr:8989
       # - SONARR_API_KEY=your_api_key
       # - RADARR_URL=http://radarr:7878
       # - RADARR_API_KEY=your_api_key
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - ./logs:/usr/src/app/server/logs
       - ./data:/usr/src/app/server/data
@@ -51,9 +54,8 @@ services:
     image: crazymax/geoip-updater:latest
     container_name: geoip-updater
     environment:
-      # Replace with your MaxMind license key
       - EDITION_IDS=GeoLite2-ASN,GeoLite2-City,GeoLite2-Country
-      - LICENSE_KEY=YOUR_LICENSE_KEY
+      - LICENSE_KEY=YOUR_LICENSE_KEY # Replace with your MaxMind license key
       - DOWNLOAD_PATH=/data
       - SCHEDULE=0 0 * * 0  # Weekly on Sunday at midnight
       - LOG_LEVEL=info

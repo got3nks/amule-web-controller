@@ -26,14 +26,17 @@ const Sidebar = ({ currentView, onNavigate, isLandscape }) => {
       h(NavButton, { icon: 'home', label: 'Home', view: 'home', active: currentView === 'home', onNavigate }),
       h(NavButton, { icon: 'search', label: 'Search', view: 'search', active: currentView === 'search' || currentView === 'search-results', onNavigate }),
       h(NavButton, { icon: 'download', label: 'Downloads', view: 'downloads', active: currentView === 'downloads', onNavigate }),
+      h(NavButton, { icon: 'history', label: 'History', view: 'history', active: currentView === 'history', onNavigate }),
       h(NavButton, { icon: 'upload', label: 'Uploads', view: 'uploads', active: currentView === 'uploads', onNavigate }),
-      h(NavButton, { icon: 'share', label: 'Shared Files', view: 'shared', active: currentView === 'shared', onNavigate }),
+      h(NavButton, { icon: 'share', label: 'Shared Files', shortLabel: 'Shared', view: 'shared', active: currentView === 'shared', onNavigate }),
       h(NavButton, { icon: 'folder', label: 'Categories', view: 'categories', active: currentView === 'categories', onNavigate }),
       h(NavButton, { icon: 'server', label: 'Servers', view: 'servers', active: currentView === 'servers', onNavigate }),
       h(NavButton, { icon: 'fileText', label: 'Logs', view: 'logs', active: currentView === 'logs', onNavigate }),
-      h(NavButton, { icon: 'chartBar', label: 'Statistics', view: 'statistics', active: currentView === 'statistics', onNavigate })
+      h(NavButton, { icon: 'chartBar', label: 'Statistics', view: 'statistics', active: currentView === 'statistics', onNavigate }),
+      h(NavButton, { icon: 'settings', label: 'Settings', view: 'settings', active: currentView === 'settings', onNavigate })
     )
   );
 };
 
-export default Sidebar;
+// Memoize to prevent re-renders when parent context changes but props don't
+export default React.memo(Sidebar);

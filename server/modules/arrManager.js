@@ -7,6 +7,7 @@ const config = require('./config');
 const BaseModule = require('../lib/BaseModule');
 const fs = require('fs').promises;
 const path = require('path');
+const { hoursToMs, minutesToMs, MS_PER_HOUR } = require('../lib/timeRange');
 
 // Debug mode - set to true to see detailed search decisions
 const DEBUG = true;
@@ -51,52 +52,53 @@ class ArrManager extends BaseModule {
     await this.writeState(state);
   }
 
-  // Search for a specific episode in Sonarr
-  async searchEpisode(episodeId) {
+  /**
+   * Generic search function for Sonarr/Radarr content
+   * @param {string} service - 'sonarr' or 'radarr'
+   * @param {number} contentId - Episode or Movie ID
+   * @param {string} contentType - 'episode' or 'movie'
+   */
+  async searchContent(service, contentId, contentType) {
+    const config_map = {
+      sonarr: { url: config.SONARR_URL, apiKey: config.SONARR_API_KEY, command: 'EpisodeSearch', idKey: 'episodeIds' },
+      radarr: { url: config.RADARR_URL, apiKey: config.RADARR_API_KEY, command: 'MoviesSearch', idKey: 'movieIds' }
+    };
+
+    const cfg = config_map[service];
+    if (!cfg) {
+      this.log(`❌ Unknown service: ${service}`);
+      return;
+    }
+
     try {
-      const result = await this.fetchJson(`${config.SONARR_URL}/api/v3/command`, {
+      const result = await this.fetchJson(`${cfg.url}/api/v3/command`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Api-Key': config.SONARR_API_KEY
+          'X-Api-Key': cfg.apiKey
         },
         body: JSON.stringify({
-          name: 'EpisodeSearch',
-          episodeIds: [episodeId]
+          name: cfg.command,
+          [cfg.idKey]: [contentId]
         })
       });
-      this.log(`  🔍 Episode search triggered (Command ID: ${result.id}), waiting for completion...`);
+      this.log(`  🔍 ${contentType} search triggered (Command ID: ${result.id}), waiting for completion...`);
 
-      // Wait for the search command to complete
-      await this.waitForCommandCompletion('sonarr', result.id);
-      this.log(`  ✅ Episode search completed (Command ID: ${result.id})`);
+      await this.waitForCommandCompletion(service, result.id);
+      this.log(`  ✅ ${contentType} search completed (Command ID: ${result.id})`);
     } catch (err) {
-      this.log(`  ❌ Failed to search episode ${episodeId}:`, err.message);
+      this.log(`  ❌ Failed to search ${contentType} ${contentId}:`, err.message);
     }
+  }
+
+  // Search for a specific episode in Sonarr
+  async searchEpisode(episodeId) {
+    return this.searchContent('sonarr', episodeId, 'Episode');
   }
 
   // Search for a specific movie in Radarr
   async searchMovie(movieId) {
-    try {
-      const result = await this.fetchJson(`${config.RADARR_URL}/api/v3/command`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Api-Key': config.RADARR_API_KEY
-        },
-        body: JSON.stringify({
-          name: 'MoviesSearch',
-          movieIds: [movieId]
-        })
-      });
-      this.log(`  🔍 Movie search triggered (Command ID: ${result.id}), waiting for completion...`);
-
-      // Wait for the search command to complete
-      await this.waitForCommandCompletion('radarr', result.id);
-      this.log(`  ✅ Movie search completed (Command ID: ${result.id})`);
-    } catch (err) {
-      this.log(`  ❌ Failed to search movie ${movieId}:`, err.message);
-    }
+    return this.searchContent('radarr', movieId, 'Movie');
   }
 
   // Helper: fetch JSON with error handling
@@ -109,12 +111,30 @@ class ArrManager extends BaseModule {
         return resp.json();
     }
 
+  /**
+   * Get service configuration by name
+   */
+  getServiceConfig(service) {
+    const configs = {
+      sonarr: {
+        url: config.SONARR_URL,
+        apiKey: config.SONARR_API_KEY,
+        searchInterval: config.SONARR_SEARCH_INTERVAL_HOURS
+      },
+      radarr: {
+        url: config.RADARR_URL,
+        apiKey: config.RADARR_API_KEY,
+        searchInterval: config.RADARR_SEARCH_INTERVAL_HOURS
+      }
+    };
+    return configs[service];
+  }
+
   // Helper function to poll command status with timeout
   async waitForCommandCompletion(service, commandId, timeoutMs = config.COMMAND_TIMEOUT_MS) {
     const pollInterval = 5000; // 5 seconds
     const startTime = Date.now();
-    const url = service === 'radarr' ? config.RADARR_URL : config.SONARR_URL;
-    const apiKey = service === 'radarr' ? config.RADARR_API_KEY : config.SONARR_API_KEY;
+    const cfg = this.getServiceConfig(service);
 
     while (true) {
       // Check timeout
@@ -123,8 +143,8 @@ class ArrManager extends BaseModule {
         return;
       }
 
-      const statusResp = await fetch(`${url}/api/v3/command/${commandId}`, {
-        headers: { 'X-Api-Key': apiKey }
+      const statusResp = await fetch(`${cfg.url}/api/v3/command/${commandId}`, {
+        headers: { 'X-Api-Key': cfg.apiKey }
       });
       const statusData = await statusResp.json();
 
@@ -137,22 +157,72 @@ class ArrManager extends BaseModule {
     }
   }
 
-  // Trigger Radarr to search for missing movies
-  async triggerRadarrMissingSearch() {
-    if (!config.RADARR_URL || !config.RADARR_API_KEY) {
-      this.log('⚠️  Radarr URL or API key not configured, skipping automatic search');
-      return;
+  /**
+   * Build quality ranking from quality profile
+   */
+  buildQualityRanking(qualityProfile) {
+    const qualityRanking = [];
+    for (const item of qualityProfile.items) {
+      if (item.quality) {
+        qualityRanking.push({ id: item.quality.id, name: item.quality.name });
+      } else if (item.items) {
+        // It's a group, add all items in the group
+        for (const subItem of item.items) {
+          if (subItem.quality) {
+            qualityRanking.push({ id: subItem.quality.id, name: subItem.quality.name });
+          }
+        }
+      }
+    }
+    return qualityRanking;
+  }
+
+  /**
+   * Get cutoff quality ID from profile
+   */
+  getCutoffQualityId(qualityProfile) {
+    const cutoffId = qualityProfile.cutoff;
+    let cutoffQualityId = null;
+
+    for (const item of qualityProfile.items) {
+      if (item.quality && item.quality.id === cutoffId) {
+        cutoffQualityId = item.quality.id;
+        break;
+      }
+      if (item.id === cutoffId && item.items) {
+        // It's a group, use the first quality in the group
+        if (item.items.length > 0 && item.items[0].quality) {
+          cutoffQualityId = item.items[0].quality.id;
+        }
+        break;
+      }
     }
 
-    // Wait for search lock to be available
-    const maxWaitTime = 30 * 60 * 1000; // 30 minutes
+    return cutoffQualityId;
+  }
+
+  /**
+   * Check if content needs quality upgrade
+   */
+  needsQualityUpgrade(fileQualityId, cutoffQualityId, qualityRanking) {
+    const fileQualityIndex = qualityRanking.findIndex(q => q.id === fileQualityId);
+    const cutoffQualityIndex = qualityRanking.findIndex(q => q.id === cutoffQualityId);
+
+    return fileQualityIndex !== -1 && cutoffQualityIndex !== -1 && fileQualityIndex < cutoffQualityIndex;
+  }
+
+  /**
+   * Acquire search lock with timeout
+   */
+  async acquireSearchLockWithTimeout(service) {
+    const maxWaitTime = minutesToMs(10);
     const pollInterval = 10000; // 10 seconds
     const startTime = Date.now();
 
     while (!this.amuleManager.acquireSearchLock()) {
       if (Date.now() - startTime > maxWaitTime) {
-        this.log('⚠️  Timeout waiting for search lock, skipping Radarr automatic search');
-        return;
+        this.log(`⚠️  Timeout waiting for search lock, skipping ${service} automatic search`);
+        return false;
       }
       this.log('⏳ Search already in progress, waiting for lock to be freed...');
       await new Promise(resolve => setTimeout(resolve, pollInterval));
@@ -160,472 +230,298 @@ class ArrManager extends BaseModule {
 
     this.amuleManager.searchInProgress = true;
     this.broadcast({ type: 'search-lock', locked: true });
-    this.log('🔒 Search lock acquired for Radarr automatic search');
+    this.log(`🔒 Search lock acquired for ${service} automatic search`);
+    return true;
+  }
 
-    try {
-      this.log('🔄 Triggering Radarr RefreshMovie...');
+  /**
+   * Release search lock
+   */
+  releaseSearchLock(service) {
+    this.amuleManager.releaseSearchLock();
+    this.broadcast({ type: 'search-lock', locked: false });
+    this.log(`🔓 Search lock released after ${service} automatic search`);
+  }
 
-      // 1️⃣ Trigger RefreshMovie
-      const refreshResult = await this.fetchJson(`${config.RADARR_URL}/api/v3/command`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Api-Key': config.RADARR_API_KEY
-        },
-        body: JSON.stringify({ name: 'RefreshMovie' })
-      });
+  /**
+   * Check if content has been released
+   * For movies: checks digital/physical release dates
+   * For episodes: checks air date
+   */
+  isContentReleased(content, serviceType) {
+    const now = new Date();
 
-      if(DEBUG) this.log(`⏳ RefreshMovie triggered (Command ID: ${refreshResult.id}), waiting for completion...`);
-
-      // Wait until RefreshMovie completes
-      await this.waitForCommandCompletion('radarr', refreshResult.id);
-      this.log('✅ RefreshMovie completed');
-
-      // 2️⃣ Fetch all movies
-      if(DEBUG) this.log('🎬 Fetching all movies...');
-      const movies = await this.fetchJson(`${config.RADARR_URL}/api/v3/movie`, {
-        headers: { 'X-Api-Key': config.RADARR_API_KEY }
-      });
-      if(DEBUG) this.log(`📊 Found ${movies.length} movies`);
-
-      // 3️⃣ Cache quality profiles for performance
-      if(DEBUG) this.log('⚙️  Fetching quality profiles...');
-      const qualityProfiles = await this.fetchJson(`${config.RADARR_URL}/api/v3/qualityprofile`, {
-        headers: { 'X-Api-Key': config.RADARR_API_KEY }
-      });
-      const profilesMap = new Map(qualityProfiles.map(p => [p.id, p]));
-      if (DEBUG) this.log(`🔧 Loaded ${qualityProfiles.length} quality profiles`);
-
-      // 4️⃣ Fetch download queue to skip movies already downloading
-      if(DEBUG) this.log('📥 Fetching download queue...');
-      const queue = await this.fetchJson(`${config.RADARR_URL}/api/v3/queue?includeUnknownMovieItems=false`, {
-        headers: { 'X-Api-Key': config.RADARR_API_KEY }
-      });
-      const queuedMovieIds = new Set();
-      if (queue.records) {
-        for (const record of queue.records) {
-          if (record.movieId) {
-            queuedMovieIds.add(record.movieId);
-          }
-        }
+    if (serviceType === 'movie') {
+      let isReleased = false;
+      if (content.digitalRelease && new Date(content.digitalRelease) <= now) {
+        isReleased = true;
       }
-      if(DEBUG) this.log(`📊 Found ${queuedMovieIds.size} movies in download queue`);
-
-      // 5️⃣ Process each movie
-      const moviesToSearch = [];
-
-      for (const movie of movies) {
-        if (!movie.monitored) {
-          if (DEBUG) this.log(`⏭️  Skipping unmonitored movie: ${movie.title}`);
-          continue;
-        }
-
-        if (DEBUG) this.log(`🎬 Processing movie: ${movie.title} (${movie.year})`);
-
-        const qualityProfile = profilesMap.get(movie.qualityProfileId);
-        if (!qualityProfile) {
-          this.log(`⚠️  Could not find quality profile for ${movie.title}`);
-          continue;
-        }
-
-        // The cutoff is an ID, we need to look it up in the quality items
-        const cutoffId = qualityProfile.cutoff;
-        let cutoffQualityId = null;
-
-        // Find the quality or group that matches the cutoff ID
-        // If it's a group, we need to find the FIRST quality in that group
-        for (const item of qualityProfile.items) {
-          if (item.quality && item.quality.id === cutoffId) {
-            cutoffQualityId = item.quality.id;
-            break;
-          }
-          if (item.id === cutoffId && item.items) {
-            // It's a group, use the first quality in the group
-            if (item.items.length > 0 && item.items[0].quality) {
-              cutoffQualityId = item.items[0].quality.id;
-            }
-            break;
-          }
-        }
-
-        if (DEBUG) {
-          const cutoffName = cutoffQualityId ? `ID ${cutoffQualityId}` : 'N/A';
-          this.log(`  Quality profile: ${qualityProfile.name}, Cutoff: ${cutoffName}`);
-        }
-
-        // Skip if movie is already in download queue
-        if (queuedMovieIds.has(movie.id)) {
-          if (DEBUG) this.log(`  📥 ALREADY IN QUEUE - Skipping`);
-          continue;
-        }
-
-        // Skip if movie hasn't been released yet
-        // Check digital release, physical release, or in cinemas date
-        const now = new Date();
-        let isReleased = false;
-        let releaseDate = null;
-
-        if (movie.digitalRelease) {
-          const digitalDate = new Date(movie.digitalRelease);
-          if (digitalDate <= now) {
-            isReleased = true;
-          } else {
-            releaseDate = digitalDate;
-          }
-        }
-
-        if (!isReleased && movie.physicalRelease) {
-          const physicalDate = new Date(movie.physicalRelease);
-          if (physicalDate <= now) {
-            isReleased = true;
-          } else if (!releaseDate || physicalDate < releaseDate) {
-            releaseDate = physicalDate;
-          }
-        }
-
-        /*
-        if (!isReleased && movie.inCinemas) {
-          const cinemasDate = new Date(movie.inCinemas);
-          if (cinemasDate <= now) {
-            isReleased = true;
-          } else if (!releaseDate || cinemasDate < releaseDate) {
-            releaseDate = cinemasDate;
-          }
-        }
-        */
-
-        if (!isReleased) {
-          if (DEBUG) {
-            const dateStr = releaseDate ? releaseDate.toISOString().split('T')[0] : 'unknown';
-            this.log(`  ⏰ NOT RELEASED YET (${dateStr}) - Skipping`);
-          }
-          continue;
-        }
-
-        // Case 1: Movie is missing
-        if (!movie.hasFile) {
-          if (DEBUG) this.log(`  🔍 MISSING - Would search`);
-          moviesToSearch.push({
-            title: movie.title,
-            year: movie.year,
-            movieId: movie.id,
-            reason: 'missing'
-          });
-          continue;
-        }
-
-        // Case 2: Movie has file, check quality
-        if (movie.movieFile && cutoffQualityId) {
-          const fileQuality = movie.movieFile.quality?.quality?.name;
-          const fileQualityId = movie.movieFile.quality?.quality?.id;
-
-          // Build a quality ranking based on the profile's items order
-          const qualityRanking = [];
-          for (const item of qualityProfile.items) {
-            if (item.quality) {
-              qualityRanking.push({ id: item.quality.id, name: item.quality.name });
-            } else if (item.items) {
-              // It's a group, add all items in the group
-              for (const subItem of item.items) {
-                if (subItem.quality) {
-                  qualityRanking.push({ id: subItem.quality.id, name: subItem.quality.name });
-                }
-              }
-            }
-          }
-
-          const fileQualityIndex = qualityRanking.findIndex(q => q.id === fileQualityId);
-          const cutoffQualityIndex = qualityRanking.findIndex(q => q.id === cutoffQualityId);
-
-          // Find cutoff quality name for display
-          const cutoffQualityObj = qualityRanking.find(q => q.id === cutoffQualityId);
-          const cutoffQualityName = cutoffQualityObj ? cutoffQualityObj.name : 'Unknown';
-
-          if (fileQualityIndex !== -1 && cutoffQualityIndex !== -1 && fileQualityIndex < cutoffQualityIndex) {
-            if (DEBUG) {
-              this.log(`  📈 UPGRADE NEEDED - Current: ${fileQuality} (index ${fileQualityIndex}), Cutoff: ${cutoffQualityName} (index ${cutoffQualityIndex}) - Would search`);
-            }
-            moviesToSearch.push({
-              title: movie.title,
-              year: movie.year,
-              movieId: movie.id,
-              reason: `upgrade (${fileQuality} → ${cutoffQualityName})`
-            });
-          } else {
-            if (DEBUG) {
-              this.log(`  ✅ OK - Quality: ${fileQuality} (index ${fileQualityIndex}), Cutoff: ${cutoffQualityName} (index ${cutoffQualityIndex})`);
-            }
-          }
-        }
+      if (!isReleased && content.physicalRelease && new Date(content.physicalRelease) <= now) {
+        isReleased = true;
       }
-
-      // 6️⃣ Summary
-      if(DEBUG) this.log(`📋 Summary: Found ${moviesToSearch.length} movies that need searching`);
-
-      if (moviesToSearch.length > 0) {
-        this.log('🎯 Movies to search:');
-        for (const mv of moviesToSearch) {
-          this.log(`  • ${mv.title} (${mv.year}) [${mv.reason}]`);
-        }
-
-        for (const mv of moviesToSearch) {
-          await this.searchMovie(mv.movieId);
-        }
-      } else {
-        this.log('✅ All monitored movies are either present or meet quality requirements');
+      return { isReleased, releaseDate: content.digitalRelease || content.physicalRelease };
+    } else {
+      // episode
+      if (content.airDateUtc) {
+        const airDate = new Date(content.airDateUtc);
+        return { isReleased: airDate <= now, releaseDate: content.airDateUtc };
       }
-
-      // Update last successful search time
-      await this.updateLastSearchCompleted('radarr');
-      if(DEBUG) this.log('💾 Updated last Radarr search completion time');
-
-    } catch (err) {
-      this.log('❌ Error during Radarr refresh/missing search:', err.message);
-    } finally {
-      this.amuleManager.releaseSearchLock();
-      this.broadcast({ type: 'search-lock', locked: false });
-      this.log('🔓 Search lock released after Radarr automatic search');
+      return { isReleased: false, releaseDate: null };
     }
   }
 
-  // Trigger Sonarr to search for missing episodes
-  async triggerSonarrMissingSearch() {
-    if (!config.SONARR_URL || !config.SONARR_API_KEY) {
-      this.log('⚠️  Sonarr URL or API key not configured, skipping automatic search');
+  /**
+   * Generic function to trigger missing/upgrade search for Sonarr or Radarr
+   * @param {string} service - 'sonarr' or 'radarr'
+   */
+  async triggerMissingSearch(service) {
+    const serviceConfig = {
+      sonarr: {
+        refreshCommand: 'RefreshSeries',
+        contentEndpoint: 'series',
+        episodeEndpoint: 'episode',
+        queueParam: 'includeUnknownSeriesItems=false',
+        queueIdKey: 'episodeId',
+        contentType: 'episode',
+        contentLabel: 'series',
+        itemLabel: 'episodes',
+        getContentId: (item) => item.id,
+        getItemsForContent: async (cfg, content) => {
+          return this.fetchJson(`${cfg.url}/api/v3/episode?seriesId=${content.id}`, {
+            headers: { 'X-Api-Key': cfg.apiKey }
+          });
+        },
+        formatItemLabel: (item) => `S${String(item.seasonNumber).padStart(2, '0')}E${String(item.episodeNumber).padStart(2, '0')}`,
+        searchFunction: (id) => this.searchEpisode(id)
+      },
+      radarr: {
+        refreshCommand: 'RefreshMovie',
+        contentEndpoint: 'movie',
+        episodeEndpoint: null,
+        queueParam: 'includeUnknownMovieItems=false',
+        queueIdKey: 'movieId',
+        contentType: 'movie',
+        contentLabel: 'movies',
+        itemLabel: 'movies',
+        getContentId: (item) => item.id,
+        getItemsForContent: async (cfg, content) => [content], // Movies don't have sub-items
+        formatItemLabel: (item) => `${item.title} (${item.year})`,
+        searchFunction: (id) => this.searchMovie(id)
+      }
+    };
+
+    const svcCfg = serviceConfig[service];
+    const cfg = this.getServiceConfig(service);
+
+    if (!cfg.url || !cfg.apiKey) {
+      this.log(`⚠️  ${service} URL or API key not configured, skipping automatic search`);
       return;
     }
 
-    // Wait for search lock to be available
-    const maxWaitTime = 30 * 60 * 1000; // 30 minutes
-    const pollInterval = 10000; // 10 seconds
-    const startTime = Date.now();
-
-    while (!this.amuleManager.acquireSearchLock()) {
-      if (Date.now() - startTime > maxWaitTime) {
-        this.log('⚠️  Timeout waiting for search lock, skipping Sonarr automatic search');
-        return;
-      }
-      this.log('⏳ Search already in progress, waiting for lock to be freed...');
-      await new Promise(resolve => setTimeout(resolve, pollInterval));
+    // Acquire search lock
+    if (!await this.acquireSearchLockWithTimeout(service)) {
+      return;
     }
 
-    this.amuleManager.searchInProgress = true;
-    this.broadcast({ type: 'search-lock', locked: true });
-    this.log('🔒 Search lock acquired for Sonarr automatic search');
-
     try {
-      this.log('🔄 Triggering Sonarr RefreshSeries...');
+      this.log(`🔄 Triggering ${service} ${svcCfg.refreshCommand}...`);
 
-      // 1️⃣ Trigger RefreshSeries
-      const refreshResult = await this.fetchJson(`${config.SONARR_URL}/api/v3/command`, {
+      // 1️⃣ Trigger Refresh
+      const refreshResult = await this.fetchJson(`${cfg.url}/api/v3/command`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Api-Key': config.SONARR_API_KEY
+          'X-Api-Key': cfg.apiKey
         },
-        body: JSON.stringify({ name: 'RefreshSeries' })
+        body: JSON.stringify({ name: svcCfg.refreshCommand })
       });
 
-      if(DEBUG) this.log(`⏳ RefreshSeries triggered (Command ID: ${refreshResult.id}), waiting for completion...`);
+      if (DEBUG) this.log(`⏳ ${svcCfg.refreshCommand} triggered (Command ID: ${refreshResult.id}), waiting for completion...`);
+      await this.waitForCommandCompletion(service, refreshResult.id);
+      this.log(`✅ ${svcCfg.refreshCommand} completed`);
 
-      // Wait until RefreshSeries completes
-      await this.waitForCommandCompletion('sonarr', refreshResult.id);
-      this.log('✅ RefreshSeries completed');
+      // 2️⃣ Fetch content, quality profiles, and queue in parallel (they're independent)
+      if (DEBUG) this.log(`📚 Fetching ${svcCfg.contentLabel}, quality profiles, and queue in parallel...`);
 
-      // 2️⃣ Fetch all series
-      if(DEBUG) this.log('📚 Fetching all series...');
-      const series = await this.fetchJson(`${config.SONARR_URL}/api/v3/series`, {
-        headers: { 'X-Api-Key': config.SONARR_API_KEY }
-      });
-      if(DEBUG) this.log(`📊 Found ${series.length} series`);
+      const [allContent, qualityProfiles, queue] = await Promise.all([
+        // Fetch all content
+        this.fetchJson(`${cfg.url}/api/v3/${svcCfg.contentEndpoint}`, {
+          headers: { 'X-Api-Key': cfg.apiKey }
+        }),
+        // Fetch quality profiles
+        this.fetchJson(`${cfg.url}/api/v3/qualityprofile`, {
+          headers: { 'X-Api-Key': cfg.apiKey }
+        }),
+        // Fetch download queue
+        this.fetchJson(`${cfg.url}/api/v3/queue?${svcCfg.queueParam}`, {
+          headers: { 'X-Api-Key': cfg.apiKey }
+        })
+      ]);
 
-      // 3️⃣ Cache quality profiles for performance
-      if(DEBUG) this.log('⚙️  Fetching quality profiles...');
-      const qualityProfiles = await this.fetchJson(`${config.SONARR_URL}/api/v3/qualityprofile`, {
-        headers: { 'X-Api-Key': config.SONARR_API_KEY }
-      });
+      if (DEBUG) this.log(`📊 Found ${allContent.length} ${svcCfg.contentLabel}`);
+
       const profilesMap = new Map(qualityProfiles.map(p => [p.id, p]));
       if (DEBUG) this.log(`🔧 Loaded ${qualityProfiles.length} quality profiles`);
 
-      // 4️⃣ Fetch download queue to skip episodes already downloading
-      if(DEBUG) this.log('📥 Fetching download queue...');
-      const queue = await this.fetchJson(`${config.SONARR_URL}/api/v3/queue?includeUnknownSeriesItems=false`, {
-        headers: { 'X-Api-Key': config.SONARR_API_KEY }
-      });
-      const queuedEpisodeIds = new Set();
+      const queuedIds = new Set();
       if (queue.records) {
         for (const record of queue.records) {
-          if (record.episodeId) {
-            queuedEpisodeIds.add(record.episodeId);
+          if (record[svcCfg.queueIdKey]) {
+            queuedIds.add(record[svcCfg.queueIdKey]);
           }
         }
       }
-      if(DEBUG) this.log(`📊 Found ${queuedEpisodeIds.size} episodes in download queue`);
+      if (DEBUG) this.log(`📊 Found ${queuedIds.size} ${svcCfg.itemLabel} in download queue`);
 
-      // 4️⃣ Process each series
-      const episodesToSearch = [];
+      // 5️⃣ Process each piece of content
+      const itemsToSearch = [];
 
-      for (const show of series) {
-        if (!show.monitored) {
-          if (DEBUG) this.log(`⏭️  Skipping unmonitored series: ${show.title}`);
+      for (const content of allContent) {
+        if (!content.monitored) {
+          if (DEBUG) this.log(`⏭️  Skipping unmonitored ${svcCfg.contentType}: ${content.title}`);
           continue;
         }
 
-        if (DEBUG) this.log(`📺 Processing series: ${show.title} (ID: ${show.id})`);
+        if (DEBUG) this.log(`📺 Processing ${svcCfg.contentType}: ${content.title}`);
 
-        // Get episodes for this series
-        const episodes = await this.fetchJson(
-          `${config.SONARR_URL}/api/v3/episode?seriesId=${show.id}`,
-          { headers: { 'X-Api-Key': config.SONARR_API_KEY } }
-        );
-
-        const qualityProfile = profilesMap.get(show.qualityProfileId);
+        const qualityProfile = profilesMap.get(content.qualityProfileId);
         if (!qualityProfile) {
-          this.log(`⚠️  Could not find quality profile for ${show.title}`);
+          this.log(`⚠️  Could not find quality profile for ${content.title}`);
           continue;
         }
 
-        // The cutoff is an ID, we need to look it up in the quality items
-        const cutoffId = qualityProfile.cutoff;
-        let cutoffQualityId = null;
-
-        // Find the quality or group that matches the cutoff ID
-        // If it's a group, we need to find the FIRST quality in that group
-        for (const item of qualityProfile.items) {
-          if (item.quality && item.quality.id === cutoffId) {
-            cutoffQualityId = item.quality.id;
-            break;
-          }
-          if (item.id === cutoffId && item.items) {
-            // It's a group, use the first quality in the group
-            if (item.items.length > 0 && item.items[0].quality) {
-              cutoffQualityId = item.items[0].quality.id;
-            }
-            break;
-          }
-        }
-
+        const cutoffQualityId = this.getCutoffQualityId(qualityProfile);
         if (DEBUG) {
           const cutoffName = cutoffQualityId ? `ID ${cutoffQualityId}` : 'N/A';
           this.log(`  Quality profile: ${qualityProfile.name}, Cutoff: ${cutoffName}`);
         }
 
-        // Process each episode
-        for (const episode of episodes) {
-          // Skip if not monitored
-          if (!episode.monitored) continue;
+        // Get items for this content (episodes for series, or the movie itself)
+        const items = await svcCfg.getItemsForContent(cfg, content);
 
-          const episodeLabel = `S${String(episode.seasonNumber).padStart(2, '0')}E${String(episode.episodeNumber).padStart(2, '0')}`;
-
-          // Skip if episode hasn't aired yet
-          if (episode.airDateUtc) {
-            const airDate = new Date(episode.airDateUtc);
-            const now = new Date();
-            if (airDate > now) {
-              if (DEBUG) this.log(`  ⏰ ${episodeLabel} - NOT AIRED YET (${airDate.toISOString().split('T')[0]}) - Skipping`);
-              continue;
-            }
-          }
-
-          // Skip if episode is already in download queue
-          if (queuedEpisodeIds.has(episode.id)) {
-            if (DEBUG) this.log(`  📥 ${episodeLabel} - ALREADY IN QUEUE - Skipping`);
+        for (const item of items) {
+          // For series, check if episode is monitored
+          if (svcCfg.contentType === 'episode' && !item.monitored) {
             continue;
           }
 
-          // Case 1: Episode is missing
-          if (!episode.hasFile) {
-            if (DEBUG) this.log(`  🔍 ${episodeLabel} - MISSING - Would search`);
-            episodesToSearch.push({
-              seriesTitle: show.title,
-              episodeId: episode.id,
-              label: episodeLabel,
+          const itemLabel = svcCfg.formatItemLabel(item);
+          const itemId = svcCfg.getContentId(item);
+
+          // Check if already in queue
+          if (queuedIds.has(itemId)) {
+            if (DEBUG) this.log(`  📥 ${itemLabel} - ALREADY IN QUEUE - Skipping`);
+            continue;
+          }
+
+          // Check if released
+          const { isReleased, releaseDate } = this.isContentReleased(item, svcCfg.contentType);
+          if (!isReleased) {
+            if (DEBUG) {
+              const dateStr = releaseDate ? new Date(releaseDate).toISOString().split('T')[0] : 'unknown';
+              this.log(`  ⏰ ${itemLabel} - NOT RELEASED YET (${dateStr}) - Skipping`);
+            }
+            continue;
+          }
+
+          // Case 1: Missing file
+          if (!item.hasFile) {
+            if (DEBUG) this.log(`  🔍 ${itemLabel} - MISSING - Would search`);
+            itemsToSearch.push({
+              title: content.title,
+              year: content.year,
+              itemId: itemId,
+              label: itemLabel,
               reason: 'missing'
             });
             continue;
           }
 
-          // Case 2: Episode has file, check quality
-          if (episode.episodeFile && cutoffQualityId) {
-            const fileQuality = episode.episodeFile.quality?.quality?.name;
-            const fileQualityId = episode.episodeFile.quality?.quality?.id;
+          // Case 2: Check quality upgrade
+          const fileObj = svcCfg.contentType === 'episode' ? item.episodeFile : item.movieFile;
+          if (fileObj && cutoffQualityId) {
+            const fileQuality = fileObj.quality?.quality?.name;
+            const fileQualityId = fileObj.quality?.quality?.id;
 
-            // Build a quality ranking based on the profile's items order
-            const qualityRanking = [];
-            for (const item of qualityProfile.items) {
-              if (item.quality) {
-                qualityRanking.push({ id: item.quality.id, name: item.quality.name });
-              } else if (item.items) {
-                // It's a group, add all items in the group
-                for (const subItem of item.items) {
-                  if (subItem.quality) {
-                    qualityRanking.push({ id: subItem.quality.id, name: subItem.quality.name });
-                  }
-                }
-              }
-            }
+            const qualityRanking = this.buildQualityRanking(qualityProfile);
 
-            const fileQualityIndex = qualityRanking.findIndex(q => q.id === fileQualityId);
-            const cutoffQualityIndex = qualityRanking.findIndex(q => q.id === cutoffQualityId);
+            if (this.needsQualityUpgrade(fileQualityId, cutoffQualityId, qualityRanking)) {
+              const cutoffQualityObj = qualityRanking.find(q => q.id === cutoffQualityId);
+              const cutoffQualityName = cutoffQualityObj ? cutoffQualityObj.name : 'Unknown';
+              const fileQualityIndex = qualityRanking.findIndex(q => q.id === fileQualityId);
+              const cutoffQualityIndex = qualityRanking.findIndex(q => q.id === cutoffQualityId);
 
-            // Find cutoff quality name for display
-            const cutoffQualityObj = qualityRanking.find(q => q.id === cutoffQualityId);
-            const cutoffQualityName = cutoffQualityObj ? cutoffQualityObj.name : 'Unknown';
-
-            if (fileQualityIndex !== -1 && cutoffQualityIndex !== -1 && fileQualityIndex < cutoffQualityIndex) {
               if (DEBUG) {
-                this.log(`  📈 ${episodeLabel} - UPGRADE NEEDED - Current: ${fileQuality} (index ${fileQualityIndex}), Cutoff: ${cutoffQualityName} (index ${cutoffQualityIndex}) - Would search`);
+                this.log(`  📈 ${itemLabel} - UPGRADE NEEDED - Current: ${fileQuality} (index ${fileQualityIndex}), Cutoff: ${cutoffQualityName} (index ${cutoffQualityIndex}) - Would search`);
               }
-              episodesToSearch.push({
-                seriesTitle: show.title,
-                episodeId: episode.id,
-                label: episodeLabel,
+              itemsToSearch.push({
+                title: content.title,
+                year: content.year,
+                itemId: itemId,
+                label: itemLabel,
                 reason: `upgrade (${fileQuality} → ${cutoffQualityName})`
               });
-            } else {
-              if (DEBUG) {
-                this.log(`  ✅ ${episodeLabel} - OK - Quality: ${fileQuality} (index ${fileQualityIndex}), Cutoff: ${cutoffQualityName} (index ${cutoffQualityIndex})`);
-              }
+            } else if (DEBUG) {
+              const cutoffQualityObj = qualityRanking.find(q => q.id === cutoffQualityId);
+              const cutoffQualityName = cutoffQualityObj ? cutoffQualityObj.name : 'Unknown';
+              const fileQualityIndex = qualityRanking.findIndex(q => q.id === fileQualityId);
+              const cutoffQualityIndex = qualityRanking.findIndex(q => q.id === cutoffQualityId);
+              this.log(`  ✅ ${itemLabel} - OK - Quality: ${fileQuality} (index ${fileQualityIndex}), Cutoff: ${cutoffQualityName} (index ${cutoffQualityIndex})`);
             }
           }
         }
       }
 
-      // 5️⃣ Summary
-      if(DEBUG) this.log(`📋 Summary: Found ${episodesToSearch.length} episodes that need searching`);
+      // 6️⃣ Summary and search
+      if (DEBUG) this.log(`📋 Summary: Found ${itemsToSearch.length} ${svcCfg.itemLabel} that need searching`);
 
-      if (episodesToSearch.length > 0) {
-        this.log('🎯 Episodes to search:');
-        for (const ep of episodesToSearch) {
-          this.log(`  • ${ep.seriesTitle} - ${ep.label} [${ep.reason}]`);
+      if (itemsToSearch.length > 0) {
+        this.log(`🎯 ${svcCfg.itemLabel.charAt(0).toUpperCase() + svcCfg.itemLabel.slice(1)} to search:`);
+        for (const item of itemsToSearch) {
+          const displayLabel = svcCfg.contentType === 'episode'
+            ? `${item.title} - ${item.label}`
+            : item.label;
+          this.log(`  • ${displayLabel} [${item.reason}]`);
         }
 
-        for (const ep of episodesToSearch) {
-           await this.searchEpisode(ep.episodeId);
+        for (const item of itemsToSearch) {
+          await svcCfg.searchFunction(item.itemId);
         }
       } else {
-        this.log('✅ All monitored episodes are either present or meet quality requirements');
+        this.log(`✅ All monitored ${svcCfg.itemLabel} are either present or meet quality requirements`);
       }
 
       // Update last successful search time
-      await this.updateLastSearchCompleted('sonarr');
-      this.log('💾 Updated last Sonarr search completion time');
+      await this.updateLastSearchCompleted(service);
+      if (DEBUG) this.log(`💾 Updated last ${service} search completion time`);
 
     } catch (err) {
-      this.log('❌ Error during Sonarr refresh/missing search:', err.message);
+      this.log(`❌ Error during ${service} refresh/missing search:`, err.message);
     } finally {
-      this.amuleManager.releaseSearchLock();
-      this.broadcast({ type: 'search-lock', locked: false });
-      this.log('🔓 Search lock released after Sonarr automatic search');
+      this.releaseSearchLock(service);
     }
   }
 
-  // Check if a search should be triggered based on last completion time
+  // Trigger Radarr to search for missing movies
+  async triggerRadarrMissingSearch() {
+    return this.triggerMissingSearch('radarr');
+  }
+
+  // Trigger Sonarr to search for missing episodes
+  async triggerSonarrMissingSearch() {
+    return this.triggerMissingSearch('sonarr');
+  }
+
+  // Check and trigger search if interval has elapsed
   async checkAndTriggerSearch(service) {
     const state = await this.readState();
     const intervalMs = service === 'sonarr'
-      ? config.SONARR_SEARCH_INTERVAL_HOURS * 60 * 60 * 1000
-      : config.RADARR_SEARCH_INTERVAL_HOURS * 60 * 60 * 1000;
+      ? hoursToMs(config.SONARR_SEARCH_INTERVAL_HOURS)
+      : hoursToMs(config.RADARR_SEARCH_INTERVAL_HOURS);
+
+    if(intervalMs === 0) {
+        return;
+    }
 
     const lastCompleted = service === 'sonarr'
       ? state.lastSonarrSearchCompleted
@@ -649,7 +545,7 @@ class ArrManager extends BaseModule {
     const timeSinceLastRun = now - lastCompletedTime;
 
     if (timeSinceLastRun >= intervalMs) {
-      const hoursOverdue = Math.floor((timeSinceLastRun - intervalMs) / (60 * 60 * 1000));
+      const hoursOverdue = Math.floor((timeSinceLastRun - intervalMs) / MS_PER_HOUR);
       this.log(`⏰ ${service.charAt(0).toUpperCase() + service.slice(1)} search interval elapsed (${hoursOverdue}h overdue), triggering now...`);
       if (service === 'sonarr') {
         await this.triggerSonarrMissingSearch();
@@ -667,12 +563,12 @@ class ArrManager extends BaseModule {
 
       // Check immediately on startup
       this.checkAndTriggerSearch('sonarr');
-
-      // Then check every 10 minutes if we need to trigger a search
-      setInterval(() => this.checkAndTriggerSearch('sonarr'), 10 * 60 * 1000);
     } else {
       this.log('ℹ️  Sonarr automatic search scheduling disabled (set SONARR_SEARCH_INTERVAL_HOURS > 0 to enable)');
     }
+
+    // Setup automatic searches (user may have enabled it from the settings panel after initialization)
+    setInterval(() => this.checkAndTriggerSearch('sonarr'), minutesToMs(10));
 
     // Schedule Radarr searches if configured
     if (config.RADARR_SEARCH_INTERVAL_HOURS > 0) {
@@ -680,12 +576,12 @@ class ArrManager extends BaseModule {
 
       // Check immediately on startup
       this.checkAndTriggerSearch('radarr');
-
-      // Then check every 10 minutes if we need to trigger a search
-      setInterval(() => this.checkAndTriggerSearch('radarr'), 10 * 60 * 1000);
     } else {
       this.log('ℹ️  Radarr automatic search scheduling disabled (set RADARR_SEARCH_INTERVAL_HOURS > 0 to enable)');
     }
+
+    // Setup automatic searches (user may have enabled it from the settings panel after initialization)
+    setInterval(() => this.checkAndTriggerSearch('radarr'), minutesToMs(10));
   }
 }
 

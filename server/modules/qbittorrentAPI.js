@@ -5,7 +5,9 @@
 
 const express = require('express');
 const BaseModule = require('../lib/BaseModule');
-const { createQBittorrentHandler } = require('../lib/qbittorrent');
+const QBittorrentHandler = require('../lib/qbittorrent/QBittorrentHandler');
+const config = require('./config');
+const { parseBasicAuth, verifyPassword } = require('../lib/authUtils');
 
 class QBittorrentAPI extends BaseModule {
   constructor() {
@@ -13,7 +15,50 @@ class QBittorrentAPI extends BaseModule {
     this.amuleManager = null;
     this.hashStore = null;
     this.configManager = null;
-    this.handler = null;
+    this.handler = new QBittorrentHandler();
+  }
+
+  /**
+   * Middleware to check HTTP Basic Authentication for qBittorrent API
+   */
+  async checkBasicAuth(req, res, next) {
+    const authEnabled = config.getAuthEnabled();
+
+    if (!authEnabled) {
+      return next();
+    }
+
+    const credentials = parseBasicAuth(req.headers.authorization);
+
+    if (!credentials) {
+      res.setHeader('WWW-Authenticate', 'Basic realm="qBittorrent"');
+      return res.status(401).send('Unauthorized: Authentication required');
+    }
+
+    try {
+      if (!credentials.password) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="qBittorrent"');
+        return res.status(401).send('Unauthorized: Password required');
+      }
+
+      const hashedPassword = config.getAuthPassword();
+
+      if (!hashedPassword) {
+        return next();
+      }
+
+      const isValid = await verifyPassword(credentials.password, hashedPassword);
+
+      if (isValid) {
+        next();
+      } else {
+        res.setHeader('WWW-Authenticate', 'Basic realm="qBittorrent"');
+        res.status(401).send('Unauthorized: Invalid credentials');
+      }
+    } catch (err) {
+      this.log('qBittorrent Basic Auth error:', err);
+      res.status(500).send('Internal server error');
+    }
   }
 
   /**
@@ -35,94 +80,49 @@ class QBittorrentAPI extends BaseModule {
   }
 
   /**
-   * Update handler when dependencies are set
+   * Update handler when all dependencies are available
    */
   updateHandler() {
     if (this.amuleManager && this.hashStore && this.configManager) {
-      this.handler = createQBittorrentHandler(
-        () => this.amuleManager.getClient(),
-        this.hashStore,
-        () => this.configManager.isFirstRun()
-      );
-    }
-  }
-
-  /**
-   * Ensure handler is initialized
-   */
-  ensureHandler(res) {
-    if (!this.handler) {
-      res.status(500).json({
-        error: 'qBittorrent handler not initialized'
+      this.handler.setDependencies({
+        getAmuleClient: () => this.amuleManager.getClient(),
+        hashStore: this.hashStore,
+        config: config,
+        isFirstRun: () => this.configManager.isFirstRun()
       });
-      return false;
     }
-    return true;
   }
 
   /**
    * Register all qBittorrent API routes
    */
   registerRoutes(app) {
+    // Auth endpoints (no authentication required)
+    app.post('/api/v2/auth/login', this.handler.login);
+    app.post('/api/v2/auth/logout', this.handler.logout);
+
+    // Protected router with Basic Auth middleware
     const router = express.Router();
+    router.use(this.checkBasicAuth.bind(this));
 
     // App endpoints
-    router.get('/app/version', (req, res) => {
-      if (this.ensureHandler(res)) this.handler.getVersion(req, res);
-    });
-
-    router.get('/app/webapiVersion', (req, res) => {
-      if (this.ensureHandler(res)) this.handler.getWebApiVersion(req, res);
-    });
-
-    router.get('/app/preferences', (req, res) => {
-      if (this.ensureHandler(res)) this.handler.getPreferences(req, res);
-    });
-
-    // Auth endpoints
-    router.post('/auth/login', (req, res) => {
-      if (this.ensureHandler(res)) this.handler.login(req, res);
-    });
-
-    router.post('/auth/logout', (req, res) => {
-      if (this.ensureHandler(res)) this.handler.logout(req, res);
-    });
+    router.get('/app/version', this.handler.getVersion);
+    router.get('/app/webapiVersion', this.handler.getWebApiVersion);
+    router.get('/app/preferences', this.handler.getPreferences);
 
     // Torrents endpoints
-    router.get('/torrents/info', (req, res) => {
-      if (this.ensureHandler(res)) this.handler.getTorrentsInfo(req, res);
-    });
+    router.get('/torrents/info', this.handler.getTorrentsInfo);
+    router.post('/torrents/add', this.handler.addTorrent);
+    router.post('/torrents/delete', this.handler.deleteTorrent);
+    router.post('/torrents/pause', this.handler.pauseTorrent);
+    router.post('/torrents/resume', this.handler.resumeTorrent);
+    router.get('/torrents/categories', this.handler.getCategories);
+    router.post('/torrents/createCategory', this.handler.createCategory);
 
-    router.post('/torrents/add', (req, res) => {
-      if (this.ensureHandler(res)) this.handler.addTorrent(req, res);
-    });
-
-    router.post('/torrents/delete', (req, res) => {
-      if (this.ensureHandler(res)) this.handler.deleteTorrent(req, res);
-    });
-
-    router.post('/torrents/pause', (req, res) => {
-      if (this.ensureHandler(res)) this.handler.pauseTorrent(req, res);
-    });
-
-    router.post('/torrents/resume', (req, res) => {
-      if (this.ensureHandler(res)) this.handler.resumeTorrent(req, res);
-    });
-
-    router.get('/torrents/categories', (req, res) => {
-      if (this.ensureHandler(res)) this.handler.getCategories(req, res);
-    });
-
-    router.post('/torrents/createCategory', (req, res) => {
-      if (this.ensureHandler(res)) this.handler.createCategory(req, res);
-    });
-
-    // Mount router under /api/v2
+    // Mount protected router under /api/v2
     app.use('/api/v2', router);
 
-    if (this.log) {
-      this.log('🔌 qBittorrent API routes registered');
-    }
+    this.log('🗃️ qBittorrent API routes registered with Basic Auth protection');
   }
 }
 

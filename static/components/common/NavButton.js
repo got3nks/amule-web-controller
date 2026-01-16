@@ -13,11 +13,12 @@ const { createElement: h } = React;
  * Navigation button component
  * @param {string} icon - Icon name
  * @param {string} label - Button label
+ * @param {string} shortLabel - Optional shorter label for tablet viewport
  * @param {string} view - View identifier
  * @param {boolean} active - Whether this button is currently active
  * @param {function} onNavigate - Navigation handler function
  */
-const NavButton = React.memo(({ icon, label, view, active, onNavigate }) => {
+const NavButton = React.memo(({ icon, label, shortLabel, view, active, onNavigate }) => {
   return h('button', {
     onClick: () => onNavigate(view),
     className: `flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-3 rounded-lg transition-all text-base sm:text-lg font-medium ${
@@ -27,7 +28,12 @@ const NavButton = React.memo(({ icon, label, view, active, onNavigate }) => {
     }`
   },
     h(Icon, { name: icon, size: 20 }),
-    h('span', null, label)
+    shortLabel
+      ? h('span', null,
+          h('span', { className: 'lg:hidden' }, shortLabel),
+          h('span', { className: 'hidden lg:inline' }, label)
+        )
+      : h('span', null, label)
   );
 });
 

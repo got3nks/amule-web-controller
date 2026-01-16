@@ -5,6 +5,95 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0]
+
+### ✨ Added
+
+#### **Authentication & Security**
+- **Web UI Password Protection** - Optional password authentication with brute force protection (exponential backoff and IP lockout after 10 failed attempts)
+- **API Authentication** - Torznab and qBittorrent APIs now require authentication when web UI auth is enabled (API key = UI password)
+
+#### **Download History**
+- **History Tracking** - Optional persistent download history with filtering and search
+
+#### **Mobile Redesign**
+- **New Home Dashboard** - Mobile-optimized widgets for quick overview
+- **Bottom Navigation Bar** - Easy thumb-accessible navigation
+- **Optimized Card Views** - Improved mobile layouts for all views
+- **Mobile Table Features** - Sort and filter controls adapted for touch
+
+#### **Bulk Actions**
+- **Download Selection Mode** - Mass pause/resume, category assignment, and delete
+- **Shared Files Selection** - Bulk ED2K link export
+
+#### **Enhanced File Views**
+- **Detailed Info Modals** - Rich information dialogs for downloads and shared files
+- **Context Menus** - Right-click quick actions on downloads and shared files
+- **Filter by Filename** - Text filter for downloads, uploads, shared files, and search results
+- **Items-per-page Selector** - Configurable page sizes for all views
+- **ED2K Link Export** - Export links from shared files
+
+#### **System Monitoring**
+- **Disk Space Indicator** - Real-time disk usage in footer
+- **CPU Usage Indicator** - System CPU load in footer
+- **Hostname Resolution** - Peer hostnames displayed in uploads view
+
+#### **UI Enhancements**
+- **Version Badge** - Automatic update check and app version info
+- **Font Size Toggle** - Adjustable UI font size
+- **Reload Shared Folders Button** - New button in Shared Files view to rescan shared folders from disk
+
+### 🔧 Changed
+
+#### **Build & Deployment**
+- **JavaScript Bundling** - All frontend JS bundled into single file using esbuild
+- **Updated bcrypt** - Version 6.0.0 removes deprecated dependencies
+
+#### **Code Refactoring**
+- **Config Management** - Refactored config.js/configAPI.js with improved secrets handling
+- **Sensitive Env Vars** - Environment variables for passwords/API keys now always override config.json and lock UI fields
+- **Torznab/qBittorrent APIs** - Refactored indexer and download client implementations
+- **Frontend Architecture** - Massive app.js refactoring with contexts, consolidated state management, simplified views
+- **Batched WebSocket Updates** - Reduced UI re-renders via autoRefreshManager
+- **Deduplicated Code** - Consolidated Sonarr/Radarr logic in configTester.js and arrManager.js
+
+#### **UI Improvements**
+- **Server Disconnect Button** - Only shown on currently connected server
+- **Header Tooltips** - Added tooltips on navigation buttons
+- **Tablet Layout Fixes** - Improved sidebar and view layouts for tablets
+- **Form Element Styles** - Unified form styling across views
+- **Settings Page** - Reduced horizontal padding on mobile for more content width
+
+### 🐛 Fixed
+
+- **Arr Integration** - Fixed automatic search not initializing when enabled from settings after startup
+- **Sonarr TBA Episodes** - Unreleased episodes (TBA) no longer trigger searches
+- **Loading States** - Fixed "no files" message shown instead of "loading" on slow connections
+- **Chart Rendering** - Fixed laggy home view by deferring chart rendering
+- **Mobile Scroll** - Fixed viewport auto-scroll to top on page changes
+- **Theme Persistence** - Theme selection now properly remembered
+- **Light Mode** - Fixed progress bar text visibility in downloads
+- **iOS Safari** - Fixed CSS viewport issues on iOS Safari
+- **Loading Spinner** - Fixed spinner CSS styling
+
+### 📝 Documentation
+
+- **Restructured Docs** - Separated into focused guides (Configuration, Integrations, GeoIP, API, Development)
+- **Docker Hub Link** - Added link to Docker Hub repository
+- **Auth Documentation** - Added authentication setup for Torznab and qBittorrent APIs
+
+## [2.1.0]
+
+### ✨ Added
+- Comprehensive monitoring dashboard on Home view (desktop)
+- Real-time active downloads and uploads widgets
+- 24h statistics with charts and metric cards
+- Quick search integration on dashboard
+- Auto-refresh every 15 seconds
+
+### 🔧 Changed
+- Improve Torznab category support for Prowlarr
+
 ## [2.0.0]
 
 ### 🎉 Major Release - Complete Refactoring & New Features

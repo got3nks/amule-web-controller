@@ -24,7 +24,7 @@ const PasswordField = ({ value, onChange, placeholder, disabled = false }) => {
       onChange: (e) => onChange(e.target.value),
       placeholder,
       disabled,
-      className: `w-full px-3 py-2 pr-10 border rounded-lg
+      className: `w-full px-3 py-1.5 sm:py-2 pr-10 text-base sm:text-sm border rounded-lg
         bg-white dark:bg-gray-700
         border-gray-300 dark:border-gray-600
         text-gray-900 dark:text-gray-100

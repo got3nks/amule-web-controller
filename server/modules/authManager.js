@@ -1,0 +1,308 @@
+/**
+ * Authentication Manager Module
+ * Manages authentication state, password verification, and brute force protection
+ */
+
+const Database = require('better-sqlite3');
+const path = require('path');
+const BaseModule = require('../lib/BaseModule');
+const config = require('./config');
+const { verifyPassword: verifyPasswordUtil } = require('../lib/authUtils');
+const { minutesToMs } = require('../lib/timeRange');
+
+class AuthManager extends BaseModule {
+  constructor() {
+    super();
+    this.sessionDB = null;
+  }
+
+  /**
+   * Initialize session database
+   */
+  initSessionDB() {
+    const sessionDbPath = path.join(config.getDataDir(), 'sessions.db');
+    this.sessionDB = new Database(sessionDbPath);
+
+    // Create sessions table if not exists (better-sqlite3-session-store will use this)
+    this.sessionDB.exec(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        sid TEXT PRIMARY KEY,
+        sess TEXT NOT NULL,
+        expire INTEGER NOT NULL
+      )
+    `);
+
+    // Create failed_attempts table for brute force protection
+    this.sessionDB.exec(`
+      CREATE TABLE IF NOT EXISTS failed_attempts (
+        ip TEXT PRIMARY KEY,
+        count INTEGER NOT NULL,
+        first_attempt INTEGER NOT NULL,
+        last_attempt INTEGER NOT NULL,
+        blocked_until INTEGER
+      )
+    `);
+
+    // Create index for cleanup queries
+    this.sessionDB.exec(`
+      CREATE INDEX IF NOT EXISTS idx_failed_attempts_last_attempt
+      ON failed_attempts(last_attempt)
+    `);
+
+    this.log('🔐 Session database initialized with failed attempts tracking');
+  }
+
+  /**
+   * Get session database instance
+   */
+  getSessionDB() {
+    if (!this.sessionDB) {
+      this.initSessionDB();
+    }
+    return this.sessionDB;
+  }
+
+  /**
+   * Start auth manager
+   */
+  start() {
+    // Initialize database (will create tables if needed)
+    this.getSessionDB();
+
+    this.log('🔐 Auth manager started with persistent brute force protection');
+  }
+
+  /**
+   * Stop auth manager
+   */
+  stop() {
+    if (this.sessionDB) {
+      this.sessionDB.close();
+      this.sessionDB = null;
+    }
+  }
+
+  /**
+   * Clean expired attempts (older than 15 minutes since last attempt)
+   * Called on each login request to keep database clean
+   */
+  cleanExpiredAttempts() {
+    const db = this.getSessionDB();
+    const fifteenMinutesAgo = Date.now() - minutesToMs(15);
+
+    try {
+      const stmt = db.prepare('DELETE FROM failed_attempts WHERE last_attempt < ?');
+      const result = stmt.run(fifteenMinutesAgo);
+
+      if (result.changes > 0) {
+        this.log(`🧹 Cleaned ${result.changes} expired failed attempt record(s)`);
+      }
+    } catch (err) {
+      this.log('⚠️  Error cleaning expired attempts:', err.message);
+    }
+  }
+
+  /**
+   * Check if IP is currently blocked
+   * @param {string} ip - Client IP address
+   * @returns {boolean} True if IP is blocked
+   */
+  checkIPBlocked(ip) {
+    // Clean expired attempts first (done on each check to avoid setInterval)
+    this.cleanExpiredAttempts();
+
+    const db = this.getSessionDB();
+
+    try {
+      const stmt = db.prepare('SELECT blocked_until FROM failed_attempts WHERE ip = ?');
+      const row = stmt.get(ip);
+
+      if (!row || !row.blocked_until) {
+        return false;
+      }
+
+      const now = Date.now();
+
+      // Check if block has expired
+      if (now > row.blocked_until) {
+        // Block expired, clear it
+        const deleteStmt = db.prepare('DELETE FROM failed_attempts WHERE ip = ?');
+        deleteStmt.run(ip);
+        return false;
+      }
+
+      return true;
+    } catch (err) {
+      this.log('⚠️  Error checking IP block:', err.message);
+      return false;
+    }
+  }
+
+  /**
+   * Get attempt count for IP
+   * @param {string} ip - Client IP address
+   * @returns {number} Number of failed attempts
+   */
+  getAttemptCount(ip) {
+    const db = this.getSessionDB();
+
+    try {
+      const stmt = db.prepare('SELECT count FROM failed_attempts WHERE ip = ?');
+      const row = stmt.get(ip);
+      return row ? row.count : 0;
+    } catch (err) {
+      this.log('⚠️  Error getting attempt count:', err.message);
+      return 0;
+    }
+  }
+
+  /**
+   * Get delay for current attempt count
+   * @param {number} count - Number of failed attempts
+   * @returns {number} Delay in milliseconds
+   */
+  getDelayForAttempts(count) {
+    if (count <= 3) return 0;           // No delay for first 3 attempts
+    if (count <= 6) return 2000;        // 2 seconds for attempts 4-6
+    if (count <= 9) return 5000;        // 5 seconds for attempts 7-9
+    return 0;                            // No delay after blocking (will be blocked anyway)
+  }
+
+  /**
+   * Record failed login attempt
+   * @param {string} ip - Client IP address
+   */
+  recordFailedAttempt(ip) {
+    const db = this.getSessionDB();
+    const now = Date.now();
+
+    try {
+      // Check if IP already has failed attempts
+      const selectStmt = db.prepare('SELECT * FROM failed_attempts WHERE ip = ?');
+      const existing = selectStmt.get(ip);
+
+      if (!existing) {
+        // First failed attempt
+        const insertStmt = db.prepare(`
+          INSERT INTO failed_attempts (ip, count, first_attempt, last_attempt, blocked_until)
+          VALUES (?, ?, ?, ?, ?)
+        `);
+        insertStmt.run(ip, 1, now, now, null);
+        this.log(`⚠️  Failed login attempt from ${ip} (1 attempt)`);
+      } else {
+        // Increment attempt count
+        const newCount = existing.count + 1;
+        let blockedUntil = existing.blocked_until;
+
+        // Block after 10 failed attempts
+        if (newCount >= 10) {
+          blockedUntil = now + minutesToMs(15);
+          this.log(`🚫 IP ${ip} blocked for 15 minutes after ${newCount} failed attempts`);
+        } else {
+          this.log(`⚠️  Failed login attempt from ${ip} (${newCount} attempts)`);
+        }
+
+        const updateStmt = db.prepare(`
+          UPDATE failed_attempts
+          SET count = ?, last_attempt = ?, blocked_until = ?
+          WHERE ip = ?
+        `);
+        updateStmt.run(newCount, now, blockedUntil, ip);
+      }
+    } catch (err) {
+      this.log('⚠️  Error recording failed attempt:', err.message);
+    }
+  }
+
+  /**
+   * Record successful login (clear failed attempts)
+   * @param {string} ip - Client IP address
+   */
+  recordSuccessfulLogin(ip) {
+    const db = this.getSessionDB();
+
+    try {
+      const stmt = db.prepare('DELETE FROM failed_attempts WHERE ip = ?');
+      const result = stmt.run(ip);
+
+      if (result.changes > 0) {
+        this.log(`✅ Successful login from ${ip}, cleared failed attempts`);
+      }
+    } catch (err) {
+      this.log('⚠️  Error clearing failed attempts:', err.message);
+    }
+  }
+
+  /**
+   * Verify password against hashed password
+   * Delegates to shared authUtils for consistency across the app
+   * @param {string} inputPassword - Plain text password from user
+   * @param {string} hashedPassword - Bcrypt hashed password from config
+   * @returns {Promise<boolean>} True if password matches
+   */
+  async verifyPassword(inputPassword, hashedPassword) {
+    return verifyPasswordUtil(inputPassword, hashedPassword);
+  }
+
+  /**
+   * Validate session by checking if it exists and is not expired
+   * @param {string} sessionId - Session ID from cookie
+   * @returns {boolean} True if session is valid
+   */
+  validateSession(sessionId) {
+    if (!sessionId) {
+      return false;
+    }
+
+    const db = this.getSessionDB();
+
+    try {
+      // Query session from database
+      const stmt = db.prepare('SELECT sess, expire FROM sessions WHERE sid = ?');
+      const row = stmt.get(sessionId);
+
+      if (!row) {
+        return false;
+      }
+
+      // Check if session is expired
+      const now = Date.now();
+      if (row.expire < now) {
+        return false;
+      }
+
+      // Parse session data and check if authenticated
+      const sess = JSON.parse(row.sess);
+      return sess.authenticated === true;
+    } catch (err) {
+      this.log('Error validating session:', err.message);
+      return false;
+    }
+  }
+
+  /**
+   * Get time remaining on IP block
+   * @param {string} ip - Client IP address
+   * @returns {number|null} Milliseconds remaining, or null if not blocked
+   */
+  getBlockTimeRemaining(ip) {
+    const db = this.getSessionDB();
+
+    try {
+      const stmt = db.prepare('SELECT blocked_until FROM failed_attempts WHERE ip = ?');
+      const row = stmt.get(ip);
+
+      if (!row || !row.blocked_until) {
+        return null;
+      }
+
+      const remaining = row.blocked_until - Date.now();
+      return remaining > 0 ? remaining : null;
+    } catch (err) {
+      this.log('⚠️  Error getting block time:', err.message);
+      return null;
+    }
+  }
+}
+
+module.exports = new AuthManager();

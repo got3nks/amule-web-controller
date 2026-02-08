@@ -7,9 +7,27 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { spawn, execSync } = require('child_process');
 const BaseModule = require('./BaseModule');
 const config = require('../modules/config');
+
+// Common paths where pipx/pip install apprise
+const APPRISE_SEARCH_PATHS = [
+  // System PATH (checked via 'which' or direct execution)
+  'apprise',
+  // pipx default locations
+  path.join(os.homedir(), '.local', 'bin', 'apprise'),
+  '/root/.local/bin/apprise',
+  // Common Linux paths
+  '/usr/local/bin/apprise',
+  '/usr/bin/apprise',
+  // Python user install
+  path.join(os.homedir(), '.local', 'bin', 'apprise'),
+  // Homebrew on macOS
+  '/opt/homebrew/bin/apprise',
+  '/usr/local/bin/apprise'
+];
 
 class NotificationManager extends BaseModule {
   constructor() {
@@ -17,6 +35,7 @@ class NotificationManager extends BaseModule {
     this.configPath = null;
     this.notificationConfig = null;
     this.appriseAvailable = null; // cached result
+    this.apprisePath = null; // full path to apprise binary
   }
 
   /**
@@ -31,24 +50,49 @@ class NotificationManager extends BaseModule {
   }
 
   /**
+   * Find apprise binary in common installation paths
+   * @returns {{path: string, version: string}|null}
+   */
+  _findApprise() {
+    for (const apprisePath of APPRISE_SEARCH_PATHS) {
+      try {
+        // For non-absolute paths (just 'apprise'), try direct execution
+        // For absolute paths, check if file exists first
+        if (path.isAbsolute(apprisePath)) {
+          if (!fs.existsSync(apprisePath)) {
+            continue;
+          }
+        }
+
+        const result = execSync(`"${apprisePath}" --version 2>&1`, {
+          encoding: 'utf8',
+          timeout: 5000
+        });
+        const version = result.trim().split('\n')[0];
+        return { path: apprisePath, version };
+      } catch (err) {
+        // Try next path
+        continue;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Check if Apprise CLI is available
    * @returns {Promise<{available: boolean, version?: string, error?: string}>}
    */
   async checkAppriseAvailable() {
     return new Promise((resolve) => {
-      try {
-        const result = execSync('apprise --version 2>&1', { encoding: 'utf8', timeout: 5000 });
-        const version = result.trim().split('\n')[0];
-        this.appriseAvailable = { available: true, version };
-        resolve(this.appriseAvailable);
-      } catch (err) {
-        if (err.code === 'ENOENT' || (err.message && err.message.includes('not found'))) {
-          this.appriseAvailable = { available: false, error: 'Apprise CLI not installed' };
-        } else {
-          this.appriseAvailable = { available: false, error: err.message };
-        }
-        resolve(this.appriseAvailable);
+      const found = this._findApprise();
+      if (found) {
+        this.apprisePath = found.path;
+        this.appriseAvailable = { available: true, version: found.version };
+      } else {
+        this.apprisePath = null;
+        this.appriseAvailable = { available: false, error: 'Apprise CLI not installed' };
       }
+      resolve(this.appriseAvailable);
     });
   }
 
@@ -56,14 +100,15 @@ class NotificationManager extends BaseModule {
    * Synchronous check for Apprise (called during init)
    */
   _checkAppriseAvailable() {
-    try {
-      const result = execSync('apprise --version 2>&1', { encoding: 'utf8', timeout: 5000 });
-      const version = result.trim().split('\n')[0];
-      this.appriseAvailable = { available: true, version };
-      this.log(`[NotificationManager] Apprise available: ${version}`);
-    } catch (err) {
+    const found = this._findApprise();
+    if (found) {
+      this.apprisePath = found.path;
+      this.appriseAvailable = { available: true, version: found.version };
+      this.log(`[NotificationManager] Apprise available: ${found.version} (${found.path})`);
+    } else {
+      this.apprisePath = null;
       this.appriseAvailable = { available: false, error: 'Apprise CLI not installed' };
-      this.log('[NotificationManager] Apprise CLI not available');
+      this.log('[NotificationManager] Apprise CLI not available (checked: ~/.local/bin, /usr/local/bin, /usr/bin)');
     }
   }
 
@@ -496,7 +541,10 @@ class NotificationManager extends BaseModule {
         ...urls
       ];
 
-      const child = spawn('apprise', args, {
+      // Use the found apprise path, fallback to 'apprise' for PATH lookup
+      const appriseBin = this.apprisePath || 'apprise';
+
+      const child = spawn(appriseBin, args, {
         stdio: ['pipe', 'pipe', 'pipe']
       });
 
@@ -513,7 +561,7 @@ class NotificationManager extends BaseModule {
 
       child.on('error', (err) => {
         if (err.code === 'ENOENT') {
-          reject(new Error('Apprise CLI not found. Install with: pipx install apprise'));
+          reject(new Error('Apprise CLI not found. Install with: pipx install apprise && pipx ensurepath'));
         } else {
           reject(err);
         }

@@ -18,6 +18,7 @@ const {
 } = require('./downloadNormalizer');
 const { assembleUnifiedItems } = require('./unifiedItemBuilder');
 const moveOperationManager = require('./MoveOperationManager');
+const config = require('../modules/config');
 
 // Singleton managers - imported directly instead of injected
 const amuleManager = require('../modules/amuleManager');
@@ -25,6 +26,9 @@ const rtorrentManager = require('../modules/rtorrentManager');
 const geoIPManager = require('../modules/geoIPManager');
 const categoryManager = require('./CategoryManager');
 const hostnameResolver = require('./hostnameResolver');
+
+// Demo mode generator (lazy-loaded)
+let demoGenerator = null;
 
 class DataFetchService extends BaseModule {
   constructor() {
@@ -298,6 +302,21 @@ class DataFetchService extends BaseModule {
    * @returns {Promise<Object>} Batch data object
    */
   async getBatchData() {
+    // Demo mode - return generated fake data
+    if (config.DEMO_MODE) {
+      if (!demoGenerator) {
+        const DemoDataGenerator = require('./DemoDataGenerator');
+        demoGenerator = new DemoDataGenerator();
+      }
+      const demoData = demoGenerator.getBatchData();
+
+      // Cache for consistency with normal mode
+      this._cachedBatchData = demoData;
+      this._cacheTimestamp = Date.now();
+
+      return demoData;
+    }
+
     let allDownloads = [];
     let allShared = [];
     let allUploads = [];

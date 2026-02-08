@@ -9,6 +9,9 @@ const BaseModule = require('../lib/BaseModule');
 const config = require('./config');
 const dataFetchService = require('../lib/DataFetchService');
 
+// Demo mode generator (lazy-loaded)
+let demoGenerator = null;
+
 // Fields that require live data for sorting (not reliably in DB for inactive items)
 // All transfer stats (downloaded, uploaded, ratio, speeds) are enriched from live data when available
 const LIVE_DATA_SORT_FIELDS = ['downloadSpeed', 'uploadSpeed'];
@@ -21,6 +24,18 @@ const FIELD_TO_DB_COLUMN = {
 };
 
 class HistoryAPI extends BaseModule {
+  /**
+   * Get demo history data (lazy-loads DemoDataGenerator)
+   * @returns {Array} Demo history entries
+   */
+  _getDemoHistory() {
+    if (!demoGenerator) {
+      const DemoDataGenerator = require('../lib/DemoDataGenerator');
+      demoGenerator = new DemoDataGenerator();
+    }
+    return demoGenerator.generateHistory();
+  }
+
   /**
    * Enrich history entries with live data from unified items cache
    * @param {Array} entries - History entries from database
@@ -91,6 +106,21 @@ class HistoryAPI extends BaseModule {
     // Get history list
     app.get('/api/history', (req, res) => {
       try {
+        // Demo mode - return generated fake history
+        if (config.DEMO_MODE) {
+          const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+          const offset = parseInt(req.query.offset) || 0;
+          const demoHistory = this._getDemoHistory();
+          const entries = demoHistory.slice(offset, offset + limit);
+          return res.json({
+            entries,
+            total: demoHistory.length,
+            limit,
+            offset,
+            trackUsername: false
+          });
+        }
+
         if (!this.downloadHistoryDB) {
           return res.status(503).json({ error: 'History service not available' });
         }
@@ -243,6 +273,16 @@ class HistoryAPI extends BaseModule {
     // Returns up to 10k most recent entries with live data enrichment
     app.get('/api/history/all', (req, res) => {
       try {
+        // Demo mode - return generated fake history
+        if (config.DEMO_MODE) {
+          const demoHistory = this._getDemoHistory();
+          return res.json({
+            entries: demoHistory,
+            total: demoHistory.length,
+            trackUsername: false
+          });
+        }
+
         if (!this.downloadHistoryDB) {
           return res.status(503).json({ error: 'History service not available' });
         }
@@ -274,6 +314,19 @@ class HistoryAPI extends BaseModule {
     // Get history statistics
     app.get('/api/history/stats', (req, res) => {
       try {
+        // Demo mode - return fake stats
+        if (config.DEMO_MODE) {
+          const demoHistory = this._getDemoHistory();
+          const totalSize = demoHistory.reduce((sum, h) => sum + (h.size || 0), 0);
+          return res.json({
+            totalEntries: demoHistory.length,
+            totalSize,
+            completedCount: demoHistory.filter(h => h.status === 'completed').length,
+            deletedCount: 0,
+            activeCount: 0
+          });
+        }
+
         if (!this.downloadHistoryDB) {
           return res.status(503).json({ error: 'History service not available' });
         }
@@ -289,6 +342,17 @@ class HistoryAPI extends BaseModule {
     // Get single history entry by hash
     app.get('/api/history/:hash', (req, res) => {
       try {
+        // Demo mode - find in demo history
+        if (config.DEMO_MODE) {
+          const hash = req.params.hash.toLowerCase();
+          const demoHistory = this._getDemoHistory();
+          const entry = demoHistory.find(h => h.hash.toLowerCase() === hash);
+          if (!entry) {
+            return res.status(404).json({ error: 'Entry not found' });
+          }
+          return res.json(entry);
+        }
+
         if (!this.downloadHistoryDB) {
           return res.status(503).json({ error: 'History service not available' });
         }

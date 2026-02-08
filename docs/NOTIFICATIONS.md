@@ -125,6 +125,7 @@ brew install apprise
 
 # Linux (modern systems with externally-managed Python)
 pipx install apprise
+pipx ensurepath  # Adds ~/.local/bin to PATH (restart shell after)
 
 # Linux (older systems)
 pip install apprise
@@ -136,6 +137,8 @@ Verify installation:
 apprise --version
 ```
 
+> **Note**: If `apprise --version` fails after pipx install, either restart your shell or run `source ~/.bashrc` (or `~/.zshrc`). aMuTorrent also checks common paths like `~/.local/bin/apprise` automatically.
+
 ## Custom Event Scripts
 
 For advanced use cases beyond notifications, see [Custom Scripting](../scripts/README.md) to run your own scripts on download events.
@@ -144,9 +147,10 @@ For advanced use cases beyond notifications, see [Custom Scripting](../scripts/R
 
 ### "Apprise CLI Not Installed"
 
-- Install Apprise using `pipx install apprise` or `brew install apprise`
+- Install Apprise using `pipx install apprise && pipx ensurepath` or `brew install apprise`
+- Restart your shell (or run `source ~/.bashrc`) after pipx ensurepath
 - Verify with `apprise --version`
-- Ensure Apprise is in the system PATH
+- aMuTorrent automatically checks `~/.local/bin/apprise`, `/usr/local/bin/apprise`, and other common paths
 
 ### Notifications Not Sending
 

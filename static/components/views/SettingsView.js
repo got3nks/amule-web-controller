@@ -58,7 +58,7 @@ const SettingsView = () => {
     server: false,
     amule: false,
     integrations: false,
-    rtorrent: false,
+    bittorrent: false,
     directories: false,
     history: false,
     eventScripting: false,
@@ -81,6 +81,7 @@ const SettingsView = () => {
         server: { ...currentConfig.server },
         amule: { ...currentConfig.amule },
         rtorrent: { ...currentConfig.rtorrent },
+        qbittorrent: { ...currentConfig.qbittorrent || { enabled: false, host: '127.0.0.1', port: 8080, username: 'admin', password: '', useSsl: false } },
         directories: { ...currentConfig.directories },
         integrations: {
           sonarr: { ...currentConfig.integrations.sonarr },
@@ -108,6 +109,7 @@ const SettingsView = () => {
         auth: currentConfig.server?.auth?.password || '',
         amule: currentConfig.amule.password,
         rtorrent: currentConfig.rtorrent?.password || '',
+        qbittorrent: currentConfig.qbittorrent?.password || '',
         sonarr: currentConfig.integrations.sonarr.apiKey,
         radarr: currentConfig.integrations.radarr.apiKey,
         prowlarr: currentConfig.integrations?.prowlarr?.apiKey || ''
@@ -134,7 +136,12 @@ const SettingsView = () => {
 
       // Check rtorrent
       if (results.rtorrent && results.rtorrent.success === false) {
-        updates.rtorrent = true;
+        updates.bittorrent = true;
+      }
+
+      // Check qbittorrent
+      if (results.qbittorrent && results.qbittorrent.success === false) {
+        updates.bittorrent = true;
       }
 
       // Check directories
@@ -179,6 +186,9 @@ const SettingsView = () => {
     }
     if (unmasked.rtorrent?.password === '********') {
       delete unmasked.rtorrent.password;
+    }
+    if (unmasked.qbittorrent?.password === '********') {
+      delete unmasked.qbittorrent.password;
     }
     if (unmasked.integrations?.sonarr?.apiKey === '********') {
       delete unmasked.integrations.sonarr.apiKey;
@@ -245,6 +255,20 @@ const SettingsView = () => {
     try {
       const unmasked = getUnmaskedConfig(formData);
       await testConfig({ rtorrent: unmasked.rtorrent });
+    } catch (err) {
+      // Error is handled by useConfig
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  // Test qBittorrent connection
+  const handleTestQbittorrent = async () => {
+    if (!formData || !formData.qbittorrent?.enabled) return;
+    setIsTesting(true);
+    try {
+      const unmasked = getUnmaskedConfig(formData);
+      await testConfig({ qbittorrent: unmasked.qbittorrent });
     } catch (err) {
       // Error is handled by useConfig
     } finally {
@@ -365,8 +389,8 @@ const SettingsView = () => {
     }
 
     // Cross-validation: at least one client must be enabled
-    if (formData.amule?.enabled === false && !formData.rtorrent?.enabled) {
-      setSaveError('At least one download client (aMule or rTorrent) must be enabled.');
+    if (formData.amule?.enabled === false && !formData.rtorrent?.enabled && !formData.qbittorrent?.enabled) {
+      setSaveError('At least one download client (aMule, rTorrent, or qBittorrent) must be enabled.');
       return;
     }
 
@@ -380,6 +404,7 @@ const SettingsView = () => {
         results = await testConfig({
           amule: unmasked.amule?.enabled !== false ? unmasked.amule : undefined,
           rtorrent: unmasked.rtorrent?.enabled ? unmasked.rtorrent : undefined,
+          qbittorrent: unmasked.qbittorrent?.enabled ? unmasked.qbittorrent : undefined,
           directories: unmasked.directories,
           sonarr: unmasked.integrations.sonarr.enabled ? unmasked.integrations.sonarr : undefined,
           radarr: unmasked.integrations.radarr.enabled ? unmasked.integrations.radarr : undefined,
@@ -582,7 +607,7 @@ const SettingsView = () => {
 
     // aMule Configuration
     h(ConfigSection, {
-      title: 'aMule Connection',
+      title: 'aMule Integration',
       description: 'aMule External Connection (EC) settings',
       defaultOpen: false,
       open: openSections.amule,
@@ -798,144 +823,231 @@ const SettingsView = () => {
       )
     ),
 
-    // rtorrent Configuration
+    // BitTorrent Integration Configuration
     h(ConfigSection, {
-      title: 'rTorrent Connection',
-      description: 'rTorrent XML-RPC settings',
+      title: 'BitTorrent Integration',
+      description: 'BitTorrent client and Prowlarr settings',
       defaultOpen: false,
-      open: openSections.rtorrent,
-      onToggle: (value) => setOpenSections(prev => ({ ...prev, rtorrent: value }))
+      open: openSections.bittorrent,
+      onToggle: (value) => setOpenSections(prev => ({ ...prev, bittorrent: value }))
     },
-      h(EnableToggle, {
-        enabled: formData.rtorrent?.enabled || false,
-        onChange: (value) => updateField('rtorrent', 'enabled', value),
-        label: 'Enable rTorrent Integration',
-        description: 'Connect to rTorrent for managing BitTorrent downloads'
-      }),
+      isDocker && h(AlertBox, { type: 'info', className: 'mb-4' },
+        h('p', {}, 'You are running in Docker. If your BitTorrent clients are running on your host machine, use ', h('code', { className: 'bg-white dark:bg-gray-800 px-1 rounded' }, 'host.docker.internal'), ' as the hostname.')
+      ),
 
-      formData.rtorrent?.enabled && h('div', { className: 'mt-4 space-y-4' },
-        isDocker && h(AlertBox, { type: 'info' },
-          h('p', {}, 'You are running in Docker. If rTorrent is running on your host machine, use ', h('code', { className: 'bg-white dark:bg-gray-800 px-1 rounded' }, 'host.docker.internal'), ' as the hostname.')
-        ),
+      // rTorrent Section
+      h('div', { className: 'bg-gray-50 dark:bg-gray-900 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mb-4' },
+        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4' }, 'rTorrent (XML-RPC)'),
 
-        h(ConfigField, {
-          label: 'Host',
-          description: 'rTorrent XML-RPC host address',
-          value: formData.rtorrent.host || '',
-          onChange: (value) => updateField('rtorrent', 'host', value),
-          placeholder: '127.0.0.1',
-          required: formData.rtorrent.enabled,
-          fromEnv: meta?.fromEnv.rtorrentHost
+        h(EnableToggle, {
+          enabled: formData.rtorrent?.enabled || false,
+          onChange: (value) => updateField('rtorrent', 'enabled', value),
+          label: 'Enable rTorrent',
+          description: 'Connect to rTorrent for managing BitTorrent downloads via XML-RPC'
         }),
 
-        h(ConfigField, {
-          label: 'Port',
-          description: 'rTorrent XML-RPC port (default: 8000)',
-          value: formData.rtorrent.port || 8000,
-          onChange: (value) => updateField('rtorrent', 'port', parseInt(value, 10) || 8000),
-          type: 'number',
-          placeholder: '8000',
-          required: formData.rtorrent.enabled,
-          fromEnv: meta?.fromEnv.rtorrentPort
-        }),
-
-        h(ConfigField, {
-          label: 'XML-RPC Path',
-          description: 'Path for XML-RPC endpoint (default: /RPC2)',
-          value: formData.rtorrent.path || '/RPC2',
-          onChange: (value) => updateField('rtorrent', 'path', value),
-          placeholder: '/RPC2',
-          fromEnv: meta?.fromEnv.rtorrentPath
-        }),
-
-        h(ConfigField, {
-          label: 'Username (Optional)',
-          description: 'Username for HTTP basic authentication (if required)',
-          value: formData.rtorrent.username || '',
-          onChange: (value) => updateField('rtorrent', 'username', value),
-          placeholder: 'Leave empty if not required',
-          fromEnv: meta?.fromEnv.rtorrentUsername
-        }),
-
-        // Warning if rtorrent password is from environment
-        meta?.fromEnv.rtorrentPassword && h(AlertBox, { type: 'warning' },
-          h('p', {}, 'rTorrent password is set via RTORRENT_PASSWORD environment variable.')
-        ),
-
-        !meta?.fromEnv.rtorrentPassword && h(ConfigField, {
-          label: 'Password (Optional)',
-          description: 'Password for HTTP basic authentication (if required)',
-          fromEnv: meta?.fromEnv.rtorrentPassword
-        },
-          h(PasswordField, {
-            value: formData.rtorrent.password || '',
-            onChange: (value) => updateField('rtorrent', 'password', value),
-            placeholder: 'Leave empty if not required',
-            disabled: meta?.fromEnv.rtorrentPassword
-          })
-        ),
-
-        h('div', { className: 'mt-4' },
-          h(TestButton, {
-            onClick: handleTestRtorrent,
-            loading: isTesting,
-            disabled: !formData.rtorrent.host || !formData.rtorrent.port
-          }, 'Test rTorrent Connection')
-        ),
-
-        testResults?.results?.rtorrent && h(TestResultIndicator, {
-          result: testResults.results.rtorrent,
-          label: 'rTorrent Connection Test'
-        }),
-
-        // Prowlarr Integration (inside rTorrent section)
-        h('div', { className: 'mt-6 pt-6 border-t border-gray-200 dark:border-gray-700' },
-          h(EnableToggle, {
-            enabled: formData.integrations.prowlarr?.enabled || false,
-            onChange: (value) => updateNestedField('integrations', 'prowlarr', 'enabled', value),
-            label: 'Enable Prowlarr Integration',
-            description: 'Search for torrents via Prowlarr indexer manager'
+        formData.rtorrent?.enabled && h('div', { className: 'mt-4 space-y-4' },
+          h(ConfigField, {
+            label: 'Host',
+            description: 'rTorrent XML-RPC host address',
+            value: formData.rtorrent.host || '',
+            onChange: (value) => updateField('rtorrent', 'host', value),
+            placeholder: '127.0.0.1',
+            required: formData.rtorrent.enabled,
+            fromEnv: meta?.fromEnv.rtorrentHost
           }),
-          formData.integrations.prowlarr?.enabled && h('div', { className: 'mt-4 space-y-4' },
-            h(ConfigField, {
-              label: 'Prowlarr URL',
-              description: 'Prowlarr server URL (e.g., http://localhost:9696)',
-              value: formData.integrations.prowlarr?.url || '',
-              onChange: (value) => updateNestedField('integrations', 'prowlarr', 'url', value),
-              placeholder: 'http://localhost:9696',
-              required: formData.integrations.prowlarr?.enabled,
-              fromEnv: meta?.fromEnv.prowlarrUrl
-            }),
-            meta?.fromEnv.prowlarrApiKey && h(AlertBox, { type: 'warning' },
-              h('p', {}, 'Prowlarr API key is set via PROWLARR_API_KEY environment variable.')
-            ),
-            !meta?.fromEnv.prowlarrApiKey && h(ConfigField, {
-              label: 'API Key',
-              description: 'Prowlarr API key (found in Settings → General)',
+
+          h(ConfigField, {
+            label: 'Port',
+            description: 'rTorrent XML-RPC port (default: 8000)',
+            value: formData.rtorrent.port || 8000,
+            onChange: (value) => updateField('rtorrent', 'port', parseInt(value, 10) || 8000),
+            type: 'number',
+            placeholder: '8000',
+            required: formData.rtorrent.enabled,
+            fromEnv: meta?.fromEnv.rtorrentPort
+          }),
+
+          h(ConfigField, {
+            label: 'XML-RPC Path',
+            description: 'Path for XML-RPC endpoint (default: /RPC2)',
+            value: formData.rtorrent.path || '/RPC2',
+            onChange: (value) => updateField('rtorrent', 'path', value),
+            placeholder: '/RPC2',
+            fromEnv: meta?.fromEnv.rtorrentPath
+          }),
+
+          h(ConfigField, {
+            label: 'Username (Optional)',
+            description: 'Username for HTTP basic authentication (if required)',
+            value: formData.rtorrent.username || '',
+            onChange: (value) => updateField('rtorrent', 'username', value),
+            placeholder: 'Leave empty if not required',
+            fromEnv: meta?.fromEnv.rtorrentUsername
+          }),
+
+          // Warning if rtorrent password is from environment
+          meta?.fromEnv.rtorrentPassword && h(AlertBox, { type: 'warning' },
+            h('p', {}, 'rTorrent password is set via RTORRENT_PASSWORD environment variable.')
+          ),
+
+          !meta?.fromEnv.rtorrentPassword && h(ConfigField, {
+            label: 'Password (Optional)',
+            description: 'Password for HTTP basic authentication (if required)',
+            fromEnv: meta?.fromEnv.rtorrentPassword
+          },
+            h(PasswordField, {
+              value: formData.rtorrent.password || '',
+              onChange: (value) => updateField('rtorrent', 'password', value),
+              placeholder: 'Leave empty if not required',
+              disabled: meta?.fromEnv.rtorrentPassword
+            })
+          ),
+
+          h('div', { className: 'mt-4' },
+            h(TestButton, {
+              onClick: handleTestRtorrent,
+              loading: isTesting,
+              disabled: !formData.rtorrent.host || !formData.rtorrent.port
+            }, 'Test rTorrent Connection')
+          ),
+
+          testResults?.results?.rtorrent && h(TestResultIndicator, {
+            result: testResults.results.rtorrent,
+            label: 'rTorrent Connection Test'
+          })
+        )
+      ),
+
+      // qBittorrent Section
+      h('div', { className: 'bg-gray-50 dark:bg-gray-900 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mb-4' },
+        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4' }, 'qBittorrent (WebUI API)'),
+
+        h(EnableToggle, {
+          enabled: formData.qbittorrent?.enabled || false,
+          onChange: (value) => updateField('qbittorrent', 'enabled', value),
+          label: 'Enable qBittorrent',
+          description: 'Connect to qBittorrent for managing BitTorrent downloads via WebUI API'
+        }),
+
+        formData.qbittorrent?.enabled && h('div', { className: 'mt-4 space-y-4' },
+          h(ConfigField, {
+            label: 'Host',
+            description: 'qBittorrent WebUI host address',
+            value: formData.qbittorrent.host || '',
+            onChange: (value) => updateField('qbittorrent', 'host', value),
+            placeholder: '127.0.0.1',
+            required: formData.qbittorrent.enabled,
+            fromEnv: meta?.fromEnv.qbittorrentHost
+          }),
+
+          h(ConfigField, {
+            label: 'Port',
+            description: 'qBittorrent WebUI port (default: 8080)',
+            value: formData.qbittorrent.port || 8080,
+            onChange: (value) => updateField('qbittorrent', 'port', parseInt(value, 10) || 8080),
+            type: 'number',
+            placeholder: '8080',
+            required: formData.qbittorrent.enabled,
+            fromEnv: meta?.fromEnv.qbittorrentPort
+          }),
+
+          h(ConfigField, {
+            label: 'Username',
+            description: 'qBittorrent WebUI username (default: admin)',
+            value: formData.qbittorrent.username || 'admin',
+            onChange: (value) => updateField('qbittorrent', 'username', value),
+            placeholder: 'admin',
+            fromEnv: meta?.fromEnv.qbittorrentUsername
+          }),
+
+          // Warning if qbittorrent password is from environment
+          meta?.fromEnv.qbittorrentPassword && h(AlertBox, { type: 'warning' },
+            h('p', {}, 'qBittorrent password is set via QBITTORRENT_PASSWORD environment variable.')
+          ),
+
+          !meta?.fromEnv.qbittorrentPassword && h(ConfigField, {
+            label: 'Password',
+            description: 'qBittorrent WebUI password',
+            fromEnv: meta?.fromEnv.qbittorrentPassword
+          },
+            h(PasswordField, {
+              value: formData.qbittorrent.password || '',
+              onChange: (value) => updateField('qbittorrent', 'password', value),
+              placeholder: 'Enter qBittorrent password',
+              disabled: meta?.fromEnv.qbittorrentPassword
+            })
+          ),
+
+          h(EnableToggle, {
+            label: 'Use SSL (HTTPS)',
+            description: 'Connect to qBittorrent using HTTPS',
+            enabled: formData.qbittorrent.useSsl || false,
+            onChange: (value) => updateField('qbittorrent', 'useSsl', value)
+          }),
+
+          h('div', { className: 'mt-4' },
+            h(TestButton, {
+              onClick: handleTestQbittorrent,
+              loading: isTesting,
+              disabled: !formData.qbittorrent.host || !formData.qbittorrent.port
+            }, 'Test qBittorrent Connection')
+          ),
+
+          testResults?.results?.qbittorrent && h(TestResultIndicator, {
+            result: testResults.results.qbittorrent,
+            label: 'qBittorrent Connection Test'
+          })
+        )
+      ),
+
+      // Prowlarr Integration (for BitTorrent clients)
+      (formData.rtorrent?.enabled || formData.qbittorrent?.enabled) && h('div', { className: 'mt-4 pt-4 border-t border-gray-200 dark:border-gray-700' },
+        h(EnableToggle, {
+          enabled: formData.integrations.prowlarr?.enabled || false,
+          onChange: (value) => updateNestedField('integrations', 'prowlarr', 'enabled', value),
+          label: 'Enable Prowlarr Integration',
+          description: 'Search for torrents via Prowlarr indexer manager'
+        }),
+        formData.integrations.prowlarr?.enabled && h('div', { className: 'mt-4 space-y-4' },
+          h(ConfigField, {
+            label: 'Prowlarr URL',
+            description: 'Prowlarr server URL (e.g., http://localhost:9696)',
+            value: formData.integrations.prowlarr?.url || '',
+            onChange: (value) => updateNestedField('integrations', 'prowlarr', 'url', value),
+            placeholder: 'http://localhost:9696',
+            required: formData.integrations.prowlarr?.enabled,
+            fromEnv: meta?.fromEnv.prowlarrUrl
+          }),
+          meta?.fromEnv.prowlarrApiKey && h(AlertBox, { type: 'warning' },
+            h('p', {}, 'Prowlarr API key is set via PROWLARR_API_KEY environment variable.')
+          ),
+          !meta?.fromEnv.prowlarrApiKey && h(ConfigField, {
+            label: 'API Key',
+            description: 'Prowlarr API key (found in Settings → General)',
+            value: formData.integrations.prowlarr?.apiKey || '',
+            onChange: (value) => updateNestedField('integrations', 'prowlarr', 'apiKey', value),
+            required: formData.integrations.prowlarr?.enabled,
+            fromEnv: meta?.fromEnv.prowlarrApiKey
+          },
+            h(PasswordField, {
               value: formData.integrations.prowlarr?.apiKey || '',
               onChange: (value) => updateNestedField('integrations', 'prowlarr', 'apiKey', value),
-              required: formData.integrations.prowlarr?.enabled,
-              fromEnv: meta?.fromEnv.prowlarrApiKey
-            },
-              h(PasswordField, {
-                value: formData.integrations.prowlarr?.apiKey || '',
-                onChange: (value) => updateNestedField('integrations', 'prowlarr', 'apiKey', value),
-                placeholder: 'Enter Prowlarr API key',
-                disabled: meta?.fromEnv.prowlarrApiKey
-              })
-            ),
-            h('div', { className: 'mt-4' },
-              h(TestButton, {
-                onClick: handleTestProwlarr,
-                loading: isTesting,
-                disabled: !formData.integrations.prowlarr?.url || !formData.integrations.prowlarr?.apiKey
-              }, 'Test Prowlarr Connection')
-            ),
-            testResults?.results?.prowlarr && h(TestResultIndicator, {
-              result: testResults.results.prowlarr,
-              label: 'Prowlarr API Test'
+              placeholder: 'Enter Prowlarr API key',
+              disabled: meta?.fromEnv.prowlarrApiKey
             })
-          )
+          ),
+          h('div', { className: 'mt-4' },
+            h(TestButton, {
+              onClick: handleTestProwlarr,
+              loading: isTesting,
+              disabled: !formData.integrations.prowlarr?.url || !formData.integrations.prowlarr?.apiKey
+            }, 'Test Prowlarr Connection')
+          ),
+          testResults?.results?.prowlarr && h(TestResultIndicator, {
+            result: testResults.results.prowlarr,
+            label: 'Prowlarr API Test'
+          })
         )
       )
     ),

@@ -25,6 +25,11 @@ export function hasTestErrors(testResults, formData) {
     return true;
   }
 
+  // Check qbittorrent (only if enabled)
+  if (formData?.qbittorrent?.enabled && results.qbittorrent && results.qbittorrent.success === false) {
+    return true;
+  }
+
   // Check directories (data and logs are required)
   if (results.directories) {
     if (results.directories.data && !results.directories.data.success) {
@@ -72,6 +77,11 @@ export function checkResultsForErrors(results, formData) {
 
   // Check rtorrent (only if enabled)
   if (formData?.rtorrent?.enabled && testData.rtorrent && testData.rtorrent.success === false) {
+    return true;
+  }
+
+  // Check qbittorrent (only if enabled)
+  if (formData?.qbittorrent?.enabled && testData.qbittorrent && testData.qbittorrent.success === false) {
     return true;
   }
 
@@ -125,6 +135,11 @@ export function buildTestPayload(formData, unmaskPasswords = false, getUnmaskedC
   // Add rtorrent if enabled
   if (configData.rtorrent?.enabled) {
     payload.rtorrent = configData.rtorrent;
+  }
+
+  // Add qbittorrent if enabled
+  if (configData.qbittorrent?.enabled) {
+    payload.qbittorrent = configData.qbittorrent;
   }
 
   // Add Sonarr if enabled

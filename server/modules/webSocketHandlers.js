@@ -17,6 +17,7 @@ const { checkPathPermissions, resolveItemPath, resolveCategoryDestPaths } = requ
 // Singleton managers - imported directly instead of injected
 const amuleManager = require('./amuleManager');
 const rtorrentManager = require('./rtorrentManager');
+const qbittorrentManager = require('./qbittorrentManager');
 const geoIPManager = require('./geoIPManager');
 const authManager = require('./authManager');
 const categoryManager = require('../lib/CategoryManager');
@@ -205,6 +206,7 @@ class WebSocketHandlers extends BaseModule {
         case 'getServerInfo': await this.handleGetServerInfo(context); break;
         case 'getLog': await this.handleGetLog(context); break;
         case 'getAppLog': await this.handleGetAppLog(context); break;
+        case 'getQbittorrentLog': await this.handleGetQbittorrentLog(context); break;
         case 'batchDownloadSearchResults': await this.handleBatchDownloadSearchResults(data, context); break;
         case 'addEd2kLinks': await this.handleAddEd2kLinks(data, context); break;
         case 'addMagnetLinks': await this.handleAddMagnetLinks(data, context); break;
@@ -388,6 +390,16 @@ class WebSocketHandlers extends BaseModule {
     }
   }
 
+  async handleGetQbittorrentLog(context) {
+    try {
+      const log = await qbittorrentManager.getLog();
+      context.send({ type: 'qbittorrent-log-update', data: log });
+    } catch (err) {
+      context.log('Get qBittorrent log error:', err);
+      context.send({ type: 'error', message: 'Failed to fetch qBittorrent log: ' + err.message });
+    }
+  }
+
   async handleBatchDownloadSearchResults(data, context) {
     try {
       const { fileHashes, categoryId: rawCategoryId, categoryName } = data;
@@ -494,12 +506,20 @@ class WebSocketHandlers extends BaseModule {
 
   async handleAddMagnetLinks(data, context) {
     try {
-      if (!context.rtorrentManager || !context.rtorrentManager.isConnected()) {
-        context.send({ type: 'error', message: 'rtorrent is not connected' });
-        return;
-      }
+      const { links, label, clientId = 'rtorrent' } = data;
 
-      const { links, label } = data;
+      // Route to appropriate client
+      if (clientId === 'qbittorrent') {
+        if (!qbittorrentManager || !qbittorrentManager.isConnected()) {
+          context.send({ type: 'error', message: 'qBittorrent is not connected' });
+          return;
+        }
+      } else {
+        if (!context.rtorrentManager || !context.rtorrentManager.isConnected()) {
+          context.send({ type: 'error', message: 'rTorrent is not connected' });
+          return;
+        }
+      }
 
       if (!links || !Array.isArray(links) || links.length === 0) {
         context.send({ type: 'error', message: 'No magnet links provided' });
@@ -507,30 +527,60 @@ class WebSocketHandlers extends BaseModule {
       }
 
       // Look up category path and priority from CategoryManager
-      const category = label ? context.categoryManager.getByName(label) : null;
+      // Auto-create category if it doesn't exist (for "create new category" option in modal)
+      let category = label ? context.categoryManager.getByName(label) : null;
+      if (label && !category) {
+        context.log(`Creating new category "${label}" on demand`);
+        category = await context.categoryManager.create(label);
+        // Re-validate all paths after category change
+        await context.categoryManager.validateAllPaths();
+        // Broadcast updated categories to all clients
+        const { categories: updatedCategories, clientDefaultPaths, hasPathWarnings } = context.categoryManager.getAllForFrontend();
+        context.broadcast({ type: 'categories-update', data: updatedCategories, clientDefaultPaths, hasPathWarnings });
+      }
       const directory = category?.path || null;
-
-      // Map category priority to rtorrent priority
-      const { mapPriorityToRtorrent } = require('../lib/CategoryManager');
-      const rtorrentPriority = category ? mapPriorityToRtorrent(category.priority) : null;
 
       const username = context.clientInfo.username !== 'unknown' ? context.clientInfo.username : null;
       const results = [];
-      for (const magnetUri of links) {
-        try {
-          context.log(`Adding magnet link: ${magnetUri.substring(0, 60)}... (label: ${label || 'none'}${directory ? `, path: ${directory}` : ''}${rtorrentPriority !== null ? `, priority: ${rtorrentPriority}` : ''})`);
-          await context.rtorrentManager.addMagnet(magnetUri, { label: label || '', directory, priority: rtorrentPriority, start: true, username });
-          results.push({ link: magnetUri, success: true });
-        } catch (err) {
-          context.log(`Failed to add magnet: ${err.message}`);
-          results.push({ link: magnetUri, success: false, error: err.message });
+
+      if (clientId === 'qbittorrent') {
+        // qBittorrent handling
+        for (const magnetUri of links) {
+          try {
+            context.log(`Adding magnet link to qBittorrent: ${magnetUri.substring(0, 60)}... (category: ${label || 'none'}${directory ? `, path: ${directory}` : ''})`);
+            await qbittorrentManager.addMagnet(magnetUri, {
+              category: label || '',
+              savepath: directory,
+              username
+            });
+            results.push({ link: magnetUri, success: true });
+          } catch (err) {
+            context.log(`Failed to add magnet to qBittorrent: ${err.message}`);
+            results.push({ link: magnetUri, success: false, error: err.message });
+          }
+        }
+      } else {
+        // rTorrent handling
+        // Map category priority to rtorrent priority
+        const { mapPriorityToRtorrent } = require('../lib/CategoryManager');
+        const rtorrentPriority = category ? mapPriorityToRtorrent(category.priority) : null;
+
+        for (const magnetUri of links) {
+          try {
+            context.log(`Adding magnet link to rTorrent: ${magnetUri.substring(0, 60)}... (label: ${label || 'none'}${directory ? `, path: ${directory}` : ''}${rtorrentPriority !== null ? `, priority: ${rtorrentPriority}` : ''})`);
+            await context.rtorrentManager.addMagnet(magnetUri, { label: label || '', directory, priority: rtorrentPriority, start: true, username });
+            results.push({ link: magnetUri, success: true });
+          } catch (err) {
+            context.log(`Failed to add magnet to rTorrent: ${err.message}`);
+            results.push({ link: magnetUri, success: false, error: err.message });
+          }
         }
       }
 
       // Broadcast unified items for instant UI feedback
       await this.broadcastItemsUpdate(context);
 
-      context.send({ type: 'magnet-added', results });
+      context.send({ type: 'magnet-added', results, clientId });
     } catch (err) {
       context.log('Failed to add magnet links:', err);
       context.send({ type: 'error', message: `Failed to add magnet links: ${err.message}` });
@@ -539,12 +589,20 @@ class WebSocketHandlers extends BaseModule {
 
   async handleAddTorrentFile(data, context) {
     try {
-      if (!context.rtorrentManager || !context.rtorrentManager.isConnected()) {
-        context.send({ type: 'error', message: 'rtorrent is not connected' });
-        return;
-      }
+      const { fileData, fileName, label, clientId = 'rtorrent' } = data;
 
-      const { fileData, fileName, label } = data;
+      // Route to appropriate client
+      if (clientId === 'qbittorrent') {
+        if (!qbittorrentManager || !qbittorrentManager.isConnected()) {
+          context.send({ type: 'error', message: 'qBittorrent is not connected' });
+          return;
+        }
+      } else {
+        if (!context.rtorrentManager || !context.rtorrentManager.isConnected()) {
+          context.send({ type: 'error', message: 'rTorrent is not connected' });
+          return;
+        }
+      }
 
       if (!fileData) {
         context.send({ type: 'error', message: 'No torrent file data provided' });
@@ -552,27 +610,50 @@ class WebSocketHandlers extends BaseModule {
       }
 
       // Look up category path and priority from CategoryManager
-      const category = label ? context.categoryManager.getByName(label) : null;
+      // Auto-create category if it doesn't exist (for "create new category" option in modal)
+      let category = label ? context.categoryManager.getByName(label) : null;
+      if (label && !category) {
+        context.log(`Creating new category "${label}" on demand`);
+        category = await context.categoryManager.create(label);
+        // Re-validate all paths after category change
+        await context.categoryManager.validateAllPaths();
+        // Broadcast updated categories to all clients
+        const { categories: updatedCategories, clientDefaultPaths, hasPathWarnings } = context.categoryManager.getAllForFrontend();
+        context.broadcast({ type: 'categories-update', data: updatedCategories, clientDefaultPaths, hasPathWarnings });
+      }
       const directory = category?.path || null;
-
-      // Map category priority to rtorrent priority
-      const { mapPriorityToRtorrent } = require('../lib/CategoryManager');
-      const rtorrentPriority = category ? mapPriorityToRtorrent(category.priority) : null;
 
       // fileData is base64 encoded - convert to Buffer
       const buffer = Buffer.from(fileData, 'base64');
       const username = context.clientInfo.username !== 'unknown' ? context.clientInfo.username : null;
 
-      context.log(`Adding torrent file: ${fileName} (label: ${label || 'none'}${directory ? `, path: ${directory}` : ''}${rtorrentPriority !== null ? `, priority: ${rtorrentPriority}` : ''})`);
+      if (clientId === 'qbittorrent') {
+        // qBittorrent handling
+        context.log(`Adding torrent file to qBittorrent: ${fileName} (category: ${label || 'none'}${directory ? `, path: ${directory}` : ''})`);
 
-      // Use addTorrentRaw to send raw data directly to rtorrent
-      // This works even when rtorrent is on a different machine/container
-      await context.rtorrentManager.addTorrentRaw(buffer, { label: label || '', directory, priority: rtorrentPriority, start: true, username });
+        await qbittorrentManager.addTorrentRaw(buffer, {
+          category: label || '',
+          savepath: directory,
+          filename: fileName,
+          username
+        });
+      } else {
+        // rTorrent handling
+        // Map category priority to rtorrent priority
+        const { mapPriorityToRtorrent } = require('../lib/CategoryManager');
+        const rtorrentPriority = category ? mapPriorityToRtorrent(category.priority) : null;
+
+        context.log(`Adding torrent file to rTorrent: ${fileName} (label: ${label || 'none'}${directory ? `, path: ${directory}` : ''}${rtorrentPriority !== null ? `, priority: ${rtorrentPriority}` : ''})`);
+
+        // Use addTorrentRaw to send raw data directly to rtorrent
+        // This works even when rtorrent is on a different machine/container
+        await context.rtorrentManager.addTorrentRaw(buffer, { label: label || '', directory, priority: rtorrentPriority, start: true, username });
+      }
 
       // Broadcast unified items for instant UI feedback
       await this.broadcastItemsUpdate(context);
 
-      context.send({ type: 'torrent-added', success: true, fileName });
+      context.send({ type: 'torrent-added', success: true, fileName, clientId });
     } catch (err) {
       context.log('Failed to add torrent file:', err);
       context.send({ type: 'error', message: `Failed to add torrent file: ${err.message}` });
@@ -842,9 +923,10 @@ class WebSocketHandlers extends BaseModule {
    * @param {string} opts.name - Action name for logging (e.g. 'pause')
    * @param {string} opts.responseType - WebSocket response type (e.g. 'batch-pause-complete')
    * @param {Function|null} opts.rtorrentFn - async (rtorrentManager, hash) => void, or null if unsupported
+   * @param {Function|null} opts.qbittorrentFn - async (qbittorrentManager, hash) => void, or null if unsupported
    * @param {Function|null} opts.amuleFn - async (amuleClient, hash) => bool, or null if unsupported
    */
-  async _executeBatchOperation({ items, context, name, responseType, rtorrentFn, amuleFn }) {
+  async _executeBatchOperation({ items, context, name, responseType, rtorrentFn, qbittorrentFn, amuleFn }) {
     const label = name.charAt(0).toUpperCase() + name.slice(1);
     try {
       if (!items || !Array.isArray(items) || items.length === 0) {
@@ -864,6 +946,19 @@ class WebSocketHandlers extends BaseModule {
               results.push({ fileHash: item.fileHash, success: true });
             } else {
               const error = 'rtorrent not connected';
+              context.log(`${label} failed for ${item.fileName || item.fileHash}: ${error}`);
+              results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error });
+            }
+          } else if (item.clientType === 'qbittorrent') {
+            if (!qbittorrentFn) {
+              const error = `${label} is not supported for qBittorrent`;
+              context.log(`${label} failed for ${item.fileName || item.fileHash}: ${error}`);
+              results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error });
+            } else if (qbittorrentManager?.isConnected()) {
+              await qbittorrentFn(qbittorrentManager, item.fileHash);
+              results.push({ fileHash: item.fileHash, success: true });
+            } else {
+              const error = 'qBittorrent not connected';
               context.log(`${label} failed for ${item.fileName || item.fileHash}: ${error}`);
               results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error });
             }
@@ -902,6 +997,7 @@ class WebSocketHandlers extends BaseModule {
     await this._executeBatchOperation({
       items: data.items, context, name: 'pause', responseType: 'batch-pause-complete',
       rtorrentFn: (mgr, hash) => mgr.stopDownload(hash),
+      qbittorrentFn: (mgr, hash) => mgr.stopDownload(hash),
       amuleFn: (client, hash) => client.pauseDownload(hash)
     });
   }
@@ -910,6 +1006,7 @@ class WebSocketHandlers extends BaseModule {
     await this._executeBatchOperation({
       items: data.items, context, name: 'resume', responseType: 'batch-resume-complete',
       rtorrentFn: (mgr, hash) => mgr.startDownload(hash),
+      qbittorrentFn: (mgr, hash) => mgr.startDownload(hash),
       amuleFn: (client, hash) => client.resumeDownload(hash)
     });
   }
@@ -918,6 +1015,7 @@ class WebSocketHandlers extends BaseModule {
     await this._executeBatchOperation({
       items: data.items, context, name: 'stop', responseType: 'batch-stop-complete',
       rtorrentFn: (mgr, hash) => mgr.closeDownload(hash),
+      qbittorrentFn: (mgr, hash) => mgr.stopDownload(hash), // qBittorrent uses pause for stop
       amuleFn: null
     });
   }
@@ -995,6 +1093,17 @@ class WebSocketHandlers extends BaseModule {
 
             results.push({ fileHash: item.fileHash, success: true });
 
+          } else if (item.clientType === 'qbittorrent') {
+            // ── qBittorrent deletion ──
+            if (!qbittorrentManager || !qbittorrentManager.isConnected()) {
+              results.push({ fileHash: item.fileHash, fileName, success: false, error: 'qBittorrent not connected' });
+              continue;
+            }
+
+            // qBittorrent removeDownload handles file deletion via deleteFiles flag
+            await qbittorrentManager.removeDownload(item.fileHash, deleteFiles);
+            results.push({ fileHash: item.fileHash, success: true });
+
           } else {
             // ── aMule deletion ──
             if (source === 'shared') {
@@ -1060,11 +1169,18 @@ class WebSocketHandlers extends BaseModule {
         if (result.success) {
           const item = items.find(i => i.fileHash === result.fileHash);
           const cachedItem = itemByHash.get(result.fileHash?.toLowerCase());
+          // Build full path from cached item data
+          const dir = cachedItem?.directory || cachedItem?.filePath || null;
+          const name = result.fileName || cachedItem?.name || 'Unknown';
+          const fullPath = dir ? `${dir.replace(/\/+$/, '')}/${name}` : null;
+
           eventScriptingManager.emit('fileDeleted', {
             hash: result.fileHash?.toLowerCase(),
-            filename: result.fileName || cachedItem?.name || 'Unknown',
+            filename: name,
             clientType: item?.clientType || cachedItem?.client || 'unknown',
-            deletedFromDisk: deleteFiles === true
+            deletedFromDisk: deleteFiles === true || (item?.clientType === 'amule' && source !== 'shared'),
+            path: fullPath,
+            multiFile: cachedItem?.multiFile || false
           });
         }
       }
@@ -1156,7 +1272,7 @@ class WebSocketHandlers extends BaseModule {
                       sourcePathRemote: item.directory,
                       destPathLocal,
                       destPathRemote,
-                      totalSize: item.size,
+                      totalSize: item.complete ? item.size : (item.sizeDownloaded || item.size),
                       isMultiFile: item.multiFile
                     });
                     context.log(`Queued move for ${fileName || fileHash} -> ${destPathRemote}`);
@@ -1168,6 +1284,43 @@ class WebSocketHandlers extends BaseModule {
               }
             } else {
               const error = 'rtorrent not connected';
+              context.log(`Category change failed for ${fileName || fileHash}: ${error}`);
+              results.push({ fileHash, fileName, success: false, error });
+            }
+          } else if (item?.client === 'qbittorrent') {
+            // For qBittorrent, set category
+            if (qbittorrentManager && qbittorrentManager.isConnected()) {
+              const categoryValue = targetCategory.name === 'Default' ? '' : targetCategory.name;
+              await qbittorrentManager.setCategory(fileHash, categoryValue);
+              results.push({ fileHash, success: true });
+
+              // Check if move requested - qBittorrent uses native setLocation API
+              if (moveFiles) {
+                // qBittorrent only needs remotePath (category's path) - it handles moves internally
+                const remotePath = targetCategory?.path || null;
+
+                // Only move if there's a valid destination and it differs from current
+                if (remotePath && item.directory && remotePath !== item.directory) {
+                  try {
+                    await moveOperationManager.queueMove({
+                      hash: fileHash,
+                      name: item.name,
+                      clientType: 'qbittorrent',
+                      sourcePathRemote: item.directory,
+                      destPathLocal: remotePath,  // Use remote path (qBittorrent handles moves internally)
+                      destPathRemote: remotePath,
+                      totalSize: item.complete ? item.size : (item.sizeDownloaded || item.size),
+                      isMultiFile: item.multiFile
+                    });
+                    context.log(`Queued move for qBittorrent ${fileName || fileHash} -> ${remotePath}`);
+                  } catch (moveErr) {
+                    context.log(`Failed to queue move for ${fileName || fileHash}: ${moveErr.message}`);
+                    // Don't fail the category change if move queueing fails
+                  }
+                }
+              }
+            } else {
+              const error = 'qBittorrent not connected';
               context.log(`Category change failed for ${fileName || fileHash}: ${error}`);
               results.push({ fileHash, fileName, success: false, error });
             }
@@ -1194,7 +1347,7 @@ class WebSocketHandlers extends BaseModule {
                   sourcePathRemote: item.filePath,
                   destPathLocal,
                   destPathRemote,
-                  totalSize: item.size,
+                  totalSize: item.complete ? item.size : (item.sizeDownloaded || item.size),
                   isMultiFile: false // aMule files are always single files
                 });
                 context.log(`Queued move for aMule shared file ${fileName || fileHash} -> ${destPathRemote}`);
@@ -1246,12 +1399,19 @@ class WebSocketHandlers extends BaseModule {
           const oldCategory = item?.category || 'Default';
           // Only emit if category actually changed
           if (oldCategory !== targetCategory.name) {
+            // Build full path from cached item data
+            const dir = item?.directory || item?.filePath || null;
+            const itemName = item?.name || 'Unknown';
+            const fullPath = dir ? `${dir.replace(/\/+$/, '')}/${itemName}` : null;
+
             eventScriptingManager.emit('categoryChanged', {
               hash: result.fileHash?.toLowerCase(),
-              filename: item?.name || 'Unknown',
+              filename: itemName,
               clientType: item?.client || 'unknown',
               oldCategory,
-              newCategory: targetCategory.name
+              newCategory: targetCategory.name,
+              path: fullPath,
+              multiFile: item?.multiFile || false
             });
           }
         }
@@ -1318,6 +1478,19 @@ class WebSocketHandlers extends BaseModule {
             canDelete: true,
             reason: 'amule_managed',
             message: 'aMule manages temp file deletion'
+          });
+          continue;
+        }
+
+        // qBittorrent: handles file deletion natively via API
+        // No permission check needed - qBittorrent deletes files internally
+        if (item.client === 'qbittorrent') {
+          results.push({
+            fileHash,
+            clientType,
+            canDelete: true,
+            reason: 'qbittorrent_managed',
+            message: 'qBittorrent manages file deletion'
           });
           continue;
         }
@@ -1424,15 +1597,25 @@ class WebSocketHandlers extends BaseModule {
         }
 
         const clientType = item.client || 'amule';
+        const isQbittorrent = clientType === 'qbittorrent';
 
         // Get destination paths for this client type (cached per client)
+        // qBittorrent only needs remotePath (category's path) - it handles moves natively
         if (!destPathsByClient.has(clientType)) {
-          destPathsByClient.set(clientType, resolveCategoryDestPaths(targetCategory, clientType));
+          if (isQbittorrent) {
+            // qBittorrent: only need the category's path (what qBittorrent sees)
+            const remotePath = targetCategory?.path || null;
+            destPathsByClient.set(clientType, { localPath: remotePath, remotePath });
+          } else {
+            destPathsByClient.set(clientType, resolveCategoryDestPaths(targetCategory, clientType));
+          }
         }
         const { localPath: localDestPath, remotePath: remoteDestPath } = destPathsByClient.get(clientType);
 
         // Check if destination is configured
-        if (!localDestPath) {
+        // qBittorrent only needs remotePath, others need localPath
+        const destPath = isQbittorrent ? remoteDestPath : localDestPath;
+        if (!destPath) {
           results.push({
             fileHash,
             canMove: false,
@@ -1489,11 +1672,21 @@ class WebSocketHandlers extends BaseModule {
       }
 
       // Check destination paths accessibility (one per client type)
+      // Skip for qBittorrent - it handles moves natively and validates paths itself
       const destErrors = new Map(); // Map<clientType, errorMessage>
       const destAccessible = new Map(); // Map<clientType, boolean>
       let primaryDestPath = null; // For response (use first client's dest path)
 
       for (const [clientType, { localPath, remotePath }] of destPathsByClient) {
+        // qBittorrent: skip permission check, assume accessible (qBittorrent validates internally)
+        if (clientType === 'qbittorrent') {
+          destAccessible.set(clientType, true);
+          if (!primaryDestPath) {
+            primaryDestPath = remotePath || localPath;
+          }
+          continue;
+        }
+
         if (!localPath) {
           destErrors.set(clientType, 'No destination path configured');
           destAccessible.set(clientType, false);
@@ -1527,8 +1720,12 @@ class WebSocketHandlers extends BaseModule {
       }
 
       // Check source paths accessibility (grouped by client type)
+      // Skip for qBittorrent - it handles moves natively
       const sourceErrors = new Map(); // Map<translatedPath, errorMessage>
       for (const [clientType, pathMap] of sourcePathsByClient) {
+        // qBittorrent: skip permission check
+        if (clientType === 'qbittorrent') continue;
+
         for (const [localPath, remotePath] of pathMap) {
           const srcCheck = await checkPathPermissions(localPath, {
             requireRead: true,

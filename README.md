@@ -4,7 +4,7 @@
 
 <h1 align="center">aMuTorrent</h1>
 
-A unified download manager for aMule and rTorrent. Manage both ED2K and BitTorrent downloads from a single modern web interface. Features Prowlarr integration for torrent search, Torznab indexer and qBittorrent-compatible API for aMule (Sonarr/Radarr integration), push notifications via Apprise, and GeoIP peer location display. Built with Node.js, WebSockets, and React.
+A unified download manager for aMule, rTorrent, and qBittorrent. Manage ED2K and BitTorrent downloads from a single modern web interface. Features Prowlarr integration for torrent search, Torznab indexer and qBittorrent-compatible API for aMule (Sonarr/Radarr integration), push notifications via Apprise, and GeoIP peer location display. Built with Node.js, WebSockets, and React.
 
 ![aMuTorrent](./docs/screenshots/home-desktop.png)
 
@@ -13,7 +13,8 @@ A unified download manager for aMule and rTorrent. Manage both ED2K and BitTorre
 ### Multi-Client Support
 - **aMule Integration** - Control aMule via the EC (External Connection) protocol
 - **rTorrent Integration** - Connect to rTorrent via XML-RPC over HTTP
-- **Unified Interface** - Manage both clients from a single dashboard
+- **qBittorrent Integration** - Connect to qBittorrent via WebUI API
+- **Unified Interface** - Manage all clients from a single dashboard
 
 ### Download Management
 - **Real-time Search** - Search ED2K/Kad network and Prowlarr indexers
@@ -23,7 +24,7 @@ A unified download manager for aMule and rTorrent. Manage both ED2K and BitTorre
 - **File Operations** - Move downloads to category paths
 
 ### Integrations
-- **Prowlarr Search** - Search torrents across multiple indexers (results go to rTorrent)
+- **Prowlarr Search** - Search torrents across multiple indexers (results go to rTorrent or qBittorrent)
 - **Sonarr/Radarr** - Torznab indexer and qBittorrent-compatible API for aMule
 - **Push Notifications** - Apprise integration for 80+ notification services
 - **Custom Event Scripts** - Run your own scripts on download events
@@ -44,7 +45,7 @@ A unified download manager for aMule and rTorrent. Manage both ED2K and BitTorre
 
 ## Quick Start (Docker)
 
-**Prerequisites:** At least one of: aMule with External Connections enabled, or rTorrent with XML-RPC over HTTP.
+**Prerequisites:** At least one of: aMule with External Connections enabled, rTorrent with XML-RPC over HTTP, or qBittorrent with WebUI enabled.
 
 ### 1. Pull the image
 
@@ -90,7 +91,7 @@ docker compose up -d
 
 Open `http://localhost:4000` and follow the setup wizard to configure your download clients.
 
-> **All-in-One Setup:** For a complete setup with aMule and rTorrent in Docker, see [docker-compose.all-in-one.yml](docker-compose.all-in-one.yml)
+> **All-in-One Setup:** For a complete setup with aMule, rTorrent, and qBittorrent in Docker, see [docker-compose.all-in-one.yml](docker-compose.all-in-one.yml)
 
 ---
 
@@ -120,6 +121,7 @@ Open `http://localhost:4000` and complete the setup wizard.
 | [Configuration Guide](./docs/CONFIGURATION.md) | Setup wizard, settings, environment variables |
 | [aMule Integration](./docs/AMULE.md) | Connect to aMule via EC protocol |
 | [rTorrent Integration](./docs/RTORRENT.md) | Connect to rTorrent via XML-RPC |
+| [qBittorrent Integration](./docs/QBITTORRENT.md) | Connect to qBittorrent via WebUI API |
 | [Prowlarr Integration](./docs/PROWLARR.md) | Search torrents via Prowlarr indexers |
 | [Notifications](./docs/NOTIFICATIONS.md) | Push notifications via Apprise (80+ services) |
 | [Custom Scripting](./scripts/README.md) | Run custom scripts on download events |
@@ -145,9 +147,9 @@ Open `http://localhost:4000` and complete the setup wizard.
 <summary>Mobile Screenshots</summary>
 
 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-  <img src="./docs/screenshots/home-mobile.jpg" height="400px" />
-  <img src="./docs/screenshots/downloads-mobile.jpg" height="400px" />
-  <img src="./docs/screenshots/search-mobile.jpg" height="400px" />
+  <img src="./docs/screenshots/home-mobile.png" height="400px" />
+  <img src="./docs/screenshots/downloads-mobile.png" height="400px" />
+  <img src="./docs/screenshots/search-mobile.png" height="400px" />
 </div>
 
 </details>
@@ -165,6 +167,11 @@ Open `http://localhost:4000` and complete the setup wizard.
 - Ensure XML-RPC is exposed over HTTP (nginx/lighttpd proxy or ruTorrent)
 - Test with: `curl http://host:port/RPC2`
 - See [rTorrent Integration](./docs/RTORRENT.md) for setup details
+
+**Can't connect to qBittorrent?**
+- Verify WebUI is accessible: `curl http://host:8080/api/v2/app/version`
+- New installs generate a random password - check container logs: `docker logs qbittorrent`
+- See [qBittorrent Integration](./docs/QBITTORRENT.md) for setup details
 
 **Docker: Can't reach services on host?**
 - Ensure `extra_hosts` is set in docker-compose.yml

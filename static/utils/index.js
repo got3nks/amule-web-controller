@@ -77,7 +77,8 @@ export {
   DEFAULT_SECONDARY_SORT_CONFIG,
   getRowHighlightClass,
   VIEW_TITLE_STYLES,
-  PROGRESS_STRIPES_STYLE
+  PROGRESS_STRIPES_STYLE,
+  CLIENT_NAMES
 } from './constants.js';
 
 // Pagination
@@ -122,6 +123,7 @@ export {
 
 // Download Helpers
 export {
+  isBittorrentClient,
   isItemPaused,
   isItemStopped,
   isItemChecking,
@@ -133,7 +135,8 @@ export {
   getStatusBarColor,
   isActiveStatus,
   formatSourceDisplay,
-  hasRtorrentItems,
+  hasBittorrentItems,
+  hasRtorrentItems, // Legacy alias
   hasAmuleItems,
   filterByClient,
   filterByUnifiedFilter,

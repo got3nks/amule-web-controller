@@ -13,7 +13,7 @@ import { ProgressBar } from '../components/common/ProgressBar.js';
 import FlagIcon from '../components/common/FlagIcon.js';
 import { formatBytes, formatSpeed, formatLastSeenComplete, getTimeBasedColor, formatRatio, formatTimeAgo, formatDateTime, formatETASeconds } from './formatters.js';
 import { makeFilterHeaderRender } from './tableHelpers.js';
-import { STATUS_DISPLAY_MAP, getItemStatusInfo, formatSourceDisplay, getSeederColorClass, getClientSoftware, getIpString } from './downloadHelpers.js';
+import { STATUS_DISPLAY_MAP, getItemStatusInfo, formatSourceDisplay, getSeederColorClass, getClientSoftware, getIpString, isBittorrentClient } from './downloadHelpers.js';
 
 const { createElement: h } = React;
 
@@ -448,12 +448,12 @@ export const buildSourcesColumn = ({
   width,
   render: (item) => {
     const sourceText = formatSourceDisplay(item, true); // compact format for desktop
-    const isRtorrent = item.client === 'rtorrent';
-    const hasMessage = isRtorrent && item.message && item.message.trim();
+    const isBittorrent = isBittorrentClient(item);
+    const hasMessage = isBittorrent && item.message && item.message.trim();
     const isClickable = onClick && !disabled;
 
-    // For rtorrent: clickable, color based on seed count, optional alert icon
-    if (isRtorrent) {
+    // For BitTorrent: clickable, color based on seed count, optional alert icon
+    if (isBittorrent) {
       const seedColorClass = getSeederColorClass(item.sources?.seeders || 0);
 
       return h(isClickable ? 'button' : 'div', {
@@ -598,8 +598,8 @@ export const buildUploadTotalColumn = ({
     const total = formatBytes(item.uploadTotal);
     const totalRequests = showRequests && item.requestsAcceptedTotal != null ? ` (${item.requestsAcceptedTotal})` : '';
 
-    // rtorrent doesn't track session stats
-    if (item.client === 'rtorrent' || item.uploadSession === null) {
+    // BitTorrent clients don't track session stats - check data directly
+    if (item.uploadSession === null || item.uploadSession === undefined) {
       return h('span', { className: 'text-xs' }, total + totalRequests);
     }
 
@@ -627,14 +627,14 @@ export const buildClientColumn = ({
   key: 'software',
   sortable: true,
   render: (item) => {
-    const isRtorrent = item.client === 'rtorrent';
+    const isBittorrent = isBittorrentClient(item);
     const clientSoftware = getClientSoftware(item);
     const ipString = getIpString(item);
 
     return h('div', { className: 'space-y-1 text-xs' }, [
       h('div', null,
         h('span', { className: 'font-medium align-baseline' },
-          isRtorrent || !item.software || item.software === 'Unknown'
+          isBittorrent || !item.software || item.software === 'Unknown'
             ? clientSoftware
             : item.software
         )

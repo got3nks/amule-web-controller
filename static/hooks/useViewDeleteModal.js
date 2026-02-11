@@ -70,7 +70,9 @@ export const useViewDeleteModal = ({
 
         // Helper to get client label
         const getClientLabel = (clientType) =>
-          clientType === 'amule' ? 'aMule' : clientType === 'rtorrent' ? 'rTorrent' : clientType;
+          clientType === 'amule' ? 'aMule' :
+          clientType === 'rtorrent' ? 'rTorrent' :
+          clientType === 'qbittorrent' ? 'qBittorrent' : clientType;
 
         // Helper to build message with client prefix for mixed selections
         const buildMessage = (items, singleMsg, pluralMsg) => {
@@ -189,9 +191,9 @@ export const useViewDeleteModal = ({
       ? deleteModal.fileHash
       : [deleteModal.fileHash];
 
-    // Only check for rtorrent, mixed batches, or aMule shared files (completed)
+    // Only check for rtorrent, qbittorrent, mixed batches, or aMule shared files (completed)
     const clientType = deleteModal.clientType;
-    const needsCheck = clientType === 'rtorrent' || clientType === 'mixed' || hasAmuleSharedFiles;
+    const needsCheck = clientType === 'rtorrent' || clientType === 'qbittorrent' || clientType === 'mixed' || hasAmuleSharedFiles;
 
     if (needsCheck && fileHashes.length > 0 && fileHashes[0]) {
       setPermissionCheck({ loading: true, canDeleteFiles: true, warnings: [] });
@@ -205,7 +207,7 @@ export const useViewDeleteModal = ({
 
   /**
    * Detect batch client type from selected hashes
-   * Returns 'amule', 'rtorrent', or 'mixed'
+   * Returns 'amule', 'rtorrent', 'qbittorrent', or 'mixed'
    */
   const detectBatchClientType = useCallback((fileHashes) => {
     const batchClientTypes = new Set();
@@ -213,10 +215,10 @@ export const useViewDeleteModal = ({
       const item = dataArray.find(d => d.hash === hash);
       batchClientTypes.add(item?.client || 'amule');
     });
-    const hasRtorrent = batchClientTypes.has('rtorrent');
+    // If only one client type, return it; otherwise return 'mixed'
     return batchClientTypes.size === 1
       ? batchClientTypes.values().next().value
-      : (hasRtorrent ? 'mixed' : 'amule');
+      : 'mixed';
   }, [dataArray]);
 
   // Single file delete handler

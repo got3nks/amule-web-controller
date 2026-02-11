@@ -284,11 +284,223 @@ function extractRtorrentUploads(downloads) {
   return uploads;
 }
 
+// ============================================================================
+// QBITTORRENT NORMALIZERS
+// ============================================================================
+
+/**
+ * Find the best tracker from qBittorrent tracker list
+ * Picks the working tracker with the most peers (seeds + leeches)
+ * @param {Array} trackers - Array of tracker objects from qBittorrent
+ * @returns {string|null} Best tracker URL or null
+ */
+function findBestQBittorrentTracker(trackers) {
+  if (!trackers || trackers.length === 0) return null;
+
+  // Filter to working trackers (status 2 = working, 3 = updating)
+  // and exclude DHT/PeX/LSD pseudo-trackers
+  const workingTrackers = trackers.filter(t =>
+    t.url &&
+    !t.url.startsWith('** [') && // Exclude DHT, PeX, LSD entries
+    (t.status === 2 || t.status === 3)
+  );
+
+  if (workingTrackers.length === 0) {
+    // Fall back to any tracker with a valid URL
+    const validTrackers = trackers.filter(t => t.url && !t.url.startsWith('** ['));
+    return validTrackers[0]?.url || null;
+  }
+
+  // Sort by total peers (seeds + leeches), pick the one with most
+  workingTrackers.sort((a, b) => {
+    const aPeers = (a.num_seeds || 0) + (a.num_leeches || 0);
+    const bPeers = (b.num_seeds || 0) + (b.num_leeches || 0);
+    return bPeers - aPeers;
+  });
+
+  return workingTrackers[0]?.url || null;
+}
+
+/**
+ * Determine if a qBittorrent torrent is multi-file
+ * Single-file torrents have content_path ending with a file extension
+ * Multi-file torrents have content_path pointing to a folder (no extension)
+ * @param {Object} torrent - qBittorrent torrent object
+ * @returns {boolean} True if multi-file torrent
+ */
+function isQBittorrentMultiFile(torrent) {
+  const contentPath = torrent.content_path || '';
+  const savePath = torrent.save_path || '';
+
+  // If they're the same, it's definitely single-file
+  if (contentPath === savePath) return false;
+
+  // Check if content_path looks like a file (has common extension pattern)
+  // Single-file: content_path = /downloads/movie.mkv
+  // Multi-file: content_path = /downloads/TorrentFolder (no extension)
+  const hasFileExtension = /\.[a-z0-9]{2,6}$/i.test(contentPath);
+
+  return !hasFileExtension;
+}
+
+/**
+ * Get error/status message for qBittorrent torrent
+ * @param {Object} torrent - qBittorrent torrent object
+ * @returns {string} Error message or empty string
+ */
+function getQBittorrentMessage(torrent) {
+  const state = torrent.state || '';
+
+  // Error states
+  if (state === 'error') {
+    return 'Error';
+  }
+  if (state === 'missingFiles') {
+    return 'Missing files';
+  }
+
+  // No tracker
+  if (!torrent.tracker) {
+    return 'No tracker';
+  }
+
+  return '';
+}
+
+/**
+ * Normalize qBittorrent torrent to unified format
+ * @param {Object} torrent - qBittorrent torrent object from /api/v2/torrents/info
+ * @returns {Object} Normalized download
+ */
+function normalizeQBittorrentDownload(torrent) {
+  const progress = Math.round((torrent.progress || 0) * 100);
+  const trackers = torrent.trackersDetailed || [];
+
+  // Find the best tracker (most peers) instead of just using the first one
+  const bestTrackerUrl = findBestQBittorrentTracker(trackers);
+  const trackerDomain = bestTrackerUrl ? extractTrackerDomain([bestTrackerUrl]) : '';
+
+  // Determine multi-file status first (needed for directory resolution)
+  const multiFile = isQBittorrentMultiFile(torrent);
+
+  // Directory resolution:
+  // - Multi-file: use content_path (the torrent folder, e.g., /downloads/TorrentName)
+  // - Single-file: use save_path (parent directory, joined with filename later)
+  const directory = multiFile
+    ? (torrent.content_path || torrent.save_path)
+    : (torrent.save_path || torrent.content_path);
+
+  return {
+    clientType: 'qbittorrent',
+    hash: torrent.hash.toLowerCase(),
+    name: torrent.name,
+    size: torrent.size || torrent.total_size,
+    downloaded: torrent.downloaded || torrent.completed,
+    progress,
+    speed: torrent.dlspeed || 0,
+    uploadSpeed: torrent.upspeed || 0,
+    statusText: torrent.state,
+
+    // qBittorrent-specific fields
+    ratio: torrent.ratio || 0,
+    category: torrent.category || '',
+    label: torrent.category || '', // Alias for compatibility with rtorrent
+    directory,
+    uploadTotal: torrent.uploaded || 0,
+    isComplete: progress >= 100,
+    isActive: ['downloading', 'uploading', 'stalledDL', 'stalledUP', 'forcedDL', 'forcedUP'].includes(torrent.state),
+    isMultiFile: multiFile,
+    message: getQBittorrentMessage(torrent), // Error message or tracker status
+
+    // Peers
+    peers: {
+      total: (torrent.num_leechs || 0) + (torrent.num_seeds || 0),
+      connected: (torrent.num_leechs || 0) + (torrent.num_seeds || 0),
+      seeders: torrent.num_seeds || 0
+    },
+    peersDetailed: torrent.peersDetailed || [],
+
+    // Trackers
+    trackers: trackers.map(t => t.url).filter(Boolean),
+    trackersDetailed: trackers,
+    trackerDomain,
+
+    // Timestamps
+    creationDate: torrent.added_on ? new Date(torrent.added_on * 1000) : null,
+    startedTime: torrent.added_on ? new Date(torrent.added_on * 1000) : null,
+    finishedTime: torrent.completion_on > 0 ? new Date(torrent.completion_on * 1000) : null,
+
+    // Priority (qBittorrent doesn't have the same priority system, but we can use first/last piece prio)
+    priority: 2, // Normal priority
+
+    raw: { clientType: 'qbittorrent', ...torrent }
+  };
+}
+
+/**
+ * Normalize qBittorrent peer to upload entry format
+ * @param {Object} peer - qBittorrent peer object (from peersDetailed)
+ * @param {Object} torrent - Parent torrent object (for file info)
+ * @returns {Object} Normalized upload entry
+ */
+function normalizeQBittorrentPeer(peer, torrent) {
+  const address = peer.address || peer.ip || '';
+  const port = peer.port || 0;
+  const trackerDomain = extractTrackerDomain(torrent.trackers || []);
+
+  return {
+    clientType: 'qbittorrent',
+    id: `${torrent.hash}-${address}:${port}`,
+    fileName: torrent.name,
+    fileSize: torrent.size,
+    address,
+    port,
+    software: peer.client || 'Unknown',
+    softwareId: null,
+    uploadRate: peer.up_speed || 0,
+    downloadRate: peer.dl_speed || 0,
+    uploadTotal: peer.uploaded || 0,
+    uploadSession: null,
+    completedPercent: Math.round((peer.progress || 0) * 100),
+    isEncrypted: !!(peer.flags && peer.flags.includes('E')),
+    isIncoming: !!(peer.flags && peer.flags.includes('I')),
+    downloadHash: torrent.hash,
+    downloadName: torrent.name,
+    label: torrent.category || null,
+    trackerDomain: trackerDomain || null
+  };
+}
+
+/**
+ * Extract active upload entries from qBittorrent torrents
+ * Only includes peers that are currently receiving data (up_speed > 0)
+ * @param {Array} torrents - Array of raw qBittorrent torrents
+ * @returns {Array} Array of upload entries
+ */
+function extractQBittorrentUploads(torrents) {
+  const uploads = [];
+
+  for (const torrent of torrents) {
+    const peers = torrent.peersDetailed || [];
+
+    for (const peer of peers) {
+      // Only include peers we're actively uploading to
+      if (peer.up_speed > 0) {
+        uploads.push(normalizeQBittorrentPeer(peer, torrent));
+      }
+    }
+  }
+
+  return uploads;
+}
+
 module.exports = {
   normalizeAmuleDownload,
   normalizeAmuleSharedFile,
   normalizeAmuleUpload,
   normalizeRtorrentDownload,
   extractRtorrentUploads,
+  normalizeQBittorrentDownload,
+  extractQBittorrentUploads,
   extractTrackerDomain
 };

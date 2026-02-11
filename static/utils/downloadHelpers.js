@@ -55,12 +55,13 @@ export const isItemMoving = (item) => {
 };
 
 /**
- * Check if a download item has an error message
+ * Check if a download item has an error
+ * Checks both the unified status field and the message field
  * @param {Object} item - Download item
  * @returns {boolean} True if has error
  */
 export const isItemError = (item) => {
-  return item.message && item.message.length > 0;
+  return item.status === 'error' || (item.message && item.message.length > 0);
 };
 
 /**
@@ -169,14 +170,23 @@ export const isActiveStatus = (key) => {
 };
 
 /**
+ * Check if item is from a BitTorrent client (rtorrent or qbittorrent)
+ * @param {Object} item - Download/shared item
+ * @returns {boolean} True if BitTorrent client
+ */
+export const isBittorrentClient = (item) => {
+  return item.client === 'rtorrent' || item.client === 'qbittorrent';
+};
+
+/**
  * Format source count display with detailed breakdown
- * Handles both aMule and rtorrent formats via unified sources object
+ * Handles both aMule and BitTorrent formats via unified sources object
  * @param {Object} item - Download item with sources object
  * @returns {string} Formatted source display (readable format)
  */
 export const formatSourceDisplay = (item, compact = false) => {
-  // rtorrent: "X peers (Y seeds)" or compact "X (Y seeds)"
-  if (item.client === 'rtorrent') {
+  // BitTorrent (rtorrent/qbittorrent): "X peers (Y seeds)" or compact "X (Y seeds)"
+  if (isBittorrentClient(item)) {
     const sources = item.sources || {};
     const connected = sources.connected || 0;
     const seeders = sources.seeders || 0;
@@ -216,28 +226,34 @@ export const formatSourceDisplay = (item, compact = false) => {
 };
 
 /**
- * Get unique rtorrent labels from a list of downloads
+ * Get unique BitTorrent labels/categories from a list of downloads
  * @param {Array} downloads - Array of download items
  * @returns {Array} Sorted array of unique labels
  */
-export const extractRtorrentLabels = (downloads) => {
+export const extractBittorrentLabels = (downloads) => {
   const labels = new Set();
   downloads.forEach(d => {
-    if (d.client === 'rtorrent' && d.category && d.category !== '(none)') {
+    if (isBittorrentClient(d) && d.category && d.category !== '(none)') {
       labels.add(d.category);
     }
   });
   return Array.from(labels).sort();
 };
 
+// Legacy alias for backwards compatibility
+export const extractRtorrentLabels = extractBittorrentLabels;
+
 /**
- * Check if downloads include rtorrent items
+ * Check if downloads include BitTorrent items (rtorrent or qbittorrent)
  * @param {Array} downloads - Array of download items
- * @returns {boolean} True if any rtorrent downloads exist
+ * @returns {boolean} True if any BitTorrent downloads exist
  */
-export const hasRtorrentItems = (downloads) => {
-  return downloads.some(d => d.client === 'rtorrent');
+export const hasBittorrentItems = (downloads) => {
+  return downloads.some(d => isBittorrentClient(d));
 };
+
+// Legacy alias for backwards compatibility
+export const hasRtorrentItems = hasBittorrentItems;
 
 /**
  * Check if downloads include aMule items
@@ -295,13 +311,13 @@ export const getSelectedClientTypes = (selectedFiles, downloads) => {
 
 /**
  * Get client software name from ID or string
- * For rtorrent, softwareId is -1 and we use software string directly
+ * For BitTorrent clients, softwareId is -1 and we use software string directly
  * @param {Object} item - Upload or peer item with client software info
  * @returns {string} Client software name
  */
 export const getClientSoftware = (item) => {
-  // For rtorrent peers, use the client string directly (it contains full client name + version)
-  if (item.client === 'rtorrent' || item.softwareId === -1) {
+  // For BitTorrent peers, use the client string directly (it contains full client name + version)
+  if (isBittorrentClient(item) || item.softwareId === -1) {
     return item.software || 'Unknown';
   }
   // For aMule, use the numeric software ID lookup
@@ -319,12 +335,12 @@ export const getIpString = (item) => {
 
 /**
  * Get export link for any download/shared file
- * Returns magnet link for rtorrent, ED2K link for aMule
+ * Returns magnet link for rtorrent/qbittorrent, ED2K link for aMule
  * @param {Object} item - Download or shared file item
  * @returns {string|null} Export link or null if not available
  */
 export const getExportLink = (item) => {
-  if (item.client === 'rtorrent') {
+  if (item.client === 'rtorrent' || item.client === 'qbittorrent') {
     return generateMagnetLink(item);
   }
   // aMule: use unified ed2kLink field
@@ -337,7 +353,7 @@ export const getExportLink = (item) => {
  * @returns {string} Label for the export link
  */
 export const getExportLinkLabel = (item) => {
-  return item.client === 'rtorrent' ? 'Magnet Link' : 'ED2K Link';
+  return (item.client === 'rtorrent' || item.client === 'qbittorrent') ? 'Magnet Link' : 'ED2K Link';
 };
 
 /**

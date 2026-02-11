@@ -2,6 +2,8 @@
 
 aMuTorrent connects to rTorrent via XML-RPC over HTTP, allowing you to manage BitTorrent downloads.
 
+> **Alternative:** If you prefer qBittorrent, see [qBittorrent Integration](./QBITTORRENT.md). You can also use both BitTorrent clients simultaneously.
+
 ## Requirements
 
 - rTorrent with XML-RPC enabled over HTTP
@@ -12,11 +14,11 @@ aMuTorrent connects to rTorrent via XML-RPC over HTTP, allowing you to manage Bi
 ### Via Settings UI
 
 1. Go to **Settings** in aMuTorrent
-2. Expand the **rTorrent** section
+2. Expand the **BitTorrent Integration** section
 3. Enable rTorrent integration
 4. Configure connection settings:
    - **Host**: rTorrent XML-RPC hostname (e.g., `localhost` or `rtorrent`)
-   - **Port**: XML-RPC port (default: `8080`)
+   - **Port**: XML-RPC port (default: `8000`)
    - **Path**: XML-RPC endpoint path (default: `/RPC2`)
    - **Username/Password**: If HTTP authentication is required
 
@@ -38,7 +40,7 @@ RTORRENT_PASSWORD=pass
   "rtorrent": {
     "enabled": true,
     "host": "localhost",
-    "port": 8080,
+    "port": 8000,
     "path": "/RPC2",
     "username": "",
     "password": ""
@@ -114,6 +116,15 @@ Categories created in aMuTorrent map to rTorrent labels. When a category has a c
 
 1. New downloads with that category are saved to the category path
 2. Existing downloads (active or completed) can be moved to their category path via the UI
+
+## Using Both BitTorrent Clients
+
+You can run rTorrent and qBittorrent simultaneously. When both are connected:
+
+- A **client selector** appears when adding downloads, letting you choose the target client
+- The **ED2K/BT filter** in the header groups both BitTorrent clients together
+- **Statistics** combine speeds and totals from all connected clients
+- **Prowlarr** search results can be sent to either client
 
 ## Troubleshooting
 

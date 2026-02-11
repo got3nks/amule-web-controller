@@ -13,8 +13,9 @@ import { useAppState } from '../../contexts/AppStateContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useSearch } from '../../contexts/SearchContext.js';
 import { useActions } from '../../contexts/ActionsContext.js';
-import { useTextFilter, useSelectionMode, usePageSelection } from '../../hooks/index.js';
+import { useTextFilter, useSelectionMode, usePageSelection, useBitTorrentClientSelector } from '../../hooks/index.js';
 import { useStickyToolbar } from '../../contexts/StickyHeaderContext.js';
+import BitTorrentClientSelector from './BitTorrentClientSelector.js';
 
 const { createElement: h, useCallback, useMemo, useEffect, useState } = React;
 
@@ -50,6 +51,9 @@ const SearchResultsSection = ({
   // Detect if results are from Prowlarr
   const isProwlarr = useMemo(() => results.length > 0 && results[0].isProwlarr, [results]);
   const sortableColumns = isProwlarr ? PROWLARR_RESULTS_COLUMNS : SEARCH_RESULTS_COLUMNS;
+
+  // BitTorrent client selector for Prowlarr results
+  const { connectedClients, showClientSelector, selectedClientId, selectClient, hasBitTorrentClient } = useBitTorrentClientSelector();
 
   // Indexer filter (for Prowlarr results only)
   const [indexerFilter, setIndexerFilter] = useState('all');
@@ -251,7 +255,7 @@ const SearchResultsSection = ({
       // Download Prowlarr items via REST API
       let prowlarrSuccessCount = 0;
       for (const item of prowlarrItems) {
-        const success = await actions.search.addProwlarrTorrent(item, searchDownloadCategory);
+        const success = await actions.search.addProwlarrTorrent(item, searchDownloadCategory, selectedClientId);
         if (success) prowlarrSuccessCount++;
       }
 
@@ -264,7 +268,7 @@ const SearchResultsSection = ({
     } finally {
       setDownloading(false);
     }
-  }, [selectedFiles, dataDownloadedFiles, results, actions, searchDownloadCategory, clearAllSelections, addAppSuccess]);
+  }, [selectedFiles, dataDownloadedFiles, results, actions, searchDownloadCategory, selectedClientId, clearAllSelections, addAppSuccess]);
 
   // Clear selection when results change (navigating between cached/live results)
   useEffect(() => { clearAllSelections(); }, [results]);
@@ -384,6 +388,13 @@ const SearchResultsSection = ({
       onSelectAll: handleSelectAll,
       onClearAll: clearAllSelections
     },
+      // Show BitTorrent client selector for Prowlarr results when 2+ clients are connected
+      isProwlarr && h(BitTorrentClientSelector, {
+        connectedClients,
+        selectedClientId,
+        onSelectClient: selectClient,
+        showSelector: showClientSelector
+      }),
       h(Select, {
         value: searchDownloadCategory,
         onChange: (e) => setSearchDownloadCategory(e.target.value),
@@ -395,7 +406,7 @@ const SearchResultsSection = ({
         icon: downloading ? null : 'download',
         iconSize: 14,
         onClick: handleBatchDownload,
-        disabled: downloadableCount === 0 || downloading
+        disabled: downloadableCount === 0 || downloading || (isProwlarr && !hasBitTorrentClient)
       },
         downloading
           ? h('span', { className: 'flex items-center gap-2' },

@@ -30,7 +30,7 @@ const { createElement: h, useState, useEffect } = React;
  * Default expanded-sections state for each variant
  */
 const getDefaultExpanded = (variant) => {
-  if (variant === 'rtorrent') {
+  if (variant === 'rtorrent' || variant === 'qbittorrent') {
     return {
       'Files': true,
       'Peers': true,
@@ -71,7 +71,7 @@ const getDefaultExpanded = (variant) => {
  * Header config for each variant
  */
 const getHeaderConfig = (variant, item) => {
-  if (variant === 'rtorrent') {
+  if (variant === 'rtorrent' || variant === 'qbittorrent') {
     const isSeeding = item.status === 'seeding';
     return {
       icon: isSeeding ? 'upload' : 'download',
@@ -90,6 +90,7 @@ const getHeaderConfig = (variant, item) => {
  */
 const getVariant = (item) => {
   if (item.client === 'rtorrent') return 'rtorrent';
+  if (item.client === 'qbittorrent') return 'qbittorrent';
   if (item.downloading) return 'amule-download';
   return 'amule-shared';
 };
@@ -129,9 +130,10 @@ const FileInfoModal = ({ hash, onClose }) => {
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesError, setFilesError] = useState(null);
 
-  // Fetch files when modal opens for multi-file rtorrent items, refresh periodically
+  // Fetch files when modal opens for multi-file torrent items, refresh periodically
   useEffect(() => {
-    if (!hash || !liveItem || variant !== 'rtorrent') {
+    const isTorrent = variant === 'rtorrent' || variant === 'qbittorrent';
+    if (!hash || !liveItem || !isTorrent) {
       setFiles(null);
       return;
     }
@@ -150,7 +152,10 @@ const FileInfoModal = ({ hash, onClose }) => {
         setFilesError(null);
       }
       try {
-        const response = await fetch(`/api/rtorrent/files/${liveItem.hash}`);
+        const apiPath = variant === 'qbittorrent'
+          ? `/api/qbittorrent/files/${liveItem.hash}`
+          : `/api/rtorrent/files/${liveItem.hash}`;
+        const response = await fetch(apiPath);
         if (cancelled) return;
         if (!response.ok) throw new Error('Failed to fetch files');
         const data = await response.json();
@@ -182,15 +187,16 @@ const FileInfoModal = ({ hash, onClose }) => {
   if (!liveItem) return null;
 
   // Raw data for categorized fields:
-  // - rtorrent: raw contains camelCase fields (hash, name, size, etc.)
+  // - rtorrent/qbittorrent: raw contains camelCase fields (hash, name, size, etc.)
   // - aMule: EC_TAG_ fields may be at liveItem.raw (if set from download.raw)
   //   or nested at liveItem.raw.raw (if raw was overwritten by shared file data).
   //   Resolve to whichever level has EC_TAG_ keys.
+  const isTorrent = variant === 'rtorrent' || variant === 'qbittorrent';
   const rawFull = liveItem.raw || {};
-  const ecTagSource = variant !== 'rtorrent' && rawFull.raw && typeof rawFull.raw === 'object'
+  const ecTagSource = !isTorrent && rawFull.raw && typeof rawFull.raw === 'object'
     ? rawFull.raw
     : rawFull;
-  const raw = variant === 'rtorrent'
+  const raw = isTorrent
     ? rawFull
     : Object.fromEntries(Object.entries(ecTagSource).filter(([k]) => k.startsWith('EC_TAG_')));
 
@@ -208,11 +214,11 @@ const FileInfoModal = ({ hash, onClose }) => {
 
   // --- Variant-specific data ---
 
-  // rtorrent
-  const isComplete = variant === 'rtorrent' && liveItem.progress >= 100;
-  const torrentMessage = variant === 'rtorrent' ? (liveItem.message || '') : '';
-  const trackersDetailed = variant === 'rtorrent' ? (liveItem.trackersDetailed || []) : [];
-  const peersDetailedRt = variant === 'rtorrent' ? (liveItem.peersDetailed || []) : [];
+  // torrent clients (rtorrent/qbittorrent)
+  const isComplete = isTorrent && liveItem.progress >= 100;
+  const torrentMessage = isTorrent ? (liveItem.message || '') : '';
+  const trackersDetailed = isTorrent ? (liveItem.trackersDetailed || []) : [];
+  const peersDetailedTorrent = isTorrent ? (liveItem.peersDetailed || []) : [];
 
   // amule (shared or downloading with active upload peers)
   const peersDetailedAmule = (variant === 'amule-shared' || variant === 'amule-download')
@@ -221,7 +227,7 @@ const FileInfoModal = ({ hash, onClose }) => {
   // --- Categorized fields ---
   let categorizedFields = {};
 
-  if (variant === 'rtorrent') {
+  if (isTorrent) {
     const allFields = categorizeDownloadFields(raw);
     const categoryOrder = isComplete
       ? [
@@ -292,8 +298,8 @@ const FileInfoModal = ({ hash, onClose }) => {
           onCopy: handleCopy
         }),
 
-        // --- rtorrent: Progress bar (only if not complete) ---
-        variant === 'rtorrent' && !isComplete && h('div', { className: 'bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-gray-700' },
+        // --- torrent: Progress bar (only if not complete) ---
+        isTorrent && !isComplete && h('div', { className: 'bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-gray-700' },
           h('div', { className: 'text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 mb-2' }, 'Progress'),
           h('div', { className: 'w-full bg-gray-200 dark:bg-gray-700 rounded-full h-6 relative overflow-hidden' },
             h('div', {
@@ -336,8 +342,8 @@ const FileInfoModal = ({ hash, onClose }) => {
           )
         ),
 
-        // --- rtorrent: Quick stats grid ---
-        variant === 'rtorrent' && h('div', { className: 'grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3' },
+        // --- torrent: Quick stats grid ---
+        isTorrent && h('div', { className: 'grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3' },
           h('div', { className: 'bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2 sm:p-3' },
             h('div', { className: 'text-xs text-gray-500 dark:text-gray-400 mb-0.5 sm:mb-1' }, 'Size'),
             h('div', { className: 'text-sm sm:text-base font-semibold text-gray-900 dark:text-gray-100' },
@@ -398,8 +404,8 @@ const FileInfoModal = ({ hash, onClose }) => {
           )
         ),
 
-        // --- rtorrent: Message/error section ---
-        variant === 'rtorrent' && torrentMessage && h('div', {
+        // --- torrent: Message/error section ---
+        isTorrent && torrentMessage && h('div', {
           className: 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 sm:p-4'
         },
           h('div', { className: 'flex items-start gap-2' },
@@ -411,24 +417,24 @@ const FileInfoModal = ({ hash, onClose }) => {
           )
         ),
 
-        // --- rtorrent: Files section (multi-file only) ---
-        variant === 'rtorrent' && (files || filesLoading) && h(CollapsibleTableSection, {
+        // --- torrent: Files section (multi-file only) ---
+        isTorrent && (files || filesLoading) && h(CollapsibleTableSection, {
           title: 'Files',
           count: files ? files.length : '...',
           expanded: expandedSections['Files'],
           onToggle: () => toggleSection('Files')
         }, h(FilesTreeSection, { files, loading: filesLoading, error: filesError })),
 
-        // --- rtorrent: Peers section ---
-        variant === 'rtorrent' && peersDetailedRt.length > 0 && h(CollapsibleTableSection, {
+        // --- torrent: Peers section ---
+        isTorrent && peersDetailedTorrent.length > 0 && h(CollapsibleTableSection, {
           title: 'Peers',
-          count: peersDetailedRt.length,
+          count: peersDetailedTorrent.length,
           expanded: expandedSections['Peers'],
           onToggle: () => toggleSection('Peers')
-        }, h(PeersTable, { peers: peersDetailedRt })),
+        }, h(PeersTable, { peers: peersDetailedTorrent })),
 
-        // --- rtorrent: Trackers section ---
-        variant === 'rtorrent' && trackersDetailed.length > 0 && h(CollapsibleTableSection, {
+        // --- torrent: Trackers section ---
+        isTorrent && trackersDetailed.length > 0 && h(CollapsibleTableSection, {
           title: 'Trackers',
           count: trackersDetailed.length,
           expanded: expandedSections['Trackers'],

@@ -99,6 +99,11 @@ export const DataFetchProvider = ({ children }) => {
     sendMessage({ action: 'getAppLog' });
   }, [sendMessage, resetStaticDataLoaded]);
 
+  const fetchQbittorrentLogs = useCallback(() => {
+    resetStaticDataLoaded('qbittorrentLogs');
+    sendMessage({ action: 'getQbittorrentLog' });
+  }, [sendMessage, resetStaticDataLoaded]);
+
   const fetchStatsTree = useCallback(() => {
     sendMessage({ action: 'getStatsTree' });
   }, [sendMessage]);
@@ -120,6 +125,7 @@ export const DataFetchProvider = ({ children }) => {
     fetchLogs,
     fetchServerInfo,
     fetchAppLogs,
+    fetchQbittorrentLogs,
     fetchStatsTree,
     fetchServers,
     fetchCategories,
@@ -128,7 +134,7 @@ export const DataFetchProvider = ({ children }) => {
     stopHistoryRefresh
   }), [
     fetchPreviousSearchResults, refreshSharedFiles,
-    fetchLogs, fetchServerInfo, fetchAppLogs, fetchStatsTree,
+    fetchLogs, fetchServerInfo, fetchAppLogs, fetchQbittorrentLogs, fetchStatsTree,
     fetchServers, fetchCategories, fetchHistory, startHistoryRefresh, stopHistoryRefresh
   ]);
 

@@ -161,6 +161,7 @@ const CategoriesView = () => {
   };
 
   // Helper to format path mappings for display
+  // Note: qBittorrent excluded - it handles moves/deletes natively via API
   const formatPathMappings = useCallback((pathMappings) => {
     if (!pathMappings) return null;
     const parts = [];
@@ -210,7 +211,7 @@ const CategoriesView = () => {
         const hasPathMapping = item.pathMappings && (item.pathMappings.amule || item.pathMappings.rtorrent);
         // For Default category, show client default paths with icons
         // Only show warnings here if path mapping is NOT enabled (otherwise warnings show in Mappings column)
-        if (isDefault && (clientDefaultPaths?.amule || clientDefaultPaths?.rtorrent)) {
+        if (isDefault && (clientDefaultPaths?.amule || clientDefaultPaths?.rtorrent || clientDefaultPaths?.qbittorrent)) {
           return h('div', { className: 'text-xs space-y-0.5' },
             clientDefaultPaths?.amule && h('div', { className: 'flex items-center gap-1', title: clientDefaultPaths.amule },
               h(ClientIcon, { client: 'amule', size: 14 }),
@@ -221,6 +222,11 @@ const CategoriesView = () => {
               h(ClientIcon, { client: 'rtorrent', size: 14 }),
               h('span', { className: 'font-mono text-gray-600 dark:text-gray-400 truncate' }, clientDefaultPaths.rtorrent),
               !hasPathMapping && renderPathWarningIcon(mappingWarnings.rtorrent)
+            ),
+            clientDefaultPaths?.qbittorrent && h('div', { className: 'flex items-center gap-1', title: clientDefaultPaths.qbittorrent },
+              h(ClientIcon, { client: 'qbittorrent', size: 14 }),
+              h('span', { className: 'font-mono text-gray-600 dark:text-gray-400 truncate' }, clientDefaultPaths.qbittorrent),
+              !hasPathMapping && renderPathWarningIcon(mappingWarnings.qbittorrent)
             )
           );
         }
@@ -362,7 +368,7 @@ const CategoriesView = () => {
       // Body with details
       h('div', { className: 'p-2 space-y-1 text-xs bg-white dark:bg-gray-800' },
         // Path - for Default category, show client default paths with icons
-        isDefault && (clientDefaultPaths?.amule || clientDefaultPaths?.rtorrent)
+        isDefault && (clientDefaultPaths?.amule || clientDefaultPaths?.rtorrent || clientDefaultPaths?.qbittorrent)
           ? h('div', { className: 'text-gray-700 dark:text-gray-300' },
               h('span', { className: 'font-medium text-gray-600 dark:text-gray-400' }, 'Path: '),
               h('div', { className: 'pl-2 space-y-0.5' },
@@ -375,6 +381,11 @@ const CategoriesView = () => {
                   h(ClientIcon, { client: 'rtorrent', size: 14 }),
                   h('span', { className: 'font-mono' }, clientDefaultPaths.rtorrent),
                   !hasPathMapping && renderPathWarningIcon(mappingWarnings.rtorrent)
+                ),
+                clientDefaultPaths?.qbittorrent && h('div', { className: 'flex items-center gap-1' },
+                  h(ClientIcon, { client: 'qbittorrent', size: 14 }),
+                  h('span', { className: 'font-mono' }, clientDefaultPaths.qbittorrent),
+                  !hasPathMapping && renderPathWarningIcon(mappingWarnings.qbittorrent)
                 )
               )
             )

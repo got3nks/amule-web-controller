@@ -14,6 +14,9 @@ import DirectoryBrowserModal from './DirectoryBrowserModal.js';
 
 const { createElement: h, useState, useEffect, useCallback, useRef } = React;
 
+// Debounce delay for path validation (ms)
+const PATH_CHECK_DEBOUNCE = 500;
+
 /**
  * Category create/edit modal
  * @param {boolean} show - Whether to show the modal
@@ -43,17 +46,24 @@ const CategoryModal = ({
   const { clientsConnected, clientDefaultPaths } = useStaticData();
   const isAmuleEnabled = clientsConnected?.amule === true;
   const isRtorrentEnabled = clientsConnected?.rtorrent === true;
+  const isQbittorrentEnabled = clientsConnected?.qbittorrent === true;
 
   // Local state for path mapping
   const [enablePathMapping, setEnablePathMapping] = useState(false);
-  const [pathMappings, setPathMappings] = useState({ amule: '', rtorrent: '' });
+  const [pathMappings, setPathMappings] = useState({ amule: '', rtorrent: '', qbittorrent: '' });
 
   // Path permission warning state
   const [pathWarning, setPathWarning] = useState(null);
-  const [mappingWarnings, setMappingWarnings] = useState({ amule: null, rtorrent: null });
+  const [mappingWarnings, setMappingWarnings] = useState({ amule: null, rtorrent: null, qbittorrent: null });
 
   // Track if we're in the initialization phase (to prevent clearing warnings on init)
   const isInitializingRef = useRef(false);
+
+  // Debounce timers for path validation
+  const pathDebounceRef = useRef(null);
+  const amuleDebounceRef = useRef(null);
+  const rtorrentDebounceRef = useRef(null);
+  const qbittorrentDebounceRef = useRef(null);
 
   // Directory browser modal state
   const {
@@ -70,8 +80,8 @@ const CategoryModal = ({
     }));
   }, []);
 
-  // Check path permissions when path input loses focus or after browser selection
-  const checkPathPermissions = useCallback(async (pathToCheck, warningKey = null) => {
+  // Check path permissions (called on blur or after debounce)
+  const checkPathPermissionsImmediate = useCallback(async (pathToCheck, warningKey = null) => {
     const setWarning = warningKey
       ? (msg) => setMappingWarnings(prev => ({ ...prev, [warningKey]: msg }))
       : setPathWarning;
@@ -113,6 +123,43 @@ const CategoryModal = ({
     }
   }, []);
 
+  // Debounced path permission check - waits until user stops typing
+  const checkPathPermissionsDebounced = useCallback((pathToCheck, warningKey = null) => {
+    // Choose the appropriate debounce ref based on warningKey
+    const debounceRef = warningKey === 'amule' ? amuleDebounceRef
+      : warningKey === 'rtorrent' ? rtorrentDebounceRef
+      : warningKey === 'qbittorrent' ? qbittorrentDebounceRef
+      : pathDebounceRef;
+
+    // Clear existing timer
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
+    // Set new timer
+    debounceRef.current = setTimeout(() => {
+      checkPathPermissionsImmediate(pathToCheck, warningKey);
+      debounceRef.current = null;
+    }, PATH_CHECK_DEBOUNCE);
+  }, [checkPathPermissionsImmediate]);
+
+  // Immediate check (for blur and browser selection)
+  const checkPathPermissions = useCallback((pathToCheck, warningKey = null) => {
+    // Cancel any pending debounced check
+    const debounceRef = warningKey === 'amule' ? amuleDebounceRef
+      : warningKey === 'rtorrent' ? rtorrentDebounceRef
+      : warningKey === 'qbittorrent' ? qbittorrentDebounceRef
+      : pathDebounceRef;
+
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+
+    // Check immediately
+    checkPathPermissionsImmediate(pathToCheck, warningKey);
+  }, [checkPathPermissionsImmediate]);
+
   // Handle path selection from browser
   const handlePathSelected = useCallback((selectedPath) => {
     if (browserModal.target === 'path') {
@@ -127,8 +174,22 @@ const CategoryModal = ({
       handleMappingChange('rtorrent', selectedPath);
       // Check path permissions immediately after selection
       checkPathPermissions(selectedPath, 'rtorrent');
+    } else if (browserModal.target === 'qbittorrent') {
+      handleMappingChange('qbittorrent', selectedPath);
+      // Check path permissions immediately after selection
+      checkPathPermissions(selectedPath, 'qbittorrent');
     }
   }, [browserModal.target, formData, onFormDataChange, handleMappingChange, checkPathPermissions]);
+
+  // Cleanup debounce timers when modal closes
+  useEffect(() => {
+    if (!show) {
+      if (pathDebounceRef.current) clearTimeout(pathDebounceRef.current);
+      if (amuleDebounceRef.current) clearTimeout(amuleDebounceRef.current);
+      if (rtorrentDebounceRef.current) clearTimeout(rtorrentDebounceRef.current);
+      if (qbittorrentDebounceRef.current) clearTimeout(qbittorrentDebounceRef.current);
+    }
+  }, [show]);
 
   // Initialize path mapping state and warnings when modal opens or category changes
   useEffect(() => {
@@ -140,16 +201,17 @@ const CategoryModal = ({
         setEnablePathMapping(true);
         setPathMappings({
           amule: category.pathMappings.amule || '',
-          rtorrent: category.pathMappings.rtorrent || ''
+          rtorrent: category.pathMappings.rtorrent || '',
+          qbittorrent: category.pathMappings.qbittorrent || ''
         });
       } else {
         setEnablePathMapping(false);
-        setPathMappings({ amule: '', rtorrent: '' });
+        setPathMappings({ amule: '', rtorrent: '', qbittorrent: '' });
       }
 
       // Reset warnings - will be re-checked via API below
       setPathWarning(null);
-      setMappingWarnings({ amule: null, rtorrent: null });
+      setMappingWarnings({ amule: null, rtorrent: null, qbittorrent: null });
 
       // Clear initialization flag after a tick (after clear effects have run)
       setTimeout(() => {
@@ -159,17 +221,19 @@ const CategoryModal = ({
   }, [show, category]);
 
   // Re-check path permissions when modal opens (to get fresh warnings with Docker hints)
+  // Note: Only runs on modal open, not on every path keystroke
   useEffect(() => {
     if (show && mode === 'edit' && category) {
       const isDefaultCategory = category.name === 'Default' || category.title === 'Default';
       const hasPathMappings = category.pathMappings && (category.pathMappings.amule || category.pathMappings.rtorrent);
 
       // Check main path (only for non-Default categories without path mapping)
-      if (!isDefaultCategory && formData.path?.trim() && !hasPathMappings) {
-        checkPathPermissions(formData.path);
+      // Use category.path (original value) not formData.path to avoid re-running on every keystroke
+      if (!isDefaultCategory && category.path?.trim() && !hasPathMappings) {
+        checkPathPermissions(category.path);
       }
 
-      // Check path mappings if enabled
+      // Check path mappings if enabled (qBittorrent excluded - uses native API)
       if (hasPathMappings) {
         if (category.pathMappings.amule) {
           checkPathPermissions(category.pathMappings.amule, 'amule');
@@ -179,14 +243,14 @@ const CategoryModal = ({
         }
       }
     }
-  }, [show, mode, category, formData.path, checkPathPermissions]);
+  }, [show, mode, category, checkPathPermissions]);
 
   // Reset path mapping when path is cleared (for non-Default categories)
   useEffect(() => {
     const isDefaultCategory = category?.name === 'Default' || category?.title === 'Default';
     if (!isDefaultCategory && !formData.path?.trim()) {
       setEnablePathMapping(false);
-      setPathMappings({ amule: '', rtorrent: '' });
+      setPathMappings({ amule: '', rtorrent: '', qbittorrent: '' });
     }
   }, [formData.path, category]);
 
@@ -208,6 +272,12 @@ const CategoryModal = ({
       setMappingWarnings(prev => ({ ...prev, rtorrent: null }));
     }
   }, [pathMappings.rtorrent]);
+
+  useEffect(() => {
+    if (!isInitializingRef.current) {
+      setMappingWarnings(prev => ({ ...prev, qbittorrent: null }));
+    }
+  }, [pathMappings.qbittorrent]);
 
   if (!show) return null;
 
@@ -234,6 +304,9 @@ const CategoryModal = ({
       }
       if (pathMappings.rtorrent?.trim()) {
         mappings.rtorrent = pathMappings.rtorrent.trim();
+      }
+      if (pathMappings.qbittorrent?.trim()) {
+        mappings.qbittorrent = pathMappings.qbittorrent.trim();
       }
       if (Object.keys(mappings).length > 0) {
         finalPathMappings = mappings;
@@ -320,6 +393,12 @@ const CategoryModal = ({
                   h('span', { className: 'font-mono text-gray-600 dark:text-gray-400' },
                     clientDefaultPaths?.rtorrent || '(not available)'
                   )
+                ),
+                isQbittorrentEnabled && h('div', { className: 'flex items-center gap-2 text-sm' },
+                  h('span', { className: 'font-medium text-gray-500 dark:text-gray-400' }, 'qBittorrent:'),
+                  h('span', { className: 'font-mono text-gray-600 dark:text-gray-400' },
+                    clientDefaultPaths?.qbittorrent || '(not available)'
+                  )
                 )
               )
             : h('div', null,
@@ -327,7 +406,13 @@ const CategoryModal = ({
                   h(Input, {
                     type: 'text',
                     value: formData.path,
-                    onChange: (e) => onFormDataChange({ ...formData, path: e.target.value }),
+                    onChange: (e) => {
+                      onFormDataChange({ ...formData, path: e.target.value });
+                      // Debounced validation while typing (only when path mapping is disabled)
+                      if (!enablePathMapping) {
+                        checkPathPermissionsDebounced(e.target.value);
+                      }
+                    },
                     onBlur: enablePathMapping ? undefined : (e) => checkPathPermissions(e.target.value),
                     placeholder: '/path/to/downloads (leave empty for default)',
                     className: 'flex-1 font-mono'
@@ -388,7 +473,10 @@ const CategoryModal = ({
                 h(Input, {
                   type: 'text',
                   value: pathMappings.amule,
-                  onChange: (e) => handleMappingChange('amule', e.target.value),
+                  onChange: (e) => {
+                    handleMappingChange('amule', e.target.value);
+                    checkPathPermissionsDebounced(e.target.value, 'amule');
+                  },
                   onBlur: (e) => checkPathPermissions(e.target.value, 'amule'),
                   placeholder: isDefault ? '/mnt/amule-incoming' : '/mnt/amule-data/category-path',
                   className: 'flex-1 font-mono'
@@ -418,7 +506,10 @@ const CategoryModal = ({
                 h(Input, {
                   type: 'text',
                   value: pathMappings.rtorrent,
-                  onChange: (e) => handleMappingChange('rtorrent', e.target.value),
+                  onChange: (e) => {
+                    handleMappingChange('rtorrent', e.target.value);
+                    checkPathPermissionsDebounced(e.target.value, 'rtorrent');
+                  },
                   onBlur: (e) => checkPathPermissions(e.target.value, 'rtorrent'),
                   placeholder: isDefault ? '/mnt/rtorrent-downloads' : '/mnt/rtorrent-data/category-path',
                   className: 'flex-1 font-mono'
@@ -439,7 +530,9 @@ const CategoryModal = ({
               mappingWarnings.rtorrent && h(AlertBox, { type: 'warning', className: 'mt-2' }, mappingWarnings.rtorrent)
             ),
 
-            // Message if no clients enabled
+            // Note: qBittorrent doesn't need path mapping - it handles moves/deletes natively via API
+
+            // Message if no clients need path mapping
             !isAmuleEnabled && !isRtorrentEnabled && h('p', {
               className: 'text-sm text-gray-500 dark:text-gray-400 italic'
             }, 'No download clients connected. Connect clients to configure path mappings.')

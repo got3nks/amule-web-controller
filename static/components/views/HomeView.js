@@ -184,12 +184,12 @@ const HomeView = () => {
           )
         ),
 
-        // BOTH CLIENTS: rTorrent Speed Chart
+        // BOTH CLIENTS: BitTorrent Speed Chart (aggregated rtorrent + qbittorrent)
         showBothCharts && h('div', { className: 'sm:col-span-6 md:col-span-3' },
           h(DashboardChartWidget, {
             title: h('span', { className: 'flex items-center gap-2' },
-              h(ClientIcon, { clientType: 'rtorrent', size: 16 }),
-              'rTorrent Speed (24h)'
+              h(ClientIcon, { clientType: 'bittorrent', size: 16 }),
+              'BitTorrent Speed (24h)'
             ),
             height: '200px'
           },
@@ -203,7 +203,7 @@ const HomeView = () => {
                 },
                   h(ClientSpeedChart, {
                     speedData: dashboardState.speedData,
-                    clientType: 'rtorrent',
+                    clientType: 'bittorrent',
                     theme,
                     historicalRange: '24h'
                   })

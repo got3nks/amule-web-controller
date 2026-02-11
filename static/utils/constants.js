@@ -99,6 +99,56 @@ export const RTORRENT_STATE_LABELS = {
   [RTORRENT_STATE.STARTED]: 'Started'
 };
 
+// qBittorrent state values (string-based)
+export const QBITTORRENT_STATE = {
+  DOWNLOADING: 'downloading',
+  STALLED_DL: 'stalledDL',
+  META_DL: 'metaDL',
+  ALLOCATING: 'allocating',
+  QUEUED_DL: 'queuedDL',
+  FORCED_DL: 'forcedDL',
+  UPLOADING: 'uploading',
+  STALLED_UP: 'stalledUP',
+  QUEUED_UP: 'queuedUP',
+  FORCED_UP: 'forcedUP',
+  PAUSED_DL: 'pausedDL',
+  PAUSED_UP: 'pausedUP',
+  STOPPED_DL: 'stoppedDL',
+  STOPPED_UP: 'stoppedUP',
+  CHECKING_DL: 'checkingDL',
+  CHECKING_UP: 'checkingUP',
+  CHECKING_RESUME: 'checkingResumeData',
+  MOVING: 'moving',
+  ERROR: 'error',
+  MISSING_FILES: 'missingFiles',
+  UNKNOWN: 'unknown'
+};
+
+// qBittorrent state labels
+export const QBITTORRENT_STATE_LABELS = {
+  [QBITTORRENT_STATE.DOWNLOADING]: 'Downloading',
+  [QBITTORRENT_STATE.STALLED_DL]: 'Stalled (Download)',
+  [QBITTORRENT_STATE.META_DL]: 'Fetching Metadata',
+  [QBITTORRENT_STATE.ALLOCATING]: 'Allocating',
+  [QBITTORRENT_STATE.QUEUED_DL]: 'Queued (Download)',
+  [QBITTORRENT_STATE.FORCED_DL]: 'Forced Download',
+  [QBITTORRENT_STATE.UPLOADING]: 'Seeding',
+  [QBITTORRENT_STATE.STALLED_UP]: 'Stalled (Seeding)',
+  [QBITTORRENT_STATE.QUEUED_UP]: 'Queued (Seeding)',
+  [QBITTORRENT_STATE.FORCED_UP]: 'Forced Seeding',
+  [QBITTORRENT_STATE.PAUSED_DL]: 'Paused',
+  [QBITTORRENT_STATE.PAUSED_UP]: 'Paused (Complete)',
+  [QBITTORRENT_STATE.STOPPED_DL]: 'Stopped',
+  [QBITTORRENT_STATE.STOPPED_UP]: 'Stopped (Complete)',
+  [QBITTORRENT_STATE.CHECKING_DL]: 'Checking',
+  [QBITTORRENT_STATE.CHECKING_UP]: 'Checking (Complete)',
+  [QBITTORRENT_STATE.CHECKING_RESUME]: 'Checking Resume Data',
+  [QBITTORRENT_STATE.MOVING]: 'Moving',
+  [QBITTORRENT_STATE.ERROR]: 'Error',
+  [QBITTORRENT_STATE.MISSING_FILES]: 'Missing Files',
+  [QBITTORRENT_STATE.UNKNOWN]: 'Unknown'
+};
+
 // UI Timeouts (milliseconds)
 export const UI_TIMEOUTS = {
   COPY_FEEDBACK: 2000,           // "Copied!" feedback display
@@ -176,6 +226,12 @@ export const ICON_SIZES = {
   SMALL: 12,
   MEDIUM: 14,
   LARGE: 16
+};
+
+// Client display names (single source of truth for UI labels)
+export const CLIENT_NAMES = {
+  rtorrent: { name: 'rTorrent', shortName: 'rTor' },
+  qbittorrent: { name: 'qBittorrent', shortName: 'qBit' }
 };
 
 // Client software types (for uploads view)

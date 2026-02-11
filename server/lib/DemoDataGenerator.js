@@ -675,7 +675,7 @@ class DemoDataGenerator {
       items: this.generateItems(),
       categories: this.generateCategories(),
       stats: this.generateStats(),
-      clientDefaultPaths: { amule: '/downloads', rtorrent: '/downloads' },
+      clientDefaultPaths: { amule: '/downloads', rtorrent: '/downloads', qbittorrent: '/downloads' },
       hasPathWarnings: false
     };
   }

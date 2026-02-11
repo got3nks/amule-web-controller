@@ -1,18 +1,18 @@
 # Prowlarr Integration
 
-aMuTorrent integrates with [Prowlarr](https://prowlarr.com/) to search for torrents across multiple indexers and add them directly to rTorrent.
+aMuTorrent integrates with [Prowlarr](https://prowlarr.com/) to search for torrents across multiple indexers and add them directly to rTorrent or qBittorrent.
 
 ## Requirements
 
 - Prowlarr instance with configured indexers
-- rTorrent enabled in aMuTorrent (Prowlarr results are added to rTorrent)
+- At least one BitTorrent client enabled in aMuTorrent (rTorrent or qBittorrent)
 
 ## Configuration
 
 ### Via Settings UI
 
 1. Go to **Settings** in aMuTorrent
-2. Expand the **rTorrent** section (Prowlarr settings are nested here)
+2. Expand the **BitTorrent Integration** section (Prowlarr settings are nested here)
 3. Enable Prowlarr integration
 4. Configure:
    - **Prowlarr URL**: Full URL to your Prowlarr instance (e.g., `http://prowlarr:9696`)
@@ -64,17 +64,29 @@ services:
       - "9696:9696"
     restart: unless-stopped
 
+  # Use rTorrent, qBittorrent, or both
   rtorrent:
     image: crazymax/rtorrent-rutorrent:latest
     container_name: rtorrent
-    # ... rtorrent config ...
+    # ... rtorrent config (see RTORRENT.md) ...
+
+  qbittorrent:
+    image: linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    # ... qbittorrent config (see QBITTORRENT.md) ...
 
   amutorrent:
     image: g0t3nks/amutorrent:latest
     environment:
+      # Enable at least one BitTorrent client
       - RTORRENT_ENABLED=true
       - RTORRENT_HOST=rtorrent
       - RTORRENT_PORT=8000
+      # - QBITTORRENT_ENABLED=true
+      # - QBITTORRENT_HOST=qbittorrent
+      # - QBITTORRENT_PORT=8080
+      # - QBITTORRENT_USERNAME=admin
+      # - QBITTORRENT_PASSWORD=your_password
       - PROWLARR_ENABLED=true
       - PROWLARR_URL=http://prowlarr:9696
       - PROWLARR_API_KEY=your-api-key
@@ -101,9 +113,10 @@ services:
 
 ### Download Fails
 
-- Ensure rTorrent is connected and working
+- Ensure at least one BitTorrent client (rTorrent or qBittorrent) is connected and working
 - Check if the torrent/magnet link is valid
 - Some indexers may require Prowlarr to proxy downloads
+- If both clients are connected, check that you selected the correct target client
 
 ### API Key Invalid
 

@@ -1,0 +1,147 @@
+---
+title: aMuTorrent
+description: Unified web interface for aMule and rTorrent with real-time updates
+template: splash
+hero:
+  tagline: A modern, unified web interface for managing aMule and rTorrent downloads with real-time updates, category management, and integrations with Sonarr, Radarr, and Prowlarr.
+  image:
+    file: ../../assets/logo.png
+  actions:
+    - text: Get Started
+      link: /amutorrent/docs/installation
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/got3nks/amutorrent
+      icon: external
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import Carousel from '../../components/Carousel.astro';
+
+<div class="carousel-container" id="desktop-carousel">
+  <div class="carousel">
+    <div class="carousel-slide"><img src="/amutorrent/screenshots/home-desktop.png" alt="Home" class="lightbox-trigger" /></div>
+    <div class="carousel-slide"><img src="/amutorrent/screenshots/downloads-desktop.png" alt="Downloads" class="lightbox-trigger" /></div>
+    <div class="carousel-slide"><img src="/amutorrent/screenshots/search-desktop.png" alt="Search" class="lightbox-trigger" /></div>
+    <div class="carousel-slide"><img src="/amutorrent/screenshots/history-desktop.png" alt="History" class="lightbox-trigger" /></div>
+    <div class="carousel-slide"><img src="/amutorrent/screenshots/shared-desktop.png" alt="Shared Files" class="lightbox-trigger" /></div>
+    <div class="carousel-slide"><img src="/amutorrent/screenshots/uploads-desktop.png" alt="Uploads" class="lightbox-trigger" /></div>
+    <div class="carousel-slide"><img src="/amutorrent/screenshots/statistics-desktop.png" alt="Statistics" class="lightbox-trigger" /></div>
+    <div class="carousel-slide"><img src="/amutorrent/screenshots/categories-desktop.png" alt="Categories" class="lightbox-trigger" /></div>
+    <div class="carousel-slide"><img src="/amutorrent/screenshots/notifications-desktop.png" alt="Notifications" class="lightbox-trigger" /></div>
+    <div class="carousel-slide"><img src="/amutorrent/screenshots/logs-desktop.png" alt="Logs" class="lightbox-trigger" /></div>
+    <div class="carousel-slide"><img src="/amutorrent/screenshots/servers-desktop.png" alt="Servers" class="lightbox-trigger" /></div>
+    <div class="carousel-slide"><img src="/amutorrent/screenshots/settings-desktop.png" alt="Settings" class="lightbox-trigger" /></div>
+  </div>
+  <button class="carousel-nav prev" onclick="moveCarousel('desktop', -1)">❮</button>
+  <button class="carousel-nav next" onclick="moveCarousel('desktop', 1)">❯</button>
+  <div class="carousel-label" id="desktop-label">Home</div>
+  <div class="carousel-dots" id="desktop-dots"><button class="carousel-dot active"></button><button class="carousel-dot"></button><button class="carousel-dot"></button><button class="carousel-dot"></button><button class="carousel-dot"></button><button class="carousel-dot"></button><button class="carousel-dot"></button><button class="carousel-dot"></button><button class="carousel-dot"></button><button class="carousel-dot"></button><button class="carousel-dot"></button><button class="carousel-dot"></button></div>
+</div>
+
+<div id="lightbox" class="lightbox">
+  <span class="lightbox-close">&times;</span>
+  <button class="lightbox-nav lightbox-prev" id="lightbox-prev">❮</button>
+  <img class="lightbox-content" id="lightbox-img" />
+  <button class="lightbox-nav lightbox-next" id="lightbox-next">❯</button>
+  <div id="lightbox-caption"></div>
+</div>
+
+<Carousel />
+
+## Features
+
+<CardGrid>
+  <Card title="Multi-Client Support" icon="puzzle">
+    Manage both aMule (ED2K) and rTorrent (BitTorrent) from a single interface. View unified download queues, shared files, and upload activity.
+  </Card>
+  <Card title="Real-Time Updates" icon="rocket">
+    WebSocket-powered live updates for download progress, speeds, and peer information. No page refreshes needed.
+  </Card>
+  <Card title="Category Management" icon="list-format">
+    Organize downloads with categories. Automatic path assignment and category-based file organization.
+  </Card>
+  <Card title="Arr Integration" icon="setting">
+    Native integration with Sonarr, Radarr, and Prowlarr. Search for content and auto-trigger missing episode/movie searches.
+  </Card>
+  <Card title="Push Notifications" icon="approve-check">
+    Get notified via Discord, Telegram, Slack, Pushover, ntfy, and 80+ other services using Apprise integration.
+  </Card>
+  <Card title="GeoIP Mapping" icon="star">
+    Visualize peer locations with MaxMind GeoIP integration. See where your downloads are coming from.
+  </Card>
+</CardGrid>
+
+<div class="carousel-container carousel-mobile" id="mobile-carousel">
+  <div class="carousel">
+    <div class="carousel-slide">
+      <div class="mobile-screenshot"><img src="/amutorrent/screenshots/home-mobile.png" alt="Home" class="lightbox-trigger" /><span class="screenshot-label">Home</span></div>
+      <div class="mobile-screenshot"><img src="/amutorrent/screenshots/downloads-mobile.png" alt="Downloads" class="lightbox-trigger" /><span class="screenshot-label">Downloads</span></div>
+      <div class="mobile-screenshot"><img src="/amutorrent/screenshots/search-mobile.png" alt="Search" class="lightbox-trigger" /><span class="screenshot-label">Search</span></div>
+    </div>
+    <div class="carousel-slide">
+      <div class="mobile-screenshot"><img src="/amutorrent/screenshots/history-mobile.png" alt="History" class="lightbox-trigger" /><span class="screenshot-label">History</span></div>
+      <div class="mobile-screenshot"><img src="/amutorrent/screenshots/shared-mobile.png" alt="Shared" class="lightbox-trigger" /><span class="screenshot-label">Shared</span></div>
+      <div class="mobile-screenshot"><img src="/amutorrent/screenshots/uploads-mobile.png" alt="Uploads" class="lightbox-trigger" /><span class="screenshot-label">Uploads</span></div>
+    </div>
+    <div class="carousel-slide">
+      <div class="mobile-screenshot"><img src="/amutorrent/screenshots/statistics-mobile.png" alt="Statistics" class="lightbox-trigger" /><span class="screenshot-label">Statistics</span></div>
+      <div class="mobile-screenshot"><img src="/amutorrent/screenshots/categories-mobile.png" alt="Categories" class="lightbox-trigger" /><span class="screenshot-label">Categories</span></div>
+      <div class="mobile-screenshot"><img src="/amutorrent/screenshots/notifications-mobile.png" alt="Notifications" class="lightbox-trigger" /><span class="screenshot-label">Notifications</span></div>
+    </div>
+    <div class="carousel-slide">
+      <div class="mobile-screenshot"><img src="/amutorrent/screenshots/logs-mobile.png" alt="Logs" class="lightbox-trigger" /><span class="screenshot-label">Logs</span></div>
+      <div class="mobile-screenshot"><img src="/amutorrent/screenshots/servers-mobile.png" alt="Servers" class="lightbox-trigger" /><span class="screenshot-label">Servers</span></div>
+      <div class="mobile-screenshot"><img src="/amutorrent/screenshots/settings-mobile.png" alt="Settings" class="lightbox-trigger" /><span class="screenshot-label">Settings</span></div>
+    </div>
+  </div>
+  <button class="carousel-nav prev" onclick="moveCarousel('mobile', -1)">❮</button>
+  <button class="carousel-nav next" onclick="moveCarousel('mobile', 1)">❯</button>
+  <div class="carousel-dots" id="mobile-dots"><button class="carousel-dot active"></button><button class="carousel-dot"></button><button class="carousel-dot"></button><button class="carousel-dot"></button></div>
+</div>
+
+## Quick Install
+
+### Docker Compose (Recommended)
+
+```yaml
+services:
+  amutorrent:
+    image: g0t3nks/amutorrent:latest
+    user: "1000:1000"
+    container_name: amutorrent
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./logs:/usr/src/app/server/logs
+      - ./data:/usr/src/app/server/data
+    restart: unless-stopped
+```
+
+```bash
+mkdir -p data logs && sudo chown -R 1000:1000 data logs
+docker compose up -d
+```
+
+Open `http://localhost:4000` and follow the setup wizard.
+
+### Native Installation
+
+```bash
+git clone https://github.com/got3nks/amutorrent.git
+cd amutorrent
+cd server && npm install && cd ..
+npm install && npm run build
+node server/server.js
+```
+
+## Links
+
+- [GitHub Repository](https://github.com/got3nks/amutorrent)
+- [Docker Hub](https://hub.docker.com/r/g0t3nks/amutorrent)

@@ -7,7 +7,7 @@
 
 import { useState, useMemo } from 'https://esm.sh/react@18.2.0';
 import { useClientFilter } from '../contexts/ClientFilterContext.js';
-import { filterByUnifiedFilter, hasRtorrentItems, hasAmuleItems } from '../utils/index.js';
+import { filterByUnifiedFilter, hasBittorrentItems, hasAmuleItems } from '../utils/index.js';
 
 /**
  * Hook for filtering data by client type and category/label
@@ -17,7 +17,7 @@ import { filterByUnifiedFilter, hasRtorrentItems, hasAmuleItems } from '../utils
  */
 export const useClientFilteredData = ({ data }) => {
   // Global client filter from context (toggle in header)
-  const { filterByEnabledClients, isAmuleEnabled, isRtorrentEnabled } = useClientFilter();
+  const { filterByEnabledClients, isAmuleEnabled, isBittorrentEnabled } = useClientFilter();
 
   // Local category/label filter state (view-specific)
   const [unifiedFilter, setUnifiedFilter] = useState('all');
@@ -32,8 +32,8 @@ export const useClientFilteredData = ({ data }) => {
     return filterByUnifiedFilter(clientFilteredData, unifiedFilter);
   }, [clientFilteredData, unifiedFilter]);
 
-  // Check if rtorrent/amule items exist (for showing/hiding filters)
-  const hasRtorrent = useMemo(() => hasRtorrentItems(data), [data]);
+  // Check if bittorrent/amule items exist (for showing/hiding filters)
+  const hasBittorrent = useMemo(() => hasBittorrentItems(data), [data]);
   const hasAmule = useMemo(() => hasAmuleItems(data), [data]);
 
   // Parse category name from unified filter (for views that need it)
@@ -53,10 +53,10 @@ export const useClientFilteredData = ({ data }) => {
     setUnifiedFilter,
     filterCategoryName,
     // Data presence flags
-    hasRtorrent,
+    hasBittorrent,
     hasAmule,
     // Client filter state (for conditional rendering and page reset)
     isAmuleEnabled,
-    isRtorrentEnabled
+    isBittorrentEnabled
   };
 };

@@ -48,7 +48,7 @@ const SetupWizardView = ({ onComplete }) => {
   const [securityValidationError, setSecurityValidationError] = useState(null);
   const [stepValidationError, setStepValidationError] = useState(null);
 
-  const steps = ['Welcome', 'Security', 'aMule', 'rTorrent', 'Directories', 'Integrations', 'Review'];
+  const steps = ['Welcome', 'Security', 'aMule', 'BitTorrent', 'Directories', 'Integrations', 'Review'];
 
   // Load defaults on mount
   useEffect(() => {
@@ -75,7 +75,13 @@ const SetupWizardView = ({ onComplete }) => {
         },
         rtorrent: {
           ...defaults.rtorrent,
-          enabled: meta?.fromEnv?.rtorrentEnabled ? defaults.rtorrent.enabled : true
+          // Disabled by default unless explicitly enabled via env var
+          enabled: meta?.fromEnv?.rtorrentEnabled ? defaults.rtorrent.enabled : false
+        },
+        qbittorrent: {
+          ...defaults.qbittorrent,
+          // Disabled by default unless explicitly enabled via env var
+          enabled: meta?.fromEnv?.qbittorrentEnabled ? defaults.qbittorrent.enabled : false
         },
         directories: { ...defaults.directories },
         integrations: {
@@ -167,22 +173,30 @@ const SetupWizardView = ({ onComplete }) => {
         setStepValidationError(null);
       }
 
-      // Validate rtorrent step (step 3) - only if enabled
+      // Validate BitTorrent step (step 3) - rTorrent and qBittorrent
       if (currentStep === 3) {
-        if (formData.rtorrent.enabled) {
-          const errors = [];
-          if (!formData.rtorrent.host && !meta?.fromEnv.rtorrentHost) errors.push('Host is required');
-          if (!formData.rtorrent.port && !meta?.fromEnv.rtorrentPort) errors.push('Port is required');
+        const errors = [];
 
-          if (errors.length > 0) {
-            setStepValidationError(errors.join(', '));
-            return;
-          }
+        // Validate rTorrent if enabled
+        if (formData.rtorrent.enabled) {
+          if (!formData.rtorrent.host && !meta?.fromEnv.rtorrentHost) errors.push('rTorrent host is required');
+          if (!formData.rtorrent.port && !meta?.fromEnv.rtorrentPort) errors.push('rTorrent port is required');
+        }
+
+        // Validate qBittorrent if enabled
+        if (formData.qbittorrent?.enabled) {
+          if (!formData.qbittorrent.host && !meta?.fromEnv.qbittorrentHost) errors.push('qBittorrent host is required');
+          if (!formData.qbittorrent.port && !meta?.fromEnv.qbittorrentPort) errors.push('qBittorrent port is required');
+        }
+
+        if (errors.length > 0) {
+          setStepValidationError(errors.join(', '));
+          return;
         }
 
         // Cross-validation: at least one client must be enabled
-        if (formData.amule.enabled === false && !formData.rtorrent.enabled) {
-          setStepValidationError('At least one download client (aMule or rTorrent) must be enabled');
+        if (formData.amule.enabled === false && !formData.rtorrent.enabled && !formData.qbittorrent?.enabled) {
+          setStepValidationError('At least one download client (aMule, rTorrent, or qBittorrent) must be enabled');
           return;
         }
         setStepValidationError(null);
@@ -252,9 +266,16 @@ const SetupWizardView = ({ onComplete }) => {
           await testConfig({ amule: formData.amule });
         }
       } else if (currentStep === 3) {
-        // Test rtorrent (step 3) - only if enabled
+        // Test BitTorrent clients (step 3) - test enabled clients
+        const testPayload = {};
         if (formData.rtorrent.enabled) {
-          await testConfig({ rtorrent: formData.rtorrent });
+          testPayload.rtorrent = formData.rtorrent;
+        }
+        if (formData.qbittorrent?.enabled) {
+          testPayload.qbittorrent = formData.qbittorrent;
+        }
+        if (Object.keys(testPayload).length > 0) {
+          await testConfig(testPayload);
         }
       } else if (currentStep === 4) {
         // Test directories (step 4)
@@ -323,6 +344,9 @@ const SetupWizardView = ({ onComplete }) => {
         }
         if (formData.rtorrent.enabled) {
           testPayload.rtorrent = formData.rtorrent;
+        }
+        if (formData.qbittorrent?.enabled) {
+          testPayload.qbittorrent = formData.qbittorrent;
         }
         if (formData.integrations.sonarr.enabled) {
           testPayload.sonarr = formData.integrations.sonarr;
@@ -555,7 +579,7 @@ const SetupWizardView = ({ onComplete }) => {
   };
 
   const AmuleStep = () => h('div', {},
-    h('h2', { className: 'text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2' }, 'aMule Connection'),
+    h('h2', { className: 'text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2' }, 'aMule Integration'),
     h('p', { className: 'text-gray-600 dark:text-gray-400 mb-6' }, 'Optionally configure connection to your aMule daemon for ed2k/Kademlia downloads'),
 
     h(EnableToggle, {
@@ -645,93 +669,178 @@ const SetupWizardView = ({ onComplete }) => {
     )
   );
 
-  const RtorrentStep = () => h('div', {},
-    h('h2', { className: 'text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2' }, 'rTorrent Connection'),
-    h('p', { className: 'text-gray-600 dark:text-gray-400 mb-6' }, 'Optionally configure rTorrent for BitTorrent downloads via XML-RPC'),
+  const BitTorrentStep = () => {
+    const hasAnyBitTorrentClient = formData.rtorrent.enabled || formData.qbittorrent?.enabled;
 
-    h(EnableToggle, {
-      label: 'Enable rTorrent Integration',
-      description: 'Connect to rTorrent for managing BitTorrent downloads',
-      enabled: formData.rtorrent.enabled,
-      onChange: (enabled) => updateField('rtorrent', 'enabled', enabled)
-    }),
+    return h('div', {},
+      h('h2', { className: 'text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2' }, 'BitTorrent Integration'),
+      h('p', { className: 'text-gray-600 dark:text-gray-400 mb-6' }, 'Configure one or more BitTorrent clients. Multiple clients can run simultaneously.'),
 
-    formData.rtorrent.enabled && h('div', { className: 'mt-6 space-y-4' },
-      isDocker && h(AlertBox, { type: 'info' },
-        h('p', {}, 'You are running in Docker. If rTorrent is running on your host machine, use ', h('code', { className: 'bg-white dark:bg-gray-800 px-1 rounded' }, 'host.docker.internal'), ' as the hostname.')
+      isDocker && h(AlertBox, { type: 'info', className: 'mb-6' },
+        h('p', {}, 'You are running in Docker. If your BitTorrent clients are running on your host machine, use ', h('code', { className: 'bg-white dark:bg-gray-800 px-1 rounded' }, 'host.docker.internal'), ' as the hostname.')
       ),
 
-      h(ConfigField, {
-        label: 'Host',
-        description: 'rTorrent XML-RPC host address',
-        value: formData.rtorrent.host,
-        onChange: (value) => updateField('rtorrent', 'host', value),
-        placeholder: '127.0.0.1',
-        required: formData.rtorrent.enabled,
-        fromEnv: meta?.fromEnv.rtorrentHost
-      }),
+      // rTorrent Section
+      h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mb-6' },
+        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4' }, 'rTorrent (XML-RPC)'),
 
-      h(ConfigField, {
-        label: 'Port',
-        description: 'rTorrent XML-RPC port (default: 8000)',
-        value: formData.rtorrent.port,
-        onChange: (value) => updateField('rtorrent', 'port', parseInt(value, 10) || 8000),
-        type: 'number',
-        placeholder: '8000',
-        required: formData.rtorrent.enabled,
-        fromEnv: meta?.fromEnv.rtorrentPort
-      }),
+        h(EnableToggle, {
+          label: 'Enable rTorrent',
+          description: 'Connect to rTorrent for managing BitTorrent downloads via XML-RPC',
+          enabled: formData.rtorrent.enabled,
+          onChange: (enabled) => updateField('rtorrent', 'enabled', enabled)
+        }),
 
-      h(ConfigField, {
-        label: 'XML-RPC Path',
-        description: 'Path for XML-RPC endpoint (default: /RPC2)',
-        value: formData.rtorrent.path,
-        onChange: (value) => updateField('rtorrent', 'path', value),
-        placeholder: '/RPC2',
-        fromEnv: meta?.fromEnv.rtorrentPath
-      }),
+        formData.rtorrent.enabled && h('div', { className: 'mt-4 space-y-4' },
+          h(ConfigField, {
+            label: 'Host',
+            description: 'rTorrent XML-RPC host address',
+            value: formData.rtorrent.host,
+            onChange: (value) => updateField('rtorrent', 'host', value),
+            placeholder: '127.0.0.1',
+            required: formData.rtorrent.enabled,
+            fromEnv: meta?.fromEnv.rtorrentHost
+          }),
 
-      h(ConfigField, {
-        label: 'Username (Optional)',
-        description: 'Username for HTTP basic authentication (if required)',
-        value: formData.rtorrent.username,
-        onChange: (value) => updateField('rtorrent', 'username', value),
-        placeholder: 'Leave empty if not required',
-        fromEnv: meta?.fromEnv.rtorrentUsername
-      }),
+          h(ConfigField, {
+            label: 'Port',
+            description: 'rTorrent XML-RPC port (default: 8000)',
+            value: formData.rtorrent.port,
+            onChange: (value) => updateField('rtorrent', 'port', parseInt(value, 10) || 8000),
+            type: 'number',
+            placeholder: '8000',
+            required: formData.rtorrent.enabled,
+            fromEnv: meta?.fromEnv.rtorrentPort
+          }),
 
-      !meta?.fromEnv.rtorrentPassword && h(ConfigField, {
-        label: 'Password (Optional)',
-        description: 'Password for HTTP basic authentication (if required)',
-        fromEnv: meta?.fromEnv.rtorrentPassword
-      },
-        h(PasswordField, {
-          value: formData.rtorrent.password || '',
-          onChange: (value) => updateField('rtorrent', 'password', value),
-          placeholder: 'Leave empty if not required',
-          disabled: meta?.fromEnv.rtorrentPassword
-        })
+          h(ConfigField, {
+            label: 'XML-RPC Path',
+            description: 'Path for XML-RPC endpoint (default: /RPC2)',
+            value: formData.rtorrent.path,
+            onChange: (value) => updateField('rtorrent', 'path', value),
+            placeholder: '/RPC2',
+            fromEnv: meta?.fromEnv.rtorrentPath
+          }),
+
+          h(ConfigField, {
+            label: 'Username (Optional)',
+            description: 'Username for HTTP basic authentication (if required)',
+            value: formData.rtorrent.username,
+            onChange: (value) => updateField('rtorrent', 'username', value),
+            placeholder: 'Leave empty if not required',
+            fromEnv: meta?.fromEnv.rtorrentUsername
+          }),
+
+          !meta?.fromEnv.rtorrentPassword && h(ConfigField, {
+            label: 'Password (Optional)',
+            description: 'Password for HTTP basic authentication (if required)',
+            fromEnv: meta?.fromEnv.rtorrentPassword
+          },
+            h(PasswordField, {
+              value: formData.rtorrent.password || '',
+              onChange: (value) => updateField('rtorrent', 'password', value),
+              placeholder: 'Leave empty if not required',
+              disabled: meta?.fromEnv.rtorrentPassword
+            })
+          ),
+
+          meta?.fromEnv.rtorrentPassword && h(AlertBox, { type: 'warning' },
+            h('p', {}, 'rTorrent password is set via RTORRENT_PASSWORD environment variable.')
+          ),
+
+          testResults?.results?.rtorrent && h(TestResultIndicator, {
+            result: testResults.results.rtorrent,
+            label: 'rTorrent Connection Test'
+          })
+        )
       ),
 
-      meta?.fromEnv.rtorrentPassword && h(AlertBox, { type: 'warning' },
-        h('p', {}, 'rTorrent password is set via RTORRENT_PASSWORD environment variable.')
+      // qBittorrent Section
+      h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mb-6' },
+        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4' }, 'qBittorrent (WebUI API)'),
+
+        h(EnableToggle, {
+          label: 'Enable qBittorrent',
+          description: 'Connect to qBittorrent for managing BitTorrent downloads via WebUI API',
+          enabled: formData.qbittorrent?.enabled || false,
+          onChange: (enabled) => updateField('qbittorrent', 'enabled', enabled)
+        }),
+
+        formData.qbittorrent?.enabled && h('div', { className: 'mt-4 space-y-4' },
+          h(ConfigField, {
+            label: 'Host',
+            description: 'qBittorrent WebUI host address',
+            value: formData.qbittorrent?.host || '',
+            onChange: (value) => updateField('qbittorrent', 'host', value),
+            placeholder: '127.0.0.1',
+            required: formData.qbittorrent?.enabled,
+            fromEnv: meta?.fromEnv.qbittorrentHost
+          }),
+
+          h(ConfigField, {
+            label: 'Port',
+            description: 'qBittorrent WebUI port (default: 8080)',
+            value: formData.qbittorrent?.port || 8080,
+            onChange: (value) => updateField('qbittorrent', 'port', parseInt(value, 10) || 8080),
+            type: 'number',
+            placeholder: '8080',
+            required: formData.qbittorrent?.enabled,
+            fromEnv: meta?.fromEnv.qbittorrentPort
+          }),
+
+          h(ConfigField, {
+            label: 'Username',
+            description: 'qBittorrent WebUI username (default: admin)',
+            value: formData.qbittorrent?.username || 'admin',
+            onChange: (value) => updateField('qbittorrent', 'username', value),
+            placeholder: 'admin',
+            fromEnv: meta?.fromEnv.qbittorrentUsername
+          }),
+
+          !meta?.fromEnv.qbittorrentPassword && h(ConfigField, {
+            label: 'Password',
+            description: 'qBittorrent WebUI password',
+            fromEnv: meta?.fromEnv.qbittorrentPassword
+          },
+            h(PasswordField, {
+              value: formData.qbittorrent?.password || '',
+              onChange: (value) => updateField('qbittorrent', 'password', value),
+              placeholder: 'Enter qBittorrent password',
+              disabled: meta?.fromEnv.qbittorrentPassword
+            })
+          ),
+
+          meta?.fromEnv.qbittorrentPassword && h(AlertBox, { type: 'warning' },
+            h('p', {}, 'qBittorrent password is set via QBITTORRENT_PASSWORD environment variable.')
+          ),
+
+          h(EnableToggle, {
+            label: 'Use SSL (HTTPS)',
+            description: 'Connect to qBittorrent using HTTPS',
+            enabled: formData.qbittorrent?.useSsl || false,
+            onChange: (enabled) => updateField('qbittorrent', 'useSsl', enabled)
+          }),
+
+          testResults?.results?.qbittorrent && h(TestResultIndicator, {
+            result: testResults.results.qbittorrent,
+            label: 'qBittorrent Connection Test'
+          })
+        )
       ),
 
-      h('div', { className: 'mt-6' },
+      // Test button for BitTorrent clients
+      hasAnyBitTorrentClient && h('div', { className: 'mb-6' },
         h(TestButton, {
           onClick: handleTestCurrentStep,
           loading: isTesting,
-          disabled: !formData.rtorrent.host || !formData.rtorrent.port
-        }, 'Test rTorrent Connection')
+          disabled: (formData.rtorrent.enabled && (!formData.rtorrent.host || !formData.rtorrent.port)) ||
+                    (formData.qbittorrent?.enabled && (!formData.qbittorrent.host || !formData.qbittorrent.port))
+        }, 'Test BitTorrent Connections')
       ),
 
-      testResults?.results?.rtorrent && h(TestResultIndicator, {
-        result: testResults.results.rtorrent,
-        label: 'rTorrent Connection Test'
-      }),
-
       // Prowlarr Integration (for torrent searches)
-      h('div', { className: 'mt-8 pt-6 border-t border-gray-200 dark:border-gray-700' },
+      hasAnyBitTorrentClient && h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mb-6' },
+        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4' }, 'Prowlarr (Torrent Search)'),
         h(EnableToggle, {
           enabled: formData.integrations.prowlarr?.enabled || false,
           onChange: (value) => updateNestedField('integrations', 'prowlarr', 'enabled', value),
@@ -766,18 +875,18 @@ const SetupWizardView = ({ onComplete }) => {
             })
           )
         )
+      ),
+
+      !hasAnyBitTorrentClient && h(AlertBox, { type: 'info', className: 'mt-4' },
+        h('p', {}, 'BitTorrent integration is optional. You can skip this step if you only want to use aMule. At least one download client must be enabled.')
+      ),
+
+      // Validation error message
+      stepValidationError && currentStep === 3 && h(AlertBox, { type: 'error', className: 'mt-4' },
+        h('p', {}, stepValidationError)
       )
-    ),
-
-    !formData.rtorrent.enabled && h(AlertBox, { type: 'info', className: 'mt-4' },
-      h('p', {}, 'rTorrent integration is optional. You can skip this step if you only want to use aMule. At least one download client must be enabled.')
-    ),
-
-    // Validation error message
-    stepValidationError && currentStep === 3 && h(AlertBox, { type: 'error', className: 'mt-4' },
-      h('p', {}, stepValidationError)
-    )
-  );
+    );
+  };
 
   const DirectoriesStep = () => h('div', {},
     h('h2', { className: 'text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2' }, 'Directories'),
@@ -1032,6 +1141,15 @@ const SetupWizardView = ({ onComplete }) => {
         formData.rtorrent.username && h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Username: ${formData.rtorrent.username}`)
       ),
 
+      // qBittorrent
+      formData.qbittorrent?.enabled && h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700' },
+        h('h3', { className: 'font-semibold text-gray-900 dark:text-gray-100 mb-2' }, 'qBittorrent Connection'),
+        h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Host: ${formData.qbittorrent.host}`),
+        h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Port: ${formData.qbittorrent.port}`),
+        h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Username: ${formData.qbittorrent.username || 'admin'}`),
+        formData.qbittorrent.useSsl && h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, 'SSL: Enabled')
+      ),
+
       // Directories
       h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700' },
         h('h3', { className: 'font-semibold text-gray-900 dark:text-gray-100 mb-2' }, 'Directories'),
@@ -1092,7 +1210,7 @@ const SetupWizardView = ({ onComplete }) => {
     )
   );
 
-  const stepComponents = [WelcomeStep, SecurityStep, AmuleStep, RtorrentStep, DirectoriesStep, IntegrationsStep, ReviewStep];
+  const stepComponents = [WelcomeStep, SecurityStep, AmuleStep, BitTorrentStep, DirectoriesStep, IntegrationsStep, ReviewStep];
 
   return h('div', { className: 'min-h-screen bg-gray-50 dark:bg-gray-900 py-8 px-4' },
     h('div', { className: 'max-w-3xl mx-auto' },

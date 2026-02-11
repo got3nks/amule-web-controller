@@ -161,9 +161,13 @@ const ClientSpeedChart = ({ speedData, clientType, theme, historicalRange }) => 
     });
 
     // Get client-specific data
-    const isAmule = clientType === 'amule';
-    const uploadSpeedKey = isAmule ? 'amuleUploadSpeed' : 'rtorrentUploadSpeed';
-    const downloadSpeedKey = isAmule ? 'amuleDownloadSpeed' : 'rtorrentDownloadSpeed';
+    // 'bittorrent' aggregates rtorrent + qbittorrent
+    const uploadSpeedKey = clientType === 'amule' ? 'amuleUploadSpeed'
+      : clientType === 'bittorrent' ? 'bittorrentUploadSpeed'
+      : 'rtorrentUploadSpeed';
+    const downloadSpeedKey = clientType === 'amule' ? 'amuleDownloadSpeed'
+      : clientType === 'bittorrent' ? 'bittorrentDownloadSpeed'
+      : 'rtorrentDownloadSpeed';
 
     // Update data
     chartInstance.current.data.labels = labels;

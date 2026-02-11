@@ -79,7 +79,9 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
 
           // Helper to get client label
           const getClientLabel = (client) =>
-            client === 'amule' ? 'aMule' : client === 'rtorrent' ? 'rTorrent' : client;
+            client === 'amule' ? 'aMule' :
+            client === 'rtorrent' ? 'rTorrent' :
+            client === 'qbittorrent' ? 'qBittorrent' : client;
 
           // Build error message - show client labels only for mixed selections
           const clientTypes = Object.keys(errorsByClient);
@@ -129,6 +131,11 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
     return modalState.items.some(i => i.client === 'rtorrent');
   }, [modalState.items]);
 
+  // Detect qBittorrent items in selection
+  const hasQbittorrentItems = useMemo(() => {
+    return modalState.items.some(i => i.client === 'qbittorrent');
+  }, [modalState.items]);
+
   // For aMule shared files, move is forced (they don't auto-move like downloads)
   const forceMove = hasAmuleSharedFiles;
 
@@ -139,13 +146,14 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
     const items = modalState.items;
     if (items.length === 0) return false;
 
-    // Check for rtorrent items
+    // Check for torrent client items (rtorrent and qbittorrent)
     const rtorrentItems = items.filter(i => i.client === 'rtorrent');
+    const qbittorrentItems = items.filter(i => i.client === 'qbittorrent');
     // Check for aMule shared items (completed files only, not downloads sharing chunks)
     const amuleSharedItems = items.filter(i => i.shared && i.client === 'amule' && !i.downloading);
 
     // If no items need move handling, don't show option
-    if (rtorrentItems.length === 0 && amuleSharedItems.length === 0) return false;
+    if (rtorrentItems.length === 0 && qbittorrentItems.length === 0 && amuleSharedItems.length === 0) return false;
 
     // Check if target category has a configured path
     // In Docker: pathMappings[client] = local path, path = remote path
@@ -153,33 +161,39 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
     // If category has no path, clients use Default category's path
     const targetCat = categories.find(c => (c.name || c.title) === selectedCategory);
 
-    // Check rtorrent paths
-    let rtorrentNeedsMove = false;
-    if (rtorrentItems.length > 0) {
-      let targetLocalPath = targetCat?.pathMappings?.rtorrent || targetCat?.path;
+    // Helper function to check if items need move for a client type
+    const checkClientNeedsMove = (clientItems, clientType) => {
+      if (clientItems.length === 0) return false;
+
+      let targetLocalPath = targetCat?.pathMappings?.[clientType] || targetCat?.path;
       let targetRemotePath = targetCat?.path;
 
       // Fall back to Default category if no path configured
       if (!targetLocalPath) {
         const defaultCat = categories.find(c => (c.name || c.title) === 'Default');
         if (defaultCat) {
-          targetLocalPath = defaultCat.pathMappings?.rtorrent || defaultCat.path;
+          targetLocalPath = defaultCat.pathMappings?.[clientType] || defaultCat.path;
           targetRemotePath = defaultCat.path || targetLocalPath;
         }
       }
       // Fall back to client default path if still no path
-      if (!targetLocalPath && clientDefaultPaths?.rtorrent) {
-        targetLocalPath = clientDefaultPaths.rtorrent;
-        targetRemotePath = clientDefaultPaths.rtorrent;
+      if (!targetLocalPath && clientDefaultPaths?.[clientType]) {
+        targetLocalPath = clientDefaultPaths[clientType];
+        targetRemotePath = clientDefaultPaths[clientType];
       }
       targetRemotePath = targetRemotePath || targetLocalPath;
 
       if (targetLocalPath) {
-        rtorrentNeedsMove = rtorrentItems.some(item => item.directory !== targetRemotePath);
+        return clientItems.some(item => item.directory !== targetRemotePath);
       }
-    }
+      return false;
+    };
 
-    // Check aMule shared paths
+    // Check each client type
+    const rtorrentNeedsMove = checkClientNeedsMove(rtorrentItems, 'rtorrent');
+    const qbittorrentNeedsMove = checkClientNeedsMove(qbittorrentItems, 'qbittorrent');
+
+    // Check aMule shared paths (uses filePath instead of directory)
     let amuleNeedsMove = false;
     if (amuleSharedItems.length > 0) {
       let targetLocalPath = targetCat?.pathMappings?.amule || targetCat?.path;
@@ -206,7 +220,7 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
       }
     }
 
-    return rtorrentNeedsMove || amuleNeedsMove;
+    return rtorrentNeedsMove || qbittorrentNeedsMove || amuleNeedsMove;
   }, [selectedCategory, categories, modalState.items, modalState.show, clientDefaultPaths]);
 
   // Request permission check when move option becomes visible or category changes
@@ -222,10 +236,11 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
       return;
     }
 
-    // Get items that need move - both rtorrent and aMule shared files (completed only)
+    // Get items that need move - torrent clients and aMule shared files (completed only)
     const rtorrentItems = modalState.items.filter(i => i.client === 'rtorrent');
+    const qbittorrentItems = modalState.items.filter(i => i.client === 'qbittorrent');
     const amuleSharedItems = modalState.items.filter(i => i.shared && i.client === 'amule' && !i.downloading);
-    const fileHashes = [...rtorrentItems, ...amuleSharedItems].map(i => i.hash);
+    const fileHashes = [...rtorrentItems, ...qbittorrentItems, ...amuleSharedItems].map(i => i.hash);
 
     if (fileHashes.length === 0) return;
 
@@ -321,6 +336,7 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
       hasAmuleFiles,
       hasAmuleSharedFiles,
       hasRtorrentItems,
+      hasQbittorrentItems,
       forceMove,
       onSubmit: handleSubmit,
       onClose: closeModal,
@@ -340,6 +356,7 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
     hasAmuleFiles,
     hasAmuleSharedFiles,
     hasRtorrentItems,
+    hasQbittorrentItems,
     forceMove,
     handleSubmit,
     closeModal,

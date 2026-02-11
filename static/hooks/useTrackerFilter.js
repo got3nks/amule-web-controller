@@ -2,10 +2,10 @@
  * useTrackerFilter Hook
  *
  * Centralized hook for tracker filtering functionality.
- * - Gets known trackers from StaticDataContext (extracted from all rtorrent data)
- * - Gets isRtorrentEnabled from ClientFilterContext (combines user preference AND connection status)
+ * - Gets known trackers from StaticDataContext (extracted from all BitTorrent data)
+ * - Gets isBittorrentEnabled from ClientFilterContext (combines user preference AND connection status)
  * - Provides filter state, options, and filter function
- * - Only shows tracker filter when rtorrent is enabled (configured, connected, and user hasn't hidden it)
+ * - Only shows tracker filter when BitTorrent is enabled (configured, connected, and user hasn't hidden it)
  */
 
 import { useState, useMemo, useCallback } from 'https://esm.sh/react@18.2.0';
@@ -21,13 +21,13 @@ import { filterByTracker, buildTrackerFilterOptions } from '../utils/downloadHel
  */
 export const useTrackerFilter = ({ includeNoTracker = false } = {}) => {
   const { knownTrackers } = useStaticData();
-  const { isRtorrentEnabled } = useClientFilter();
+  const { isBittorrentEnabled } = useClientFilter();
 
   // Filter state
   const [trackerFilter, setTrackerFilter] = useState('all');
 
-  // Only show tracker filter when rtorrent is enabled (includes connection check)
-  const showTrackerFilter = isRtorrentEnabled;
+  // Only show tracker filter when BitTorrent is enabled (includes connection check)
+  const showTrackerFilter = isBittorrentEnabled;
 
   // Build filter options from known trackers
   const trackerOptions = useMemo(() => {

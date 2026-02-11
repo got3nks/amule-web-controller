@@ -3,13 +3,13 @@
  *
  * Compact speed chart with current speeds and network status for mobile view
  * Shows 24h speed history with simplified data points for performance
- * Supports switching between aMule and rTorrent when both are active
+ * Supports switching between aMule and BitTorrent (rTorrent + qBittorrent) when both are active
  */
 
 import React from 'https://esm.sh/react@18.2.0';
 import { formatSpeed } from '../../utils/index.js';
 import { loadChartJs } from '../../utils/chartLoader.js';
-import { getED2KStatus, getKADStatus, getBTStatus, getStatusDotClass } from '../../utils/networkStatus.js';
+import { getED2KStatus, getKADStatus, getRtorrentStatus, getQbittorrentStatus, getStatusDotClass } from '../../utils/networkStatus.js';
 import ClientIcon from '../common/ClientIcon.js';
 import { useClientFilter } from '../../contexts/ClientFilterContext.js';
 
@@ -26,9 +26,17 @@ const { createElement: h, useEffect, useRef, useState } = React;
 const downsampleData = (data, clientType, targetPoints = 288) => {
   if (!data || data.length <= targetPoints) return data;
 
-  const isAmule = clientType === 'amule';
-  const uploadKey = isAmule ? 'amuleUploadSpeed' : 'rtorrentUploadSpeed';
-  const downloadKey = isAmule ? 'amuleDownloadSpeed' : 'rtorrentDownloadSpeed';
+  let uploadKey, downloadKey;
+  if (clientType === 'amule') {
+    uploadKey = 'amuleUploadSpeed';
+    downloadKey = 'amuleDownloadSpeed';
+  } else if (clientType === 'bittorrent') {
+    uploadKey = 'bittorrentUploadSpeed';
+    downloadKey = 'bittorrentDownloadSpeed';
+  } else {
+    uploadKey = 'rtorrentUploadSpeed';
+    downloadKey = 'rtorrentDownloadSpeed';
+  }
 
   const step = Math.ceil(data.length / targetPoints);
   const result = [];
@@ -62,10 +70,10 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
   const [chartReady, setChartReady] = useState(false);
 
   // Get client connection status from context
-  const { amuleConnected, rtorrentConnected } = useClientFilter();
+  const { amuleConnected, rtorrentConnected, qbittorrentConnected, bittorrentConnected } = useClientFilter();
 
-  // Show toggle when both clients are connected
-  const showBothClients = amuleConnected && rtorrentConnected;
+  // Show toggle when both aMule and BitTorrent clients are connected
+  const showBothClients = amuleConnected && bittorrentConnected;
 
   // State for selected client (when both are available)
   const [selectedClient, setSelectedClient] = useState('amule');
@@ -75,11 +83,11 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
     if (!showBothClients) {
       if (amuleConnected) {
         setSelectedClient('amule');
-      } else if (rtorrentConnected) {
-        setSelectedClient('rtorrent');
+      } else if (bittorrentConnected) {
+        setSelectedClient('bittorrent');
       }
     }
-  }, [showBothClients, amuleConnected, rtorrentConnected]);
+  }, [showBothClients, amuleConnected, bittorrentConnected]);
 
   // Load Chart.js library on mount
   useEffect(() => {
@@ -218,17 +226,24 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
   // Get network status using shared helpers
   const ed2k = getED2KStatus(stats);
   const kad = getKADStatus(stats);
-  const bt = getBTStatus(stats);
+  const rtStatus = getRtorrentStatus(stats);
+  const qbStatus = getQbittorrentStatus(stats);
 
   // Current speeds from each client (ensure numeric values)
   const amuleUploadSpeed = Number(stats?.EC_TAG_STATS_UL_SPEED) || 0;
   const amuleDownloadSpeed = Number(stats?.EC_TAG_STATS_DL_SPEED) || 0;
   const rtorrentUploadSpeed = Number(stats?.rtorrent?.uploadSpeed) || 0;
   const rtorrentDownloadSpeed = Number(stats?.rtorrent?.downloadSpeed) || 0;
+  const qbittorrentUploadSpeed = Number(stats?.qbittorrent?.uploadSpeed) || 0;
+  const qbittorrentDownloadSpeed = Number(stats?.qbittorrent?.downloadSpeed) || 0;
+
+  // Combined BitTorrent speeds (rtorrent + qBittorrent)
+  const btUploadSpeed = rtorrentUploadSpeed + qbittorrentUploadSpeed;
+  const btDownloadSpeed = rtorrentDownloadSpeed + qbittorrentDownloadSpeed;
 
   // Current speeds based on selected client
-  const uploadSpeed = selectedClient === 'amule' ? amuleUploadSpeed : rtorrentUploadSpeed;
-  const downloadSpeed = selectedClient === 'amule' ? amuleDownloadSpeed : rtorrentDownloadSpeed;
+  const uploadSpeed = selectedClient === 'amule' ? amuleUploadSpeed : btUploadSpeed;
+  const downloadSpeed = selectedClient === 'amule' ? amuleDownloadSpeed : btDownloadSpeed;
 
   // Client toggle button component
   const clientToggle = showBothClients && h('div', {
@@ -242,12 +257,12 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
       title: 'Show aMule'
     }, h(ClientIcon, { clientType: 'amule', size: 16 })),
     h('button', {
-      onClick: () => setSelectedClient('rtorrent'),
-      className: `p-1.5 border-l border-gray-300 dark:border-gray-600 ${selectedClient === 'rtorrent'
+      onClick: () => setSelectedClient('bittorrent'),
+      className: `p-1.5 border-l border-gray-300 dark:border-gray-600 ${selectedClient === 'bittorrent'
         ? 'bg-blue-100 dark:bg-blue-900/50'
         : 'bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700'}`,
-      title: 'Show rTorrent'
-    }, h(ClientIcon, { clientType: 'rtorrent', size: 16 }))
+      title: 'Show BitTorrent'
+    }, h(ClientIcon, { clientType: 'bittorrent', size: 16 }))
   );
 
   // Network status section based on selected client
@@ -269,11 +284,18 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
         )
       )
     : h(React.Fragment, null,
-        // BT (rTorrent) status
-        h('div', { className: 'flex items-center gap-1.5' },
-          h('div', { className: `w-2 h-2 rounded-full ${getStatusDotClass(bt.status)}` }),
+        // rTorrent status (shown when connected)
+        rtorrentConnected && h('div', { className: 'flex items-center gap-1.5' },
+          h('div', { className: `w-2 h-2 rounded-full ${getStatusDotClass(rtStatus.status)}` }),
           h('span', { className: 'text-xs font-medium text-gray-600 dark:text-gray-400' },
-            `${bt.label}: ${bt.text}`
+            `${rtStatus.label}: ${rtStatus.text}`
+          )
+        ),
+        // qBittorrent status (shown when connected)
+        qbittorrentConnected && h('div', { className: 'flex items-center gap-1.5' },
+          h('div', { className: `w-2 h-2 rounded-full ${getStatusDotClass(qbStatus.status)}` }),
+          h('span', { className: 'text-xs font-medium text-gray-600 dark:text-gray-400' },
+            `${qbStatus.label}: ${qbStatus.text}`
           )
         )
       );

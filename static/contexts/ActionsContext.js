@@ -189,15 +189,15 @@ const useWebSocketActions = () => {
     sendMessage({ action: "addEd2kLinks", links, categoryId });
   };
 
-  const handleAddMagnetLinks = (links, label = '') => {
+  const handleAddMagnetLinks = (links, label = '', clientId = 'rtorrent') => {
     if (!links || links.length === 0) {
       addAppError('No magnet links provided');
       return;
     }
-    sendMessage({ action: "addMagnetLinks", links, label });
+    sendMessage({ action: "addMagnetLinks", links, label, clientId });
   };
 
-  const handleAddTorrentFile = async (file, label = '') => {
+  const handleAddTorrentFile = async (file, label = '', clientId = 'rtorrent') => {
     if (!file) {
       addAppError('No torrent file provided');
       return;
@@ -212,7 +212,8 @@ const useWebSocketActions = () => {
           action: "addTorrentFile",
           fileData: base64Data,
           fileName: file.name,
-          label
+          label,
+          clientId
         });
       };
       reader.onerror = () => {
@@ -224,8 +225,8 @@ const useWebSocketActions = () => {
     }
   };
 
-  // Add Prowlarr torrent to rTorrent
-  const handleAddProwlarrTorrent = async (item, label = '') => {
+  // Add Prowlarr torrent to BitTorrent client
+  const handleAddProwlarrTorrent = async (item, label = '', clientId = 'rtorrent') => {
     try {
       const downloadUrl = item.magnetUrl || item.downloadUrl;
       if (!downloadUrl) {
@@ -239,7 +240,8 @@ const useWebSocketActions = () => {
         body: JSON.stringify({
           downloadUrl,
           title: item.fileName,
-          label
+          label,
+          clientId
         })
       });
       const data = await response.json();

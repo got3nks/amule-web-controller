@@ -216,9 +216,9 @@ const StatisticsView = () => {
               height: '225px'
             }, renderSpeedChart('amule')),
             h(DashboardChartWidget, {
-              title: chartTitle('rTorrent Speed', 'rtorrent'),
+              title: chartTitle('BitTorrent Speed', 'bittorrent'),
               height: '225px'
-            }, renderSpeedChart('rtorrent'))
+            }, renderSpeedChart('bittorrent'))
           ),
           // Transfer charts (when chartMode === 'transfer')
           chartMode === 'transfer' && h(React.Fragment, null,
@@ -227,9 +227,9 @@ const StatisticsView = () => {
               height: '225px'
             }, renderTransferChart('amule')),
             h(DashboardChartWidget, {
-              title: chartTitle('rTorrent Data Transferred', 'rtorrent'),
+              title: chartTitle('BitTorrent Data Transferred', 'bittorrent'),
               height: '225px'
-            }, renderTransferChart('rtorrent'))
+            }, renderTransferChart('bittorrent'))
           )
         ),
 

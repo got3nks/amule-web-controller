@@ -1,6 +1,6 @@
-# Sonarr/Radarr Integration Guide
+# *arr Integration Guide
 
-This guide provides complete instructions for integrating aMuTorrent with Sonarr and Radarr.
+aMuTorrent integrates with any *arr application (Sonarr, Radarr, Lidarr, Readarr, etc.) by providing a **Torznab indexer API** for searching and a **qBittorrent-compatible API** for download management.
 
 ## Table of Contents
 
@@ -168,22 +168,22 @@ Mount the same download directory in aMule and *arr containers:
 services:
   amule:
     volumes:
-      - /path/on/host/temp:/temp          # aMule temp files
-      - /path/on/host/incoming:/incoming  # aMule downloaded files
-      - ./data/.aMule:/home/amule/.aMule
+      - ./data/aMule/config:/home/amule/.aMule
+      - ./data/aMule/incoming:/incoming
+      - ./data/aMule/temp:/temp
 
   sonarr:
     volumes:
-      - /path/on/host/incoming:/incoming  # Same path!
-      - ./sonarr/config:/config
+      - ./data/aMule/incoming:/incoming  # Same path as aMule!
+      - ./data/sonarr/config:/config
 
   radarr:
     volumes:
-      - /path/on/host/incoming:/incoming  # Same path!
-      - ./radarr/config:/config
+      - ./data/aMule/incoming:/incoming  # Same path as aMule!
+      - ./data/radarr/config:/config
 ```
 
-With this setup, aMule and *arr containers all see `/incoming` as the same location.
+With this setup, aMule and *arr containers all see `/incoming` as the same directory on the host (`./data/aMule/incoming`).
 
 > **Note:** The web controller doesn't need access to the downloads directory - only aMule (which does the actual downloading) and Sonarr/Radarr (which import the files) need it.
 
@@ -196,10 +196,10 @@ If containers use different internal paths for the same host directory, configur
 **Example Setup:**
 
 ```
-Host directory: /mnt/downloads
+Host directory: ./data/aMule/incoming
 
-aMule container:      /mnt/downloads mounted as /incoming
-Sonarr container:     /mnt/downloads mounted as /data/incoming
+aMule container:      mounted as /incoming
+Sonarr container:     mounted as /data/incoming
 ```
 
 When aMule finishes downloading, it reports the file path as `/incoming/sonarr/show.mkv`. But Sonarr sees that same file as `/data/incoming/sonarr/show.mkv`. Remote Path Mapping tells Sonarr how to translate the path.

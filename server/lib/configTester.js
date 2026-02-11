@@ -7,6 +7,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const QueuedAmuleClient = require('../modules/queuedAmuleClient');
 const RtorrentHandler = require('./rtorrent/RtorrentHandler');
+const QBittorrentClient = require('./qbittorrent/QBittorrentClient');
 const ProwlarrHandler = require('./prowlarr/ProwlarrHandler');
 const { checkDirectoryAccess } = require('./pathUtils');
 
@@ -201,6 +202,77 @@ async function testRtorrentConnection(host, port, rpcPath, username, password) {
     if (client) {
       try {
         client.disconnect();
+      } catch (cleanupErr) {
+        // Ignore cleanup errors
+      }
+    }
+
+    return result;
+  }
+}
+
+/**
+ * Test qBittorrent connection via WebUI API
+ * @param {string} host - qBittorrent WebUI host
+ * @param {number} port - qBittorrent WebUI port
+ * @param {string} username - Username for authentication
+ * @param {string} password - Password for authentication
+ * @param {boolean} useSsl - Whether to use HTTPS
+ * @returns {Promise<{success: boolean, connected: boolean, version: string|null, error: string|null}>}
+ */
+async function testQbittorrentConnection(host, port, username, password, useSsl) {
+  const result = {
+    success: false,
+    connected: false,
+    version: null,
+    error: null
+  };
+
+  if (!host) {
+    result.error = 'Host is required';
+    return result;
+  }
+
+  let client = null;
+
+  try {
+    // Create temporary client
+    client = new QBittorrentClient({
+      host,
+      port: port || 8080,
+      username: username || 'admin',
+      password: password || '',
+      useSsl: useSsl || false
+    });
+
+    // Try to test connection with timeout
+    const testPromise = client.testConnection();
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Connection timeout after 10 seconds')), 10000);
+    });
+
+    const testResult = await Promise.race([testPromise, timeoutPromise]);
+
+    if (testResult.success) {
+      result.connected = true;
+      result.version = testResult.version;
+      result.success = true;
+      result.message = `Connected to qBittorrent ${testResult.version}`;
+    } else {
+      result.error = testResult.error || 'Connection failed';
+    }
+
+    // Cleanup
+    await client.disconnect();
+
+    return result;
+  } catch (err) {
+    result.error = err.message;
+
+    // Try to clean up connection
+    if (client) {
+      try {
+        await client.disconnect();
       } catch (cleanupErr) {
         // Ignore cleanup errors
       }
@@ -449,6 +521,7 @@ module.exports = {
   testGeoIPDatabase,
   testAmuleConnection,
   testRtorrentConnection,
+  testQbittorrentConnection,
   testSonarrAPI,
   testRadarrAPI,
   testProwlarrAPI

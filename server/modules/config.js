@@ -44,6 +44,12 @@ const ENV_VAR_MAP = {
   RTORRENT_PATH: { path: 'rtorrent.path', type: 'string' },
   RTORRENT_USERNAME: { path: 'rtorrent.username', type: 'string' },
   RTORRENT_PASSWORD: { path: 'rtorrent.password', type: 'string' },
+  QBITTORRENT_ENABLED: { path: 'qbittorrent.enabled', type: 'boolean' },
+  QBITTORRENT_HOST: { path: 'qbittorrent.host', type: 'string' },
+  QBITTORRENT_PORT: { path: 'qbittorrent.port', type: 'int' },
+  QBITTORRENT_USERNAME: { path: 'qbittorrent.username', type: 'string' },
+  QBITTORRENT_PASSWORD: { path: 'qbittorrent.password', type: 'string' },
+  QBITTORRENT_USE_SSL: { path: 'qbittorrent.useSsl', type: 'boolean' },
   SONARR_URL: { path: 'integrations.sonarr.url', type: 'string', enablesIntegration: 'integrations.sonarr.enabled' },
   SONARR_API_KEY: { path: 'integrations.sonarr.apiKey', type: 'string' },
   SONARR_SEARCH_INTERVAL_HOURS: { path: 'integrations.sonarr.searchIntervalHours', type: 'int' },
@@ -61,6 +67,7 @@ const SENSITIVE_PATHS = [
   'server.auth.password',
   'amule.password',
   'rtorrent.password',
+  'qbittorrent.password',
   'integrations.sonarr.apiKey',
   'integrations.radarr.apiKey',
   'integrations.prowlarr.apiKey'
@@ -74,6 +81,7 @@ const SENSITIVE_ENV_VARS = [
   'WEB_AUTH_PASSWORD',
   'AMULE_PASSWORD',
   'RTORRENT_PASSWORD',
+  'QBITTORRENT_PASSWORD',
   'SONARR_API_KEY',
   'RADARR_API_KEY',
   'PROWLARR_API_KEY'
@@ -251,6 +259,14 @@ class Config extends BaseModule {
         path: '/RPC2',
         username: '',
         password: ''
+      },
+      qbittorrent: {
+        enabled: false,
+        host: '127.0.0.1',
+        port: 8080,
+        username: 'admin',
+        password: '',
+        useSsl: false
       },
       directories: {
         data: 'server/data',
@@ -454,8 +470,9 @@ class Config extends BaseModule {
     // At least one download client must be enabled
     const amuleEnabled = config.amule?.enabled !== false; // Default true for backward compatibility
     const rtorrentEnabled = config.rtorrent?.enabled || false;
-    if (!amuleEnabled && !rtorrentEnabled) {
-      errors.push('At least one download client (aMule or rTorrent) must be enabled');
+    const qbittorrentEnabled = config.qbittorrent?.enabled || false;
+    if (!amuleEnabled && !rtorrentEnabled && !qbittorrentEnabled) {
+      errors.push('At least one download client (aMule, rTorrent, or qBittorrent) must be enabled');
     }
 
     // Validate aMule connection (only if enabled)
@@ -878,6 +895,42 @@ class Config extends BaseModule {
    */
   getRtorrentConfig() {
     return this.runtimeConfig?.rtorrent || null;
+  }
+
+  // ==========================================================================
+  // QBITTORRENT ACCESSORS
+  // ==========================================================================
+
+  /**
+   * Get qBittorrent configuration
+   * @returns {Object|null} qBittorrent config or null if not configured
+   */
+  getQbittorrentConfig() {
+    return this.runtimeConfig?.qbittorrent || null;
+  }
+
+  get QBITTORRENT_ENABLED() {
+    return this.runtimeConfig?.qbittorrent?.enabled || false;
+  }
+
+  get QBITTORRENT_HOST() {
+    return this.runtimeConfig?.qbittorrent?.host || '';
+  }
+
+  get QBITTORRENT_PORT() {
+    return this.runtimeConfig?.qbittorrent?.port || 8080;
+  }
+
+  get QBITTORRENT_USERNAME() {
+    return this.runtimeConfig?.qbittorrent?.username || 'admin';
+  }
+
+  get QBITTORRENT_PASSWORD() {
+    return this.runtimeConfig?.qbittorrent?.password || '';
+  }
+
+  get QBITTORRENT_USE_SSL() {
+    return this.runtimeConfig?.qbittorrent?.useSsl || false;
   }
 
   get RTORRENT_ENABLED() {

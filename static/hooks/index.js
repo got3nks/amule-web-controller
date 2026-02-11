@@ -33,4 +33,5 @@ export { useColumnConfig, getSecondarySortConfig } from './useColumnConfig.js';
 export { useFileInfoModal } from './useFileInfoModal.js';
 export { useFileCategoryModal } from './useFileCategoryModal.js';
 export { useNotifications } from './useNotifications.js';
+export { useBitTorrentClientSelector } from './useBitTorrentClientSelector.js';
 // Note: useClientFilter is now in contexts/ClientFilterContext.js for global client filtering

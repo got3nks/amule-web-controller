@@ -2,7 +2,7 @@
  * FileCategoryModal Component
  *
  * Modal for changing a file's category
- * Works with both aMule and rtorrent using unified category system
+ * Works with aMule, rTorrent, and qBittorrent using unified category system
  * Permission checking is handled by useFileCategoryModal hook
  */
 
@@ -27,6 +27,7 @@ const { createElement: h, useState, useEffect, useMemo } = React;
  * @param {object} permissionCheck - Permission check state from hook { loading, canMove, error, destPath }
  * @param {boolean} hasAmuleSharedFiles - Whether selection includes aMule shared files
  * @param {boolean} hasRtorrentItems - Whether selection includes rTorrent items
+ * @param {boolean} hasQbittorrentItems - Whether selection includes qBittorrent items
  * @param {boolean} forceMove - Whether move is forced (aMule shared files)
  * @param {function} onSubmit - Submit handler (fileHash/hashes, categoryName, options)
  * @param {function} onClose - Close handler
@@ -45,6 +46,7 @@ const FileCategoryModal = ({
   hasAmuleFiles = false,
   hasAmuleSharedFiles = false,
   hasRtorrentItems = false,
+  hasQbittorrentItems = false,
   forceMove = false,
   onSubmit,
   onClose,
@@ -180,8 +182,8 @@ const FileCategoryModal = ({
       // Move files option - different behavior based on client types
       showMoveOption && !useCustom && h('div', { className: 'mb-4' },
         // For aMule-only: show destination path (no checkbox, forced)
-        // For rTorrent (or mixed): show checkbox with appropriate label
-        hasAmuleSharedFiles && !hasRtorrentItems
+        // For torrent clients (or mixed): show checkbox with appropriate label
+        hasAmuleSharedFiles && !hasRtorrentItems && !hasQbittorrentItems
           ? h('div', { className: 'text-sm text-gray-700 dark:text-gray-300' },
               permissionCheck.loading
                 ? 'Checking paths...'
@@ -205,13 +207,13 @@ const FileCategoryModal = ({
               h('span', { className: 'text-gray-700 dark:text-gray-300' },
                 permissionCheck.loading
                   ? 'Checking paths...'
-                  : hasAmuleSharedFiles && hasRtorrentItems
+                  : hasAmuleSharedFiles && (hasRtorrentItems || hasQbittorrentItems)
                     ? permissionCheck.destPath
                       ? h('span', null,
-                          'Also move rTorrent files to: ',
+                          'Also move torrent files to: ',
                           h('span', { className: 'font-mono text-xs break-all' }, permissionCheck.destPath)
                         )
-                      : 'Also move rTorrent files'
+                      : 'Also move torrent files'
                     : permissionCheck.destPath
                       ? h('span', null,
                           'Move files to: ',

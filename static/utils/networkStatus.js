@@ -75,25 +75,53 @@ export const getKADStatus = (stats) => {
 };
 
 /**
- * Get BitTorrent (rTorrent) network status from stats
+ * Get rTorrent network status from stats
  * @param {object} stats - Stats object from WebSocket
- * @returns {NetworkStatus} BT status information
+ * @returns {NetworkStatus} rTorrent status information
  */
-export const getBTStatus = (stats) => {
-  if (!stats || !stats.rtorrent?.connected) {
-    return { status: 'red', label: 'BT', text: 'Disconnected', connected: false };
+export const getRtorrentStatus = (stats) => {
+  const rtConnected = stats?.rtorrent?.connected;
+
+  if (!rtConnected) {
+    return { status: 'red', label: 'rTorrent', text: 'Disconnected', connected: false };
   }
 
-  const portOpen = stats.rtorrent.portOpen;
-  const listenPort = stats.rtorrent.listenPort;
+  const portOpen = stats.rtorrent?.portOpen;
+  const listenPort = stats.rtorrent?.listenPort;
 
   return {
     status: portOpen ? 'green' : 'yellow',
-    label: 'BT',
+    label: 'rTorrent',
     text: portOpen ? 'OK' : 'Firewalled',
     connected: true,
     listenPort
   };
+};
+
+/**
+ * Get qBittorrent network status from stats
+ * Maps connection_status: "connected" → green, "firewalled" → yellow, "disconnected" → red
+ * @param {object} stats - Stats object from WebSocket
+ * @returns {NetworkStatus} qBittorrent status information
+ */
+export const getQbittorrentStatus = (stats) => {
+  const qbConnected = stats?.qbittorrent?.connected;
+
+  if (!qbConnected) {
+    return { status: 'red', label: 'qBittorrent', text: 'Disconnected', connected: false };
+  }
+
+  const connectionStatus = stats.qbittorrent?.connectionStatus || 'disconnected';
+  const listenPort = stats.qbittorrent?.listenPort;
+
+  switch (connectionStatus) {
+    case 'connected':
+      return { status: 'green', label: 'qBittorrent', text: 'OK', connected: true, listenPort };
+    case 'firewalled':
+      return { status: 'yellow', label: 'qBittorrent', text: 'Firewalled', connected: true, listenPort };
+    default:
+      return { status: 'red', label: 'qBittorrent', text: 'Disconnected', connected: true, listenPort };
+  }
 };
 
 /**

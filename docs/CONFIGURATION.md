@@ -10,11 +10,17 @@ This guide covers all configuration options for aMuTorrent.
 - [Environment Variables](#environment-variables)
 - [Docker Network Configuration](#docker-network-configuration)
 
-> **Download Clients:** See [aMule Integration](./AMULE.md) and [rTorrent Integration](./RTORRENT.md) for client-specific setup.
+> **Download Clients:** See [aMule](./AMULE.md), [rTorrent](./RTORRENT.md), and [qBittorrent](./QBITTORRENT.md) for client-specific setup.
 >
-> **Integrations:** See [Prowlarr](./PROWLARR.md), [Notifications](./NOTIFICATIONS.md), and [Sonarr/Radarr](./INTEGRATIONS.md) guides.
+> **Prowlarr:** Search torrents directly from the web UI. See [Prowlarr Setup](./PROWLARR.md).
 >
-> **GeoIP:** For displaying peer locations, see the [GeoIP Setup Guide](./GEOIP.md).
+> ***arr Apps:** Use aMuTorrent as a Torznab indexer and qBittorrent-compatible download client for Sonarr, Radarr, and other *arr applications. See [*arr Integration](./INTEGRATIONS.md).
+>
+> **Notifications:** Get notified when downloads complete or other events occur. See [Notifications](./NOTIFICATIONS.md).
+>
+> **Scripting:** Run custom scripts on download events for advanced automation. See [Scripting](../scripts/README.md).
+>
+> **GeoIP:** Display peer locations on a map. See [GeoIP Setup](./GEOIP.md).
 
 ---
 
@@ -24,7 +30,7 @@ When you first access the web interface (or if no configuration exists), an inte
 
 1. **Welcome** - Introduction to the setup process
 2. **Security** - Configure web interface authentication (password protection)
-3. **Download Clients** - Configure aMule and/or rTorrent connections (with testing)
+3. **Download Clients** - Configure aMule, rTorrent, and/or qBittorrent connections (with testing)
 4. **Directories** - Set data, logs, and GeoIP directories
 5. **Integrations** - Optionally enable Prowlarr, Sonarr, and Radarr
 6. **Review & Save** - Test all settings and save configuration
@@ -52,7 +58,7 @@ When authentication is enabled, the password must meet these requirements:
 After initial setup, access the Settings page anytime via the sidebar (desktop) or bottom navigation bar (mobile). The Settings page allows you to:
 
 - View and edit all configuration options
-- Test individual configuration sections (aMule, rTorrent, Directories, Prowlarr, Sonarr, Radarr)
+- Test individual configuration sections (aMule, rTorrent, qBittorrent, Directories, Prowlarr, Sonarr, Radarr)
 - Test all configuration at once before saving
 - Enable/disable integrations with toggle switches
 
@@ -80,6 +86,7 @@ Sensitive fields include:
 - `WEB_AUTH_PASSWORD` - Web UI authentication password
 - `AMULE_PASSWORD` - aMule EC connection password
 - `RTORRENT_PASSWORD` - rTorrent HTTP auth password
+- `QBITTORRENT_PASSWORD` - qBittorrent WebUI password
 - `PROWLARR_API_KEY` - Prowlarr API key
 - `SONARR_API_KEY` - Sonarr API key
 - `RADARR_API_KEY` - Radarr API key
@@ -151,7 +158,15 @@ services:
       - RTORRENT_USERNAME=user
       - RTORRENT_PASSWORD=pass  # Locks UI editing
 
-      # Prowlarr Integration (optional - requires rTorrent)
+      # qBittorrent Connection (optional)
+      - QBITTORRENT_ENABLED=true
+      - QBITTORRENT_HOST=qbittorrent
+      - QBITTORRENT_PORT=8080
+      - QBITTORRENT_USERNAME=admin
+      - QBITTORRENT_PASSWORD=pass  # Locks UI editing
+      - QBITTORRENT_USE_SSL=false
+
+      # Prowlarr Integration (optional - requires rTorrent or qBittorrent)
       - PROWLARR_ENABLED=true
       - PROWLARR_URL=http://prowlarr:9696
       - PROWLARR_API_KEY=your_api_key  # Locks UI editing
@@ -205,6 +220,17 @@ services:
 | `RTORRENT_PATH` | `/RPC2` | XML-RPC endpoint path |
 | `RTORRENT_USERNAME` | - | HTTP auth username (if required) |
 | `RTORRENT_PASSWORD` | - | HTTP auth password (locks UI editing) |
+
+#### qBittorrent Connection
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `QBITTORRENT_ENABLED` | `false` | Enable qBittorrent integration |
+| `QBITTORRENT_HOST` | `localhost` | qBittorrent WebUI hostname |
+| `QBITTORRENT_PORT` | `8080` | qBittorrent WebUI port |
+| `QBITTORRENT_USERNAME` | `admin` | WebUI username |
+| `QBITTORRENT_PASSWORD` | - | WebUI password (locks UI editing) |
+| `QBITTORRENT_USE_SSL` | `false` | Use HTTPS for WebUI connection |
 
 #### Prowlarr Integration
 
@@ -266,7 +292,7 @@ services:
 
 ### Default Setup - Services on Host Machine
 
-This is the most common scenario when aMule or rTorrent run on your host:
+This is the most common scenario when aMule, rTorrent, or qBittorrent run on your host:
 
 ```yaml
 extra_hosts:
@@ -280,7 +306,7 @@ extra_hosts:
 ### Services in Other Containers
 
 If using the all-in-one setup or services are in separate containers:
-- Use the **service name** as hostname (e.g., `amule`, `rtorrent`, `prowlarr`)
+- Use the **service name** as hostname (e.g., `amule`, `rtorrent`, `qbittorrent`, `prowlarr`)
 - Ensure all containers are on the same Docker network
 - The `extra_hosts` line is not needed
 

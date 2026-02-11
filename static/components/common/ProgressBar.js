@@ -47,8 +47,8 @@ const ProgressBar = ({ item, theme, variant = 'mobile' }) => {
   const display = STATUS_DISPLAY_MAP[statusInfo.key] || STATUS_DISPLAY_MAP.active;
   const barColor = getStatusBarColor(statusInfo.key);
 
-  // Hover/touch state for SegmentsBar toggle (aMule only)
-  const isAmuleWithParts = item.client !== 'rtorrent' && item.partStatus;
+  // Hover/touch state for SegmentsBar toggle (aMule only - has partStatus data)
+  const isAmuleWithParts = !!item.partStatus;
   const [showSegments, setShowSegments] = useState(false);
 
   const handlePointerEnter = useCallback(() => {

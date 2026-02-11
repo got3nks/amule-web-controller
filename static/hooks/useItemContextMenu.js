@@ -23,7 +23,7 @@ import { getItemStatusInfo, getExportLink, getExportLinkLabel } from '../utils/i
  * @param {Function} options.onCopyLink - Handler for copying export link (optional)
  * @param {string|null} options.copiedHash - Hash of recently copied item for "Copied!" feedback
  * @param {string} options.infoLabel - Label for info menu item (default: 'File Details')
- * @param {boolean} options.actionsForRtorrentOnly - If true, pause/resume/stop only shown for rtorrent items
+ * @param {boolean} options.actionsForBittorrentOnly - If true, pause/resume/stop only shown for BitTorrent items (rtorrent/qbittorrent)
  * @param {Function} options.onSelect - Handler for entering selection mode with item selected (optional)
  * @param {Function} options.canShowInfo - Function to determine if info item should show (default: always true)
  * @param {string} options.deleteLabel - Label for delete menu item (default: 'Delete')
@@ -42,7 +42,7 @@ export const useItemContextMenu = ({
   onCopyLink,
   copiedHash = null,
   infoLabel = 'File Details',
-  actionsForRtorrentOnly = false,
+  actionsForBittorrentOnly = false,
   onSelect,
   canShowInfo,
   deleteLabel = 'Delete'
@@ -56,6 +56,8 @@ export const useItemContextMenu = ({
     if (!item) return [];
 
     const isRtorrent = item.client === 'rtorrent';
+    const isQbittorrent = item.client === 'qbittorrent';
+    const isTorrentClient = isRtorrent || isQbittorrent;
     const status = getItemStatusInfo(item);
     const items = [];
 
@@ -87,32 +89,36 @@ export const useItemContextMenu = ({
     }
 
     // Pause/Resume/Start (skip for checking/queued state)
-    const canShowPauseResume = actionsForRtorrentOnly ? isRtorrent : true;
+    // qBittorrent: only show Resume/Start (no Pause - use Stop instead)
+    const canShowPauseResume = actionsForBittorrentOnly ? isTorrentClient : true;
     if (canShowPauseResume && onPause && onResume && status.key !== 'checking' && status.key !== 'hashing-queued') {
-      const needsResume = status.key === 'paused' || status.key === 'stopped';
-      items.push({
-        label: status.key === 'stopped' ? 'Start' : (status.key === 'paused' ? 'Resume' : 'Pause'),
-        icon: needsResume ? 'play' : 'pause',
-        iconColor: needsResume ? 'text-green-600 dark:text-green-400' : 'text-yellow-600 dark:text-yellow-400',
-        onClick: () => {
-          if (needsResume) {
-            onResume(item.hash, item.client || 'amule', item.name);
-          } else {
-            onPause(item.hash, item.client || 'amule', item.name);
+      const needsResume = status.key === 'paused' || status.key === 'stopped' || status.key === 'error';
+      const showPauseResumeItem = !isQbittorrent || needsResume;
+      if (showPauseResumeItem) {
+        items.push({
+          label: (status.key === 'stopped' || status.key === 'error') ? 'Start' : (status.key === 'paused' ? 'Resume' : 'Pause'),
+          icon: needsResume ? 'play' : 'pause',
+          iconColor: needsResume ? 'text-green-600 dark:text-green-400' : 'text-yellow-600 dark:text-yellow-400',
+          onClick: () => {
+            if (needsResume) {
+              onResume(item.hash, item.client || 'amule', item.name);
+            } else {
+              onPause(item.hash, item.client || 'amule', item.name);
+            }
+            closeContextMenu?.();
           }
-          closeContextMenu?.();
-        }
-      });
+        });
+      }
     }
 
-    // Stop (rtorrent only, when not already stopped)
-    if (onStop && isRtorrent && status.key !== 'stopped') {
+    // Stop (BitTorrent clients only, when not already stopped/errored)
+    if (onStop && isTorrentClient && status.key !== 'stopped' && status.key !== 'error') {
       items.push({
         label: 'Stop',
         icon: 'stop',
         iconColor: 'text-gray-600 dark:text-gray-400',
         onClick: () => {
-          onStop(item.hash, item.name);
+          onStop(item.hash, item.client, item.name);
           closeContextMenu?.();
         }
       });
@@ -120,7 +126,7 @@ export const useItemContextMenu = ({
 
     // Export link
     if (onCopyLink) {
-      const hasExportLink = isRtorrent || !!item.ed2kLink || !!getExportLink(item);
+      const hasExportLink = isTorrentClient || !!item.ed2kLink || !!getExportLink(item);
       const isCopied = copiedHash === item.hash;
       const linkLabel = getExportLinkLabel(item);
 
@@ -174,7 +180,7 @@ export const useItemContextMenu = ({
     onDelete,
     deleteLabel,
     copiedHash,
-    actionsForRtorrentOnly,
+    actionsForBittorrentOnly,
     closeContextMenu,
     onSelect
   ]);

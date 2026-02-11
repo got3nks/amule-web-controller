@@ -23,6 +23,7 @@ const authManager = require('./modules/authManager');
 const authAPI = require('./modules/authAPI');
 const amuleManager = require('./modules/amuleManager');
 const rtorrentManager = require('./modules/rtorrentManager');
+const qbittorrentManager = require('./modules/qbittorrentManager');
 const geoIPManager = require('./modules/geoIPManager');
 const arrManager = require('./modules/arrManager');
 const metricsAPI = require('./modules/metricsAPI');
@@ -126,6 +127,7 @@ autoRefreshManager.inject(deps);
 historyAPI.inject(deps);
 amuleManager.inject(deps);
 rtorrentManager.inject(deps);
+qbittorrentManager.inject(deps);
 qbittorrentAPI.inject(deps);
 prowlarrAPI.inject(deps);
 authAPI.inject(deps);
@@ -200,6 +202,26 @@ rtorrentManager.onConnect && rtorrentManager.onConnect(async () => {
     await categoryManager.validateAllPaths();
   } catch (err) {
     log('[CategoryManager] Failed to sync labels on rtorrent connect:', err.message);
+  }
+});
+
+// When qBittorrent connects, sync categories
+qbittorrentManager.onConnect && qbittorrentManager.onConnect(async () => {
+  try {
+    // Get qBittorrent's default save path
+    const defaultDir = await qbittorrentManager.getDefaultDirectory();
+    if (defaultDir) {
+      categoryManager.setClientDefaultPath('qbittorrent', defaultDir);
+    }
+
+    // Sync qBittorrent categories with unified category manager
+    const qbCategories = await qbittorrentManager.getCategories();
+    await categoryManager.syncWithQbittorrent(qbCategories);
+
+    // Re-validate paths now that we have qBittorrent's default path
+    await categoryManager.validateAllPaths();
+  } catch (err) {
+    log('[CategoryManager] Failed to sync categories on qBittorrent connect:', err.message);
   }
 });
 
@@ -324,6 +346,10 @@ async function initializeServices() {
   // Start rtorrent connection with auto-reconnect (non-blocking)
   // Only connects if rtorrent is enabled in config
   rtorrentManager.startConnection();
+
+  // Start qBittorrent connection with auto-reconnect (non-blocking)
+  // Only connects if qBittorrent is enabled in config
+  qbittorrentManager.startConnection();
 
   // Recover any interrupted move operations (may fail gracefully if clients not yet connected)
   await moveOperationManager.recoverOperations();

@@ -1,0 +1,119 @@
+---
+// Carousel component for screenshot galleries
+---
+
+<script is:inline>
+window.carousels = {
+  desktop: { current: 0, total: 12, labels: ['Home', 'Downloads', 'Search', 'History', 'Shared Files', 'Uploads', 'Statistics', 'Categories', 'Notifications', 'Logs', 'Servers', 'Settings'], interval: null, delay: 10000 },
+  mobile: { current: 0, total: 4, labels: null, interval: null, delay: 10000 }
+};
+
+window.updateCarousel = function(id) {
+  var carousel = document.querySelector('#' + id + '-carousel .carousel');
+  var dots = document.querySelectorAll('#' + id + '-dots .carousel-dot');
+  var current = window.carousels[id].current;
+
+  carousel.style.transform = 'translateX(-' + (current * 100) + '%)';
+  dots.forEach(function(dot, i) { dot.classList.toggle('active', i === current); });
+
+  if (window.carousels[id].labels) {
+    document.getElementById(id + '-label').textContent = window.carousels[id].labels[current];
+  }
+};
+
+window.restartAutoRotate = function(id) {
+  if (window.carousels[id].interval) {
+    clearInterval(window.carousels[id].interval);
+  }
+  window.carousels[id].interval = setInterval(function() {
+    window.moveCarousel(id, 1, true);
+  }, window.carousels[id].delay);
+};
+
+window.moveCarousel = function(id, direction, isAuto) {
+  var total = window.carousels[id].total;
+  window.carousels[id].current = (window.carousels[id].current + direction + total) % total;
+  window.updateCarousel(id);
+  if (!isAuto) {
+    window.restartAutoRotate(id);
+  }
+};
+
+window.goToSlide = function(id, index) {
+  window.carousels[id].current = index;
+  window.updateCarousel(id);
+  window.restartAutoRotate(id);
+};
+
+document.addEventListener('DOMContentLoaded', function() {
+  ['desktop', 'mobile'].forEach(function(id) {
+    var dots = document.querySelectorAll('#' + id + '-dots .carousel-dot');
+    dots.forEach(function(dot, i) {
+      dot.onclick = function() { window.goToSlide(id, i); };
+    });
+    window.restartAutoRotate(id);
+  });
+
+  // Lightbox
+  var lightbox = document.getElementById('lightbox');
+  var lightboxImg = document.getElementById('lightbox-img');
+  var lightboxCaption = document.getElementById('lightbox-caption');
+  var lightboxClose = document.querySelector('.lightbox-close');
+  var lightboxPrev = document.getElementById('lightbox-prev');
+  var lightboxNext = document.getElementById('lightbox-next');
+  var header = document.querySelector('header');
+
+  var lightboxImages = [];
+  var currentLightboxIndex = 0;
+
+  // Collect all lightbox images
+  document.querySelectorAll('.lightbox-trigger').forEach(function(img) {
+    lightboxImages.push({ src: img.src, alt: img.alt });
+  });
+
+  function openLightbox(index) {
+    currentLightboxIndex = index;
+    lightbox.classList.add('active');
+    lightboxImg.src = lightboxImages[index].src;
+    lightboxCaption.textContent = lightboxImages[index].alt;
+    if (header) header.style.display = 'none';
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeLightbox() {
+    lightbox.classList.remove('active');
+    if (header) header.style.display = '';
+    document.body.style.overflow = '';
+  }
+
+  function lightboxMove(direction) {
+    currentLightboxIndex = (currentLightboxIndex + direction + lightboxImages.length) % lightboxImages.length;
+    lightboxImg.src = lightboxImages[currentLightboxIndex].src;
+    lightboxCaption.textContent = lightboxImages[currentLightboxIndex].alt;
+  }
+
+  document.querySelectorAll('.lightbox-trigger').forEach(function(img, index) {
+    img.onclick = function() {
+      openLightbox(index);
+    };
+  });
+
+  lightboxClose.onclick = closeLightbox;
+  lightboxPrev.onclick = function() { lightboxMove(-1); };
+  lightboxNext.onclick = function() { lightboxMove(1); };
+
+  lightbox.onclick = function(e) {
+    if (e.target === lightbox) {
+      closeLightbox();
+    }
+  };
+
+  document.addEventListener('keydown', function(e) {
+    if (lightbox.classList.contains('active')) {
+      if (e.key === 'Escape') closeLightbox();
+      if (e.key === 'ArrowLeft') lightboxMove(-1);
+      if (e.key === 'ArrowRight') lightboxMove(1);
+    }
+  });
+});
+</script>

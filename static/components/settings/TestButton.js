@@ -23,7 +23,7 @@ const TestButton = ({ onClick, loading = false, disabled = false, children = 'Te
     onClick,
     disabled: disabled || loading
   },
-    loading && h(LoadingSpinner, { size: 16 }),
+    loading && h(LoadingSpinner, { size: 16, color: 'white' }),
     children
   );
 };

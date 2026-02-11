@@ -9,6 +9,7 @@ import React from 'https://esm.sh/react@18.2.0';
 import { getCategoryColorStyle, getProgressColor } from '../../utils/colors.js';
 import { formatSpeed } from '../../utils/formatters.js';
 import { PROGRESS_STRIPES_STYLE } from '../../utils/constants.js';
+import { isBittorrentClient } from '../../utils/downloadHelpers.js';
 import { useTheme } from '../../contexts/ThemeContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useClientFilter } from '../../contexts/ClientFilterContext.js';
@@ -71,9 +72,9 @@ const ActiveDownloadsWidget = ({ downloads = [], maxItems = 10, compact = false,
             const progress = Number(download.progress) || 0;
 
             // Count active peers/sources we're downloading from
-            // rtorrent: count peers with active download rate
-            // amule: use sources.connected (sourceCountXfer)
-            const activePeerCount = download.client === 'rtorrent'
+            // BitTorrent: count peers with active download rate
+            // aMule: use sources.connected (sourceCountXfer)
+            const activePeerCount = isBittorrentClient(download)
               ? (download.peersDetailed || []).filter(p => p.downloadRate > 0).length
               : (download.sources?.connected || 0);
 

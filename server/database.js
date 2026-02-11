@@ -133,6 +133,40 @@ class MetricsDB {
       logger.log('📊 Metrics: Schema migrated to v3');
     }
 
+    // Migration to v4: Add qBittorrent columns
+    if (currentVersion < 4) {
+      logger.log('📊 Metrics: Migrating schema to v4 (adding qBittorrent support)...');
+
+      const columns = this.db.prepare("PRAGMA table_info(metrics)").all();
+      const columnNames = columns.map(c => c.name);
+
+      // Add qBittorrent columns if they don't exist
+      if (!columnNames.includes('qb_upload_speed')) {
+        this.db.exec("ALTER TABLE metrics ADD COLUMN qb_upload_speed INTEGER DEFAULT 0");
+      }
+      if (!columnNames.includes('qb_download_speed')) {
+        this.db.exec("ALTER TABLE metrics ADD COLUMN qb_download_speed INTEGER DEFAULT 0");
+      }
+      if (!columnNames.includes('qb_total_uploaded')) {
+        this.db.exec("ALTER TABLE metrics ADD COLUMN qb_total_uploaded INTEGER DEFAULT 0");
+      }
+      if (!columnNames.includes('qb_total_downloaded')) {
+        this.db.exec("ALTER TABLE metrics ADD COLUMN qb_total_downloaded INTEGER DEFAULT 0");
+      }
+
+      // Legacy metadata keys (no longer used - qBittorrent now uses all-time totals from /sync/maindata)
+      const initMetadata = this.db.prepare(
+        'INSERT OR IGNORE INTO metadata (key, value) VALUES (?, ?)'
+      );
+      initMetadata.run('qb_last_session_uploaded', '0');
+      initMetadata.run('qb_last_session_downloaded', '0');
+      initMetadata.run('qb_accumulated_uploaded', '0');
+      initMetadata.run('qb_accumulated_downloaded', '0');
+
+      this.db.prepare('UPDATE metadata SET value = ? WHERE key = ?').run('4', 'schema_version');
+      logger.log('📊 Metrics: Schema migrated to v4');
+    }
+
   }
 
   /**
@@ -141,10 +175,11 @@ class MetricsDB {
    * @param {number} downloadSpeed - aMule download speed in bytes/sec
    * @param {number|null} totalUploaded - Optional: actual total uploaded (if available from aMule)
    * @param {number|null} totalDownloaded - Optional: actual total downloaded (if available from aMule)
-   * @param {object|null} rtorrentStats - Optional: rtorrent stats { uploadSpeed, downloadSpeed, uploadTotal, downloadTotal }
+   * @param {object|null} rtorrentStats - Optional: rtorrent stats { uploadSpeed, downloadSpeed, uploadTotal, downloadTotal, pid }
+   * @param {object|null} qbittorrentStats - Optional: qBittorrent stats { uploadSpeed, downloadSpeed, uploadTotal, downloadTotal }
    * @returns {object} Inserted metric data
    */
-  insertMetric(uploadSpeed, downloadSpeed, totalUploaded = null, totalDownloaded = null, rtorrentStats = null) {
+  insertMetric(uploadSpeed, downloadSpeed, totalUploaded = null, totalDownloaded = null, rtorrentStats = null, qbittorrentStats = null) {
     const timestamp = Date.now();
 
     // Get last totals from metadata
@@ -214,14 +249,27 @@ class MetricsDB {
       updateMeta.run(rtTotalDownloaded.toString(), 'rt_last_total_downloaded');
     }
 
-    // Insert metric with both aMule and rtorrent data
+    // Handle qBittorrent stats (uses all-time totals from /sync/maindata, no restart detection needed)
+    let qbUploadSpeed = 0, qbDownloadSpeed = 0, qbTotalUploaded = 0, qbTotalDownloaded = 0;
+
+    if (qbittorrentStats) {
+      qbUploadSpeed = parseInt(qbittorrentStats.uploadSpeed, 10) || 0;
+      qbDownloadSpeed = parseInt(qbittorrentStats.downloadSpeed, 10) || 0;
+      // All-time totals from qBittorrent (persist across restarts)
+      qbTotalUploaded = parseInt(qbittorrentStats.uploadTotal, 10) || 0;
+      qbTotalDownloaded = parseInt(qbittorrentStats.downloadTotal, 10) || 0;
+    }
+
+    // Insert metric with aMule, rtorrent, and qBittorrent data
     const insert = this.db.prepare(`
       INSERT INTO metrics (timestamp, upload_speed, download_speed, total_uploaded, total_downloaded,
-                          rt_upload_speed, rt_download_speed, rt_total_uploaded, rt_total_downloaded)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          rt_upload_speed, rt_download_speed, rt_total_uploaded, rt_total_downloaded,
+                          qb_upload_speed, qb_download_speed, qb_total_uploaded, qb_total_downloaded)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     insert.run(timestamp, uploadSpeed, downloadSpeed, newTotalUploaded, newTotalDownloaded,
-               rtUploadSpeed, rtDownloadSpeed, rtTotalUploaded, rtTotalDownloaded);
+               rtUploadSpeed, rtDownloadSpeed, rtTotalUploaded, rtTotalDownloaded,
+               qbUploadSpeed, qbDownloadSpeed, qbTotalUploaded, qbTotalDownloaded);
 
     // Update aMule metadata with new totals
     const updateMeta = this.db.prepare('UPDATE metadata SET value = ? WHERE key = ?');
@@ -237,7 +285,11 @@ class MetricsDB {
       rtUploadSpeed,
       rtDownloadSpeed,
       rtTotalUploaded,
-      rtTotalDownloaded
+      rtTotalDownloaded,
+      qbUploadSpeed,
+      qbDownloadSpeed,
+      qbTotalUploaded,
+      qbTotalDownloaded
     };
   }
 
@@ -261,7 +313,7 @@ class MetricsDB {
   /**
    * Get aggregated metrics within a time range
    * Aggregates data into time buckets for efficient charting
-   * Includes per-client (aMule and rTorrent) data
+   * Includes per-client (aMule, rTorrent, qBittorrent) data
    * @param {number} startTime - Start timestamp in milliseconds
    * @param {number} endTime - End timestamp in milliseconds
    * @param {number} bucketSize - Bucket size in milliseconds
@@ -275,10 +327,14 @@ class MetricsDB {
         AVG(download_speed) as avg_download_speed,
         AVG(rt_upload_speed) as avg_rt_upload_speed,
         AVG(rt_download_speed) as avg_rt_download_speed,
+        AVG(qb_upload_speed) as avg_qb_upload_speed,
+        AVG(qb_download_speed) as avg_qb_download_speed,
         CASE WHEN MIN(total_uploaded) = 0 THEN 0 ELSE MAX(total_uploaded) - MIN(total_uploaded) END as uploaded_delta,
         CASE WHEN MIN(total_downloaded) = 0 THEN 0 ELSE MAX(total_downloaded) - MIN(total_downloaded) END as downloaded_delta,
         CASE WHEN MIN(rt_total_uploaded) = 0 THEN 0 ELSE MAX(rt_total_uploaded) - MIN(rt_total_uploaded) END as rt_uploaded_delta,
-        CASE WHEN MIN(rt_total_downloaded) = 0 THEN 0 ELSE MAX(rt_total_downloaded) - MIN(rt_total_downloaded) END as rt_downloaded_delta
+        CASE WHEN MIN(rt_total_downloaded) = 0 THEN 0 ELSE MAX(rt_total_downloaded) - MIN(rt_total_downloaded) END as rt_downloaded_delta,
+        CASE WHEN MIN(qb_total_uploaded) = 0 THEN 0 ELSE MAX(qb_total_uploaded) - MIN(qb_total_uploaded) END as qb_uploaded_delta,
+        CASE WHEN MIN(qb_total_downloaded) = 0 THEN 0 ELSE MAX(qb_total_downloaded) - MIN(qb_total_downloaded) END as qb_downloaded_delta
       FROM metrics
       WHERE timestamp BETWEEN ? AND ?
       GROUP BY CAST(timestamp / ? AS INTEGER)
@@ -321,7 +377,7 @@ class MetricsDB {
 
   /**
    * Get peak speeds within a time range from raw data
-   * Returns combined peaks (aMule + rtorrent) and per-client peaks
+   * Returns combined peaks (aMule + BitTorrent) and per-client peaks
    * @param {number} startTime - Start timestamp in milliseconds
    * @param {number} endTime - End timestamp in milliseconds
    * @returns {object} Object with combined and per-client peak speeds
@@ -329,12 +385,16 @@ class MetricsDB {
   getPeakSpeeds(startTime, endTime) {
     const query = this.db.prepare(`
       SELECT
-        MAX(upload_speed + rt_upload_speed) as peak_upload_speed,
-        MAX(download_speed + rt_download_speed) as peak_download_speed,
+        MAX(upload_speed + rt_upload_speed + qb_upload_speed) as peak_upload_speed,
+        MAX(download_speed + rt_download_speed + qb_download_speed) as peak_download_speed,
         MAX(upload_speed) as amule_peak_upload_speed,
         MAX(download_speed) as amule_peak_download_speed,
         MAX(rt_upload_speed) as rt_peak_upload_speed,
-        MAX(rt_download_speed) as rt_peak_download_speed
+        MAX(rt_download_speed) as rt_peak_download_speed,
+        MAX(qb_upload_speed) as qb_peak_upload_speed,
+        MAX(qb_download_speed) as qb_peak_download_speed,
+        MAX(rt_upload_speed + qb_upload_speed) as bt_peak_upload_speed,
+        MAX(rt_download_speed + qb_download_speed) as bt_peak_download_speed
       FROM metrics
       WHERE timestamp BETWEEN ? AND ?
     `);
@@ -349,6 +409,14 @@ class MetricsDB {
       rtorrent: {
         peakUploadSpeed: result?.rt_peak_upload_speed || 0,
         peakDownloadSpeed: result?.rt_peak_download_speed || 0
+      },
+      qbittorrent: {
+        peakUploadSpeed: result?.qb_peak_upload_speed || 0,
+        peakDownloadSpeed: result?.qb_peak_download_speed || 0
+      },
+      bittorrent: {
+        peakUploadSpeed: result?.bt_peak_upload_speed || 0,
+        peakDownloadSpeed: result?.bt_peak_download_speed || 0
       }
     };
   }

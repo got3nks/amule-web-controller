@@ -34,12 +34,41 @@ const RTORRENT_STATUS_TO_UNIFIED = {
   'unknown':     'active'
 };
 
+// qBittorrent state → unified status string
+// Note: qBittorrent 5.0+ uses stoppedDL/stoppedUP instead of pausedDL/pausedUP
+const QBITTORRENT_STATUS_TO_UNIFIED = {
+  'downloading':       'active',
+  'stalledDL':         'active',
+  'metaDL':            'active',
+  'allocating':        'active',
+  'queuedDL':          'active',
+  'forcedDL':          'active',
+  'uploading':         'seeding',
+  'stalledUP':         'seeding',
+  'queuedUP':          'seeding',
+  'forcedUP':          'seeding',
+  'pausedDL':          'paused',
+  'pausedUP':          'paused',
+  'stoppedDL':         'stopped',    // qBittorrent 5.0+
+  'stoppedUP':         'stopped',    // qBittorrent 5.0+
+  'checkingDL':        'checking',
+  'checkingUP':        'checking',
+  'checkingResumeData': 'checking',
+  'moving':            'moving',
+  'error':             'error',
+  'missingFiles':      'error',
+  'unknown':           'stopped'
+};
+
 /**
  * Resolve the unified status string from a normalized item
  */
 function resolveStatus(item) {
   if (item.clientType === 'rtorrent') {
     return RTORRENT_STATUS_TO_UNIFIED[item.statusText] || 'active';
+  }
+  if (item.clientType === 'qbittorrent') {
+    return QBITTORRENT_STATUS_TO_UNIFIED[item.statusText] || 'active';
   }
   return AMULE_STATUS_TO_UNIFIED[item.status] || 'active';
 }
@@ -103,8 +132,8 @@ const AMULE_DEFAULTS = {
   addedAt: null  // When the item was added (enriched from database)
 };
 
-// rtorrent-only fields
-const RTORRENT_DEFAULTS = {
+// BitTorrent client fields (rtorrent and qBittorrent)
+const TORRENT_DEFAULTS = {
   downloadPriority: null,
   tracker: null,
   trackers: [],
@@ -113,8 +142,18 @@ const RTORRENT_DEFAULTS = {
   magnetLink: null,
   directory: null,
   multiFile: false,
-  addedAt: null  // When the item was added (enriched from rtorrent or database)
+  addedAt: null  // When the item was added (enriched from client or database)
 };
+
+// Alias for backwards compatibility
+const RTORRENT_DEFAULTS = TORRENT_DEFAULTS;
+
+/**
+ * Check if client is a BitTorrent client (rtorrent or qBittorrent)
+ */
+function isTorrentClient(client) {
+  return client === 'rtorrent' || client === 'qbittorrent';
+}
 
 /**
  * Create a blank unified item with all fields initialized to defaults.
@@ -131,9 +170,9 @@ function createBaseItem(hash, client) {
     activeUploads: [],
     peersDetailed: [],
     raw: {},
-    ...(client === 'rtorrent' ? RTORRENT_DEFAULTS : AMULE_DEFAULTS),
-    // Deep-copy mutable rtorrent array fields
-    ...(client === 'rtorrent' ? { trackers: [], trackersDetailed: [] } : {})
+    ...(isTorrentClient(client) ? TORRENT_DEFAULTS : AMULE_DEFAULTS),
+    // Deep-copy mutable torrent array fields
+    ...(isTorrentClient(client) ? { trackers: [], trackersDetailed: [] } : {})
   };
 }
 
@@ -190,12 +229,20 @@ function applyDownloadData(item, download) {
 
     // Links
     item.ed2kLink = download.ed2kLink || item.ed2kLink;
-  } else {
-    // rtorrent — all items are always shared/seeding
+  } else if (download.clientType === 'rtorrent' || download.clientType === 'qbittorrent') {
+    // BitTorrent clients (rtorrent, qbittorrent) — all items are always shared/seeding
     item.shared = true;
-    item.seeding = download.statusText === 'seeding';
-    // Map rtorrent label to unified category name (empty/none -> Default)
-    const label = download.label;
+
+    // Determine seeding status based on client
+    if (download.clientType === 'rtorrent') {
+      item.seeding = download.statusText === 'seeding';
+    } else {
+      // qBittorrent seeding states
+      item.seeding = ['uploading', 'stalledUP', 'queuedUP', 'forcedUP'].includes(download.statusText);
+    }
+
+    // Map label/category to unified category name (empty/none -> Default)
+    const label = download.label || download.category;
     item.category = (!label || label === '(none)') ? 'Default' : label;
     item.uploadSpeed = download.uploadSpeed || item.uploadSpeed;
 
@@ -218,7 +265,7 @@ function applyDownloadData(item, download) {
     item.uploadTotal = download.uploadTotal || item.uploadTotal;
     item.ratio = download.ratio || item.ratio;
 
-    // rtorrent-specific
+    // Client-specific fields
     item.downloadPriority = download.priority ?? item.downloadPriority;
     item.directory = download.directory || item.directory;
     item.multiFile = download.isMultiFile || item.multiFile;
@@ -227,8 +274,7 @@ function applyDownloadData(item, download) {
     // Links
     item.magnetLink = generateMagnetLink(download);
 
-    // Timestamps - use startedTime (when torrent was first started in rtorrent)
-    // creationDate is the .torrent file's metadata date (set by releaser), not useful here
+    // Timestamps - use startedTime (when torrent was first started)
     // Treat 0 as null (0 = epoch time 1970, not a real timestamp)
     item.addedAt = download.startedTime && download.startedTime > 0 ? download.startedTime : null;
   }
@@ -392,8 +438,8 @@ function assembleUnifiedItems(downloads, sharedFiles, uploads, categoryManager =
   for (const upload of (uploads || [])) {
     let itemHash;
 
-    if (upload.clientType === 'rtorrent') {
-      // rtorrent uploads carry the parent download's hash
+    if (upload.clientType === 'rtorrent' || upload.clientType === 'qbittorrent') {
+      // BitTorrent uploads carry the parent download's hash
       itemHash = upload.downloadHash?.toLowerCase();
     } else {
       // aMule uploads carry only the file name

@@ -363,6 +363,10 @@ class DownloadHistory {
           // Get the entry to have complete data for the event
           const entry = this.getByHash(hash);
           if (entry) {
+            // Build full path: directory/filename for all clients
+            const dir = meta?.directory || null;
+            const fullPath = dir ? `${dir.replace(/\/+$/, '')}/${entry.filename}` : null;
+
             eventScriptingManager.emit('downloadFinished', {
               hash: hash.toLowerCase(),
               filename: entry.filename,
@@ -371,7 +375,9 @@ class DownloadHistory {
               downloaded: entry.downloaded || 0,
               uploaded: entry.uploaded || 0,
               ratio: entry.ratio || 0,
-              trackerDomain: entry.tracker_domain || null
+              trackerDomain: entry.tracker_domain || null,
+              path: fullPath,
+              multiFile: meta?.multiFile || false
             });
           }
         }

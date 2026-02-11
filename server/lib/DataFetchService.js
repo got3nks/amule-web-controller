@@ -14,7 +14,9 @@ const {
   normalizeAmuleSharedFile,
   normalizeAmuleUpload,
   normalizeRtorrentDownload,
-  extractRtorrentUploads
+  extractRtorrentUploads,
+  normalizeQBittorrentDownload,
+  extractQBittorrentUploads
 } = require('./downloadNormalizer');
 const { assembleUnifiedItems } = require('./unifiedItemBuilder');
 const moveOperationManager = require('./MoveOperationManager');
@@ -23,6 +25,7 @@ const config = require('../modules/config');
 // Singleton managers - imported directly instead of injected
 const amuleManager = require('../modules/amuleManager');
 const rtorrentManager = require('../modules/rtorrentManager');
+const qbittorrentManager = require('../modules/qbittorrentManager');
 const geoIPManager = require('../modules/geoIPManager');
 const categoryManager = require('./CategoryManager');
 const hostnameResolver = require('./hostnameResolver');
@@ -293,6 +296,37 @@ class DataFetchService extends BaseModule {
   }
 
   // ============================================================================
+  // QBITTORRENT PROCESSING
+  // ============================================================================
+
+  /**
+   * Process raw qBittorrent torrents into all derived data
+   * Normalizes each item ONCE, then derives uploads and categories
+   * @param {Array} rawTorrents - Raw torrents from qBittorrent
+   * @returns {Object} { downloads, uploads, categories }
+   */
+  _processQBittorrentData(rawTorrents) {
+    if (!rawTorrents || rawTorrents.length === 0) {
+      return { downloads: [], uploads: [], categories: [] };
+    }
+
+    // Normalize all torrents
+    const downloads = rawTorrents.map(t => normalizeQBittorrentDownload(t));
+
+    // Extract uploads (peers with active upload) from raw data
+    const uploads = extractQBittorrentUploads(rawTorrents);
+
+    // Extract unique categories
+    const categoriesSet = new Set();
+    rawTorrents.forEach(t => {
+      if (t.category) categoriesSet.add(t.category);
+    });
+    const categories = Array.from(categoriesSet).sort();
+
+    return { downloads, uploads, categories };
+  }
+
+  // ============================================================================
   // PUBLIC API
   // ============================================================================
 
@@ -321,7 +355,7 @@ class DataFetchService extends BaseModule {
     let allShared = [];
     let allUploads = [];
     let categories = [];
-    let clientDefaultPaths = { amule: null, rtorrent: null };
+    let clientDefaultPaths = { amule: null, rtorrent: null, qbittorrent: null };
     let hasPathWarnings = false;
 
     // Get unified categories from CategoryManager if available
@@ -384,6 +418,20 @@ class DataFetchService extends BaseModule {
       }
     }
 
+    // Fetch all qBittorrent data if connected
+    if (qbittorrentManager && qbittorrentManager.isConnected()) {
+      try {
+        const rawTorrents = await qbittorrentManager.getTorrents();
+        const qbittorrentData = this._processQBittorrentData(rawTorrents);
+
+        allDownloads = allDownloads.concat(qbittorrentData.downloads);
+        allShared = allShared.concat(qbittorrentData.downloads); // qBittorrent always seeds
+        allUploads = allUploads.concat(qbittorrentData.uploads);
+      } catch (err) {
+        this.log('Error fetching qBittorrent data:', err.message);
+      }
+    }
+
     // Build unified items from the normalized arrays
     const items = assembleUnifiedItems(allDownloads, allShared, allUploads, categoryManager);
 
@@ -401,7 +449,8 @@ class DataFetchService extends BaseModule {
       // Return filtered data for history status computation (internal use only)
       _amuleDownloads: allDownloads.filter(d => d.clientType === 'amule'),
       _amuleSharedFiles: allShared.filter(f => f.clientType === 'amule'),
-      _rtorrentDownloads: allShared.filter(f => f.clientType === 'rtorrent')
+      _rtorrentDownloads: allShared.filter(f => f.clientType === 'rtorrent'),
+      _qbittorrentDownloads: allShared.filter(f => f.clientType === 'qbittorrent')
     };
 
     // Cache the result for history API and other consumers

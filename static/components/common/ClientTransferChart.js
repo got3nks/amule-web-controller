@@ -156,9 +156,13 @@ const ClientTransferChart = ({ historicalData, clientType, theme, historicalRang
     });
 
     // Get client-specific data
-    const isAmule = clientType === 'amule';
-    const uploadedKey = isAmule ? 'amuleUploadedDelta' : 'rtorrentUploadedDelta';
-    const downloadedKey = isAmule ? 'amuleDownloadedDelta' : 'rtorrentDownloadedDelta';
+    // 'bittorrent' aggregates rtorrent + qbittorrent
+    const uploadedKey = clientType === 'amule' ? 'amuleUploadedDelta'
+      : clientType === 'bittorrent' ? 'bittorrentUploadedDelta'
+      : 'rtorrentUploadedDelta';
+    const downloadedKey = clientType === 'amule' ? 'amuleDownloadedDelta'
+      : clientType === 'bittorrent' ? 'bittorrentDownloadedDelta'
+      : 'rtorrentDownloadedDelta';
 
     const uploadedData = historicalData.data.map(d => d[uploadedKey] || 0);
     const downloadedData = historicalData.data.map(d => d[downloadedKey] || 0);

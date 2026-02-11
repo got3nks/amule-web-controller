@@ -6,8 +6,8 @@
  * - ExportLinkSection: Export link with copy button
  * - CategoryFieldsSection: Collapsible category fields
  * - CollapsibleTableSection: Collapsible section wrapper
- * - PeersTable: Peers table for rtorrent
- * - TrackersTable: Trackers table for rtorrent
+ * - PeersTable: Peers table for rtorrent and qBittorrent
+ * - TrackersTable: Trackers table for rtorrent and qBittorrent
  */
 
 import React from 'https://esm.sh/react@18.2.0';
@@ -212,9 +212,50 @@ export const CollapsibleTableSection = ({ title, count, expanded, onToggle, chil
 };
 
 /**
+ * Normalize peer data to handle both rtorrent and qBittorrent field naming
+ * @param {Object} peer - Raw peer object
+ * @returns {Object} Normalized peer object
+ */
+const normalizePeer = (peer) => {
+  // Handle qBittorrent's field naming (ip, progress, dl_speed, up_speed, downloaded, uploaded)
+  const address = peer.address || peer.ip || '';
+  const port = peer.port || 0;
+  const client = peer.client || peer.software || 'Unknown';
+  const flags = peer.flags || '';
+
+  // qBittorrent progress is 0-1, rtorrent completedPercent is already 0-100
+  let completedPercent = peer.completedPercent;
+  if (completedPercent == null && peer.progress != null) {
+    completedPercent = Math.round(peer.progress * 100);
+  }
+
+  // Transfer stats - qBittorrent uses downloaded/uploaded, rtorrent uses downloadTotal/uploadTotal
+  const downloadTotal = peer.downloadTotal ?? peer.downloaded ?? 0;
+  const uploadTotal = peer.uploadTotal ?? peer.uploaded ?? 0;
+
+  // Speed - qBittorrent uses dl_speed/up_speed, rtorrent uses downloadRate/uploadRate
+  const downloadRate = peer.downloadRate ?? peer.dl_speed ?? 0;
+  const uploadRate = peer.uploadRate ?? peer.up_speed ?? 0;
+
+  return {
+    ...peer,
+    address,
+    port,
+    client,
+    flags,
+    completedPercent,
+    downloadTotal,
+    uploadTotal,
+    downloadRate,
+    uploadRate
+  };
+};
+
+/**
  * Peers table component for rtorrent downloads/shared files and aMule uploads
+ * Supports both rtorrent and qBittorrent field naming conventions
  * @param {Array} peers - Array of peer objects
- * @param {boolean} isAmule - If true, hide rtorrent-specific columns (Done, Downloaded, DL)
+ * @param {boolean} isAmule - If true, hide torrent-specific columns (Done, Downloaded, DL)
  */
 export const PeersTable = ({ peers, isAmule = false }) => {
   const [sort, setSort] = useState({ key: 'uploadRate', direction: 'desc' });
@@ -226,10 +267,22 @@ export const PeersTable = ({ peers, isAmule = false }) => {
     }));
   };
 
-  const sortedPeers = useMemo(() => {
+  // Normalize peers to handle both rtorrent and qBittorrent field naming
+  const normalizedPeers = useMemo(() => {
     if (!peers || peers.length === 0) return [];
+    return peers.map(normalizePeer);
+  }, [peers]);
 
-    return [...peers].sort((a, b) => {
+  // Check if any peer has peerDownloadRate/peerDownloadTotal data (rtorrent-only fields)
+  // qBittorrent doesn't provide this data, so hide those columns
+  const hasPeerStats = useMemo(() => {
+    return normalizedPeers.some(p => p.peerDownloadRate != null || p.peerDownloadTotal != null);
+  }, [normalizedPeers]);
+
+  const sortedPeers = useMemo(() => {
+    if (normalizedPeers.length === 0) return [];
+
+    return [...normalizedPeers].sort((a, b) => {
       let aVal, bVal;
 
       switch (sort.key) {
@@ -238,8 +291,8 @@ export const PeersTable = ({ peers, isAmule = false }) => {
           bVal = b.hostname || b.address || '';
           break;
         case 'client':
-          aVal = a.client || a.software || '';
-          bVal = b.client || b.software || '';
+          aVal = a.client || '';
+          bVal = b.client || '';
           break;
         case 'country':
           aVal = a.geoData?.country || '';
@@ -287,7 +340,7 @@ export const PeersTable = ({ peers, isAmule = false }) => {
       }
       return sort.direction === 'asc' ? aVal - bVal : bVal - aVal;
     });
-  }, [peers, sort]);
+  }, [normalizedPeers, sort]);
 
   if (!peers || peers.length === 0) return null;
 
@@ -297,21 +350,21 @@ export const PeersTable = ({ peers, isAmule = false }) => {
         h('tr', { className: 'bg-gray-50 dark:bg-gray-700/50' },
           h(SortableHeader, { label: 'Address', sortKey: 'address', currentSort: sort, onSort: handleSort }),
           h(SortableHeader, { label: 'Client', sortKey: 'client', currentSort: sort, onSort: handleSort }),
-          // Flags column (rtorrent only)
+          // Flags column (torrents only)
           !isAmule && h('th', { className: 'px-2 py-1.5 text-center font-medium text-gray-600 dark:text-gray-300' }, 'Flags'),
-          // Done column (rtorrent only - peer's download progress)
+          // Done column (torrents only - peer's download progress)
           !isAmule && h(SortableHeader, { label: 'Done', sortKey: 'completedPercent', currentSort: sort, onSort: handleSort, align: 'right' }),
-          // Downloaded column (rtorrent only - bytes downloaded from peer)
+          // Downloaded column (torrents only - bytes downloaded from peer)
           !isAmule && h(SortableHeader, { label: 'Downloaded', sortKey: 'downloadTotal', currentSort: sort, onSort: handleSort, align: 'right' }),
           // Session upload (aMule only)
           isAmule && h(SortableHeader, { label: 'Session', sortKey: 'uploadSession', currentSort: sort, onSort: handleSort, align: 'right' }),
           h(SortableHeader, { label: 'Uploaded', sortKey: 'uploadTotal', currentSort: sort, onSort: handleSort, align: 'right' }),
-          // DL rate column (rtorrent only)
+          // DL rate column (torrents only)
           !isAmule && h(SortableHeader, { label: 'DL', sortKey: 'downloadRate', currentSort: sort, onSort: handleSort, align: 'right' }),
           h(SortableHeader, { label: 'UL', sortKey: 'uploadRate', currentSort: sort, onSort: handleSort, align: 'right' }),
-          // Peer's own download stats (rtorrent only)
-          !isAmule && h(SortableHeader, { label: 'Peer DL', sortKey: 'peerDownloadRate', currentSort: sort, onSort: handleSort, align: 'right' }),
-          !isAmule && h(SortableHeader, { label: 'Peer Total', sortKey: 'peerDownloadTotal', currentSort: sort, onSort: handleSort, align: 'right' })
+          // Peer's own download stats (rtorrent only - qBittorrent doesn't provide this)
+          !isAmule && hasPeerStats && h(SortableHeader, { label: 'Peer DL', sortKey: 'peerDownloadRate', currentSort: sort, onSort: handleSort, align: 'right' }),
+          !isAmule && hasPeerStats && h(SortableHeader, { label: 'Peer Total', sortKey: 'peerDownloadTotal', currentSort: sort, onSort: handleSort, align: 'right' })
         )
       ),
       h('tbody', { className: 'divide-y divide-gray-200 dark:divide-gray-700' },
@@ -346,20 +399,20 @@ export const PeersTable = ({ peers, isAmule = false }) => {
             ),
             h('td', {
               className: 'px-2 py-1.5 text-gray-600 dark:text-gray-400 truncate max-w-[150px]',
-              title: peer.client || peer.software
-            }, peer.client || peer.software || 'Unknown'),
-            // Flags column (rtorrent only)
+              title: peer.client
+            }, peer.client),
+            // Flags column (torrents only)
             !isAmule && h('td', { className: 'px-2 py-1.5 text-center' },
               peer.flags && h('span', {
                 className: 'px-1.5 py-0.5 rounded text-xs font-mono bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400',
                 title: `${peer.isEncrypted ? 'Encrypted' : ''}${peer.isEncrypted && peer.isIncoming ? ', ' : ''}${peer.isIncoming ? 'Incoming' : ''}`
               }, peer.flags)
             ),
-            // Done column (rtorrent only)
+            // Done column (torrents only)
             !isAmule && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
               peer.completedPercent != null ? `${peer.completedPercent}%` : '-'
             ),
-            // Downloaded column (rtorrent only)
+            // Downloaded column (torrents only)
             !isAmule && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
               formatBytes(peer.downloadTotal)
             ),
@@ -370,7 +423,7 @@ export const PeersTable = ({ peers, isAmule = false }) => {
             h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
               formatBytes(peer.uploadTotal)
             ),
-            // DL rate column (rtorrent only)
+            // DL rate column (torrents only)
             !isAmule && h('td', { className: 'px-2 py-1.5 text-right' },
               peer.downloadRate > 0
                 ? h('span', { className: 'text-green-600 dark:text-green-400' },
@@ -385,8 +438,8 @@ export const PeersTable = ({ peers, isAmule = false }) => {
                   )
                 : h('span', { className: 'text-gray-400' }, '-')
             ),
-            // Peer's own download rate (rtorrent only)
-            !isAmule && h('td', { className: 'px-2 py-1.5 text-right' },
+            // Peer's own download rate (rtorrent only - qBittorrent doesn't provide this)
+            !isAmule && hasPeerStats && h('td', { className: 'px-2 py-1.5 text-right' },
               peer.peerDownloadRate > 0
                 ? h('span', { className: 'text-purple-600 dark:text-purple-400' },
                     `${formatBytes(peer.peerDownloadRate)}/s`
@@ -394,7 +447,7 @@ export const PeersTable = ({ peers, isAmule = false }) => {
                 : h('span', { className: 'text-gray-400' }, '-')
             ),
             // Peer's total downloaded (rtorrent only)
-            !isAmule && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
+            !isAmule && hasPeerStats && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
               formatBytes(peer.peerDownloadTotal)
             )
           );
@@ -608,7 +661,65 @@ export const FilesTreeSection = ({ files, loading, error }) => {
 };
 
 /**
- * Trackers table component for rtorrent downloads/shared files
+ * qBittorrent tracker status codes
+ * 0 = Disabled, 1 = Not contacted yet, 2 = Working, 3 = Updating, 4 = Not working
+ */
+const QBITTORRENT_TRACKER_STATUS = {
+  0: { label: 'Disabled', active: false },
+  1: { label: 'Not Contacted', active: false },
+  2: { label: 'Active', active: true },
+  3: { label: 'Updating', active: true },
+  4: { label: 'Error', active: false }
+};
+
+/**
+ * Normalize tracker data to handle both rtorrent and qBittorrent field naming
+ * @param {Object} tracker - Raw tracker object
+ * @returns {Object} Normalized tracker object
+ */
+const normalizeTracker = (tracker) => {
+  // Handle qBittorrent's field naming
+  // qBittorrent uses: status (int), num_seeds, num_leeches, num_downloaded, msg
+  // rtorrent uses: enabled (bool), scrapeComplete, scrapeIncomplete, scrapeDownloaded
+
+  let enabled = tracker.enabled;
+  if (enabled === undefined && tracker.status !== undefined) {
+    // qBittorrent: status 2 or 3 means active
+    const statusInfo = QBITTORRENT_TRACKER_STATUS[tracker.status] || { active: false };
+    enabled = statusInfo.active;
+  }
+
+  // Scrape stats - qBittorrent uses num_seeds/num_leeches/num_downloaded
+  const scrapeComplete = tracker.scrapeComplete ?? tracker.num_seeds ?? -1;
+  const scrapeIncomplete = tracker.scrapeIncomplete ?? tracker.num_leeches ?? -1;
+  const scrapeDownloaded = tracker.scrapeDownloaded ?? tracker.num_downloaded ?? -1;
+
+  // Status message (qBittorrent provides this as 'msg')
+  const message = tracker.message || tracker.msg || '';
+
+  // Get status label for qBittorrent
+  let statusLabel = enabled ? 'Active' : 'Disabled';
+  if (tracker.status !== undefined) {
+    const statusInfo = QBITTORRENT_TRACKER_STATUS[tracker.status];
+    if (statusInfo) {
+      statusLabel = statusInfo.label;
+    }
+  }
+
+  return {
+    ...tracker,
+    enabled,
+    scrapeComplete,
+    scrapeIncomplete,
+    scrapeDownloaded,
+    message,
+    statusLabel
+  };
+};
+
+/**
+ * Trackers table component for rtorrent and qBittorrent downloads/shared files
+ * Supports both rtorrent and qBittorrent field naming conventions
  * @param {Array} trackers - Array of tracker objects
  */
 export const TrackersTable = ({ trackers }) => {
@@ -621,10 +732,21 @@ export const TrackersTable = ({ trackers }) => {
     }));
   };
 
-  const sortedTrackers = useMemo(() => {
+  // Normalize trackers to handle both rtorrent and qBittorrent field naming
+  const normalizedTrackers = useMemo(() => {
     if (!trackers || trackers.length === 0) return [];
+    return trackers.map(normalizeTracker);
+  }, [trackers]);
 
-    return [...trackers].sort((a, b) => {
+  // Check if any tracker has a message (to show/hide message column)
+  const hasMessages = useMemo(() => {
+    return normalizedTrackers.some(t => t.message);
+  }, [normalizedTrackers]);
+
+  const sortedTrackers = useMemo(() => {
+    if (normalizedTrackers.length === 0) return [];
+
+    return [...normalizedTrackers].sort((a, b) => {
       let aVal, bVal;
 
       switch (sort.key) {
@@ -658,7 +780,7 @@ export const TrackersTable = ({ trackers }) => {
       }
       return sort.direction === 'asc' ? aVal - bVal : bVal - aVal;
     });
-  }, [trackers, sort]);
+  }, [normalizedTrackers, sort]);
 
   if (!trackers || trackers.length === 0) return null;
 
@@ -670,12 +792,17 @@ export const TrackersTable = ({ trackers }) => {
           h(SortableHeader, { label: 'Status', sortKey: 'enabled', currentSort: sort, onSort: handleSort, align: 'center' }),
           h(SortableHeader, { label: 'Seeds', sortKey: 'scrapeComplete', currentSort: sort, onSort: handleSort, align: 'right' }),
           h(SortableHeader, { label: 'Leechers', sortKey: 'scrapeIncomplete', currentSort: sort, onSort: handleSort, align: 'right' }),
-          h(SortableHeader, { label: 'Downloads', sortKey: 'scrapeDownloaded', currentSort: sort, onSort: handleSort, align: 'right' })
+          h(SortableHeader, { label: 'Downloads', sortKey: 'scrapeDownloaded', currentSort: sort, onSort: handleSort, align: 'right' }),
+          hasMessages && h('th', { className: 'px-2 py-1.5 text-left font-medium text-gray-600 dark:text-gray-300' }, 'Message')
         )
       ),
       h('tbody', { className: 'divide-y divide-gray-200 dark:divide-gray-700' },
-        sortedTrackers.map((tracker, idx) =>
-          h('tr', {
+        sortedTrackers.map((tracker, idx) => {
+          // Determine status badge style
+          const isActive = tracker.enabled;
+          const isError = tracker.statusLabel === 'Error';
+
+          return h('tr', {
             key: `${tracker.url}-${idx}`,
             className: 'hover:bg-gray-50 dark:hover:bg-gray-700/30'
           },
@@ -686,11 +813,13 @@ export const TrackersTable = ({ trackers }) => {
             h('td', { className: 'px-2 py-1.5 text-center' },
               h('span', {
                 className: `px-1.5 py-0.5 rounded text-xs font-medium ${
-                  tracker.enabled
+                  isActive
                     ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
-                    : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
+                    : isError
+                      ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
                 }`
-              }, tracker.enabled ? 'Active' : 'Disabled')
+              }, tracker.statusLabel)
             ),
             h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
               tracker.scrapeComplete >= 0 ? tracker.scrapeComplete : '-'
@@ -700,9 +829,13 @@ export const TrackersTable = ({ trackers }) => {
             ),
             h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
               tracker.scrapeDownloaded >= 0 ? tracker.scrapeDownloaded : '-'
-            )
-          )
-        )
+            ),
+            hasMessages && h('td', {
+              className: 'px-2 py-1.5 text-gray-500 dark:text-gray-400 truncate max-w-[200px]',
+              title: tracker.message
+            }, tracker.message || '-')
+          );
+        })
       )
     )
   );

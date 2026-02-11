@@ -7,7 +7,7 @@
 
 import React from 'https://esm.sh/react@18.2.0';
 import { Icon, Table, FlagIcon, MobileCardHeader, Select, ContextMenu, MoreButton, EmptyState, ItemMobileCard, MobileSortButton, ExpandableSearch, FilterInput, MobileFilterPills, MobileFilterSheet, MobileFilterButton, TrackerLabel } from '../common/index.js';
-import { formatBytes, formatSpeed, getClientSoftware, getIpString, getRowHighlightClass, DEFAULT_SORT_CONFIG, DEFAULT_SECONDARY_SORT_CONFIG, formatTitleCount, buildFileNameColumn, buildSizeColumn, buildUploadSpeedColumn, buildUploadTotalColumn, buildClientColumn, buildCategoryColumn, VIEW_TITLE_STYLES, createCategoryLabelFilter, createTrackerFilter } from '../../utils/index.js';
+import { formatBytes, formatSpeed, getClientSoftware, getIpString, getRowHighlightClass, DEFAULT_SORT_CONFIG, DEFAULT_SECONDARY_SORT_CONFIG, formatTitleCount, buildFileNameColumn, buildSizeColumn, buildUploadSpeedColumn, buildUploadTotalColumn, buildClientColumn, buildCategoryColumn, VIEW_TITLE_STYLES, createCategoryLabelFilter, createTrackerFilter, isBittorrentClient } from '../../utils/index.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useViewFilters, useCategoryFilterOptions, useColumnConfig, getSecondarySortConfig, useFileInfoModal } from '../../hooks/index.js';
@@ -61,7 +61,7 @@ const UploadsView = () => {
     // Client/Category filter
     unifiedFilter,
     setUnifiedFilter,
-    hasRtorrent: hasRtorrentUploads,
+    hasBittorrent: hasBittorrentUploads,
     hasAmule: hasAmuleUploads,
     // Tracker filter
     trackerFilter,
@@ -191,7 +191,7 @@ const UploadsView = () => {
     const fileSize = item.size;
     const hasParentFile = !!item.parentHash;
     const hasGeoData = item.geoData?.countryCode || item.geoData?.city;
-    const isRtorrent = item.client === 'rtorrent';
+    const isBittorrent = isBittorrentClient(item);
     const clientSoftware = getClientSoftware(item);
     const ipString = getIpString(item);
 
@@ -228,14 +228,14 @@ const UploadsView = () => {
             }),
             item.geoData?.city && h('span', { className: 'text-gray-500 dark:text-gray-400' }, item.geoData.city)
           ),
-          // Row 2: Uploaded/Session
+          // Row 2: Uploaded/Session (session stats only for aMule)
           h('div', { className: 'flex items-center gap-1 text-gray-700 dark:text-gray-300 flex-wrap' },
             h(Icon, { name: 'upload', size: 12, className: 'text-gray-500 dark:text-gray-400 flex-shrink-0' }),
             h('span', { className: 'text-gray-500 dark:text-gray-400' }, 'Uploaded:'),
             h('span', null, formatBytes(item.uploadTotal || 0)),
-            !isRtorrent && item.uploadSession > 0 && h('span', { className: 'text-gray-400' }, '·'),
-            !isRtorrent && item.uploadSession > 0 && h('span', { className: 'text-gray-500 dark:text-gray-400' }, 'Session:'),
-            !isRtorrent && item.uploadSession > 0 && h('span', null, formatBytes(item.uploadSession))
+            item.uploadSession > 0 && h('span', { className: 'text-gray-400' }, '·'),
+            item.uploadSession > 0 && h('span', { className: 'text-gray-500 dark:text-gray-400' }, 'Session:'),
+            item.uploadSession > 0 && h('span', null, formatBytes(item.uploadSession))
           ),
           // Row 3: Speed + Client + Tracker
           h('div', { className: 'flex items-center gap-2 text-gray-700 dark:text-gray-300 flex-wrap' },
@@ -247,7 +247,7 @@ const UploadsView = () => {
             ),
             h('span', { className: 'text-gray-400' }, '·'),
             h('span', null,
-              isRtorrent || !item.software || item.software === 'Unknown'
+              isBittorrent || !item.software || item.software === 'Unknown'
                 ? clientSoftware
                 : item.software
             ),
@@ -298,7 +298,7 @@ const UploadsView = () => {
         mobileHeaderContent
       ),
       // Filter row (filter button + inline pills)
-      (showTrackerFilter || hasAmuleUploads || hasRtorrentUploads) && h('div', {
+      (showTrackerFilter || hasAmuleUploads || hasBittorrentUploads) && h('div', {
         className: 'flex items-center gap-1.5 py-2 border-b border-gray-200 dark:border-gray-700 overflow-x-auto',
         style: { scrollbarWidth: 'none', msOverflowStyle: 'none', WebkitOverflowScrolling: 'touch' }
       },
@@ -398,7 +398,7 @@ const UploadsView = () => {
     // ========================================================================
     FileInfoElement,
 
-    (showTrackerFilter || hasAmuleUploads || hasRtorrentUploads) && h(MobileFilterSheet, {
+    (showTrackerFilter || hasAmuleUploads || hasBittorrentUploads) && h(MobileFilterSheet, {
       show: mobileFilters.showFilterSheet,
       onClose: () => mobileFilters.setShowFilterSheet(false),
       onApply: mobileFilters.handleFilterSheetApply,

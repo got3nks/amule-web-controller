@@ -1,7 +1,7 @@
 /**
  * ClientIcon Component
  *
- * Reusable icon component for client types (aMule/ED2K and rtorrent/BitTorrent)
+ * Reusable icon component for client types (aMule/ED2K and BitTorrent clients)
  * Used in badges, buttons, modals, and other UI elements
  */
 
@@ -11,7 +11,7 @@ const { createElement: h } = React;
 
 /**
  * Client icon component
- * @param {string} client - 'amule' or 'rtorrent' (also accepts 'clientType' for backwards compatibility)
+ * @param {string} client - 'amule', 'rtorrent', or 'qbittorrent' (also accepts 'clientType' for backwards compatibility)
  * @param {string} clientType - Alias for 'client' prop (deprecated, use 'client')
  * @param {number} size - Size in pixels (default: 16)
  * @param {boolean} float - Whether to float left for text wrapping (default: false)
@@ -29,10 +29,19 @@ const ClientIcon = ({ client, clientType, size = 16, float = false, className = 
     defaultTitle = 'Prowlarr';
     alt = 'Prowlarr';
     src = '/static/prowlarr.svg';
-  } else if (clientValue === 'rtorrent') {
-    defaultTitle = 'BitTorrent (rtorrent)';
+  } else if (clientValue === 'bittorrent') {
+    // Generic BitTorrent (aggregated rtorrent + qbittorrent)
+    defaultTitle = 'BitTorrent';
     alt = 'BT';
     src = '/static/logo-magnet.png';
+  } else if (clientValue === 'rtorrent') {
+    defaultTitle = 'BitTorrent (rTorrent)';
+    alt = 'rT';
+    src = '/static/logo-rtorrent.svg';
+  } else if (clientValue === 'qbittorrent') {
+    defaultTitle = 'BitTorrent (qBittorrent)';
+    alt = 'qB';
+    src = '/static/logo-qbittorrent.svg';
   } else {
     defaultTitle = 'ED2K (aMule)';
     alt = 'ED2K';

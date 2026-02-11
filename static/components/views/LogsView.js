@@ -19,20 +19,26 @@ const { createElement: h, useRef, useEffect, useCallback } = React;
  */
 const LogsView = () => {
   // Get data from contexts
-  const { dataLogs, dataServerInfo, dataAppLogs, dataLoaded, clientsEnabled } = useStaticData();
-  const { fetchLogs, fetchServerInfo, fetchAppLogs } = useDataFetch();
+  const { dataLogs, dataServerInfo, dataAppLogs, dataQbittorrentLogs, dataLoaded, clientsEnabled } = useStaticData();
+  const { fetchLogs, fetchServerInfo, fetchAppLogs, fetchQbittorrentLogs } = useDataFetch();
   const { fontSize } = useFontSize();
   const amuleEnabled = clientsEnabled?.amule !== false;
+  const qbittorrentEnabled = clientsEnabled?.qbittorrent === true;
+
+  // Whether any client-specific logs section is shown
+  const hasClientLogs = amuleEnabled || qbittorrentEnabled;
 
   // Refs for auto-scrolling
   const logsRef = useRef(null);
   const serverInfoRef = useRef(null);
   const appLogsRef = useRef(null);
+  const qbittorrentLogsRef = useRef(null);
 
   // Track whether user has scrolled away from bottom (per section)
   const userScrolledAwayLogs = useRef(false);
   const userScrolledAwayServerInfo = useRef(false);
   const userScrolledAwayAppLogs = useRef(false);
+  const userScrolledAwayQbittorrentLogs = useRef(false);
 
   // Scroll handlers — update "scrolled away" state per section
   const handleLogsScroll = useCallback(() => {
@@ -50,17 +56,26 @@ const LogsView = () => {
     const el = appLogsRef.current;
     userScrolledAwayAppLogs.current = el.scrollHeight - el.scrollTop - el.clientHeight > 30;
   }, []);
+  const handleQbittorrentLogsScroll = useCallback(() => {
+    if (!qbittorrentLogsRef.current) return;
+    const el = qbittorrentLogsRef.current;
+    userScrolledAwayQbittorrentLogs.current = el.scrollHeight - el.scrollTop - el.clientHeight > 30;
+  }, []);
 
   // Aliases for readability
   const logs = dataLogs;
   const serverInfo = dataServerInfo;
   const appLogs = dataAppLogs;
+  const qbittorrentLogs = dataQbittorrentLogs;
 
   // Fetch logs and server info on mount with auto-refresh
   useEffect(() => {
     if (amuleEnabled) {
       fetchLogs();
       fetchServerInfo();
+    }
+    if (qbittorrentEnabled) {
+      fetchQbittorrentLogs();
     }
     fetchAppLogs();
 
@@ -69,11 +84,14 @@ const LogsView = () => {
         fetchLogs();
         fetchServerInfo();
       }
+      if (qbittorrentEnabled) {
+        fetchQbittorrentLogs();
+      }
       fetchAppLogs();
     }, LOGS_REFRESH_INTERVAL);
 
     return () => clearInterval(intervalId);
-  }, [fetchLogs, fetchServerInfo, fetchAppLogs, amuleEnabled]);
+  }, [fetchLogs, fetchServerInfo, fetchAppLogs, fetchQbittorrentLogs, amuleEnabled, qbittorrentEnabled]);
 
   // Auto-scroll to bottom when new logs arrive, loading completes, or font size changes
   // Only auto-scroll if user hasn't scrolled away from bottom
@@ -110,6 +128,17 @@ const LogsView = () => {
     }
   }, [appLogs, dataLoaded.appLogs, fontSize]);
 
+  useEffect(() => {
+    if (qbittorrentLogsRef.current && dataLoaded.qbittorrentLogs && !userScrolledAwayQbittorrentLogs.current) {
+      const timeoutId = setTimeout(() => {
+        if (qbittorrentLogsRef.current) {
+          qbittorrentLogsRef.current.scrollTop = qbittorrentLogsRef.current.scrollHeight;
+        }
+      }, 50);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [qbittorrentLogs, dataLoaded.qbittorrentLogs, fontSize]);
+
   return h('div', { className: 'space-y-2 sm:space-y-3 px-2 sm:px-0' },
     // App Logs Section (aMule Controller logs)
     h('div', { className: 'bg-gray-50 dark:bg-gray-700 rounded-lg p-3' },
@@ -117,11 +146,25 @@ const LogsView = () => {
       h('div', {
         ref: appLogsRef,
         onScroll: handleAppLogsScroll,
-        className: `bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-600 p-3 ${amuleEnabled ? 'max-h-48 sm:max-h-96' : 'max-h-[calc(100vh-16rem)]'} overflow-y-auto log-text`
+        className: `bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-600 p-3 ${hasClientLogs ? 'max-h-48 sm:max-h-96' : 'max-h-[calc(100vh-16rem)]'} overflow-y-auto log-text`
       },
         (!dataLoaded.appLogs && !appLogs)
           ? h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'Loading app logs...')
           : (appLogs || h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'No app logs available'))
+      )
+    ),
+
+    // qBittorrent Logs Section (only when qBittorrent is enabled)
+    qbittorrentEnabled && h('div', { className: 'bg-gray-50 dark:bg-gray-700 rounded-lg p-3' },
+      h('h3', { className: 'text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2' }, 'qBittorrent Logs'),
+      h('div', {
+        ref: qbittorrentLogsRef,
+        onScroll: handleQbittorrentLogsScroll,
+        className: 'bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-600 p-3 max-h-48 overflow-y-auto log-text'
+      },
+        (!dataLoaded.qbittorrentLogs && !qbittorrentLogs)
+          ? h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'Loading qBittorrent logs...')
+          : (qbittorrentLogs || h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'No qBittorrent logs available'))
       )
     ),
 

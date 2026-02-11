@@ -66,6 +66,7 @@ export const WebSocketProvider = ({ children }) => {
     setDataLogs,
     setDataServerInfo,
     setDataAppLogs,
+    setDataQbittorrentLogs,
     setDataStatsTree,
     setDataServersEd2kLinks,
     markDataLoaded: markStaticDataLoaded,
@@ -116,6 +117,7 @@ export const WebSocketProvider = ({ children }) => {
         const actionVerb = actionName === 'delete' ? 'Deleted' :
                           actionName === 'pause' ? 'Paused' :
                           actionName === 'resume' ? 'Resumed' :
+                          actionName === 'stop' ? 'Stopped' :
                           actionName === 'download' ? 'Downloading' :
                           actionName === 'category change' ? 'Changed category for' :
                           actionName === 'label change' ? 'Changed label for' : 'Completed';
@@ -139,6 +141,7 @@ export const WebSocketProvider = ({ children }) => {
               const newEnabled = batch.stats.clientsEnabled;
               if (prev.amule === newEnabled.amule &&
                   prev.rtorrent === newEnabled.rtorrent &&
+                  prev.qbittorrent === newEnabled.qbittorrent &&
                   prev.prowlarr === newEnabled.prowlarr) {
                 return prev; // Keep same reference
               }
@@ -150,7 +153,8 @@ export const WebSocketProvider = ({ children }) => {
             setClientsConnected(prev => {
               const newConnected = batch.stats.clients;
               if (prev.amule === newConnected.amule &&
-                  prev.rtorrent === newConnected.rtorrent) {
+                  prev.rtorrent === newConnected.rtorrent &&
+                  prev.qbittorrent === newConnected.qbittorrent) {
                 return prev; // Keep same reference
               }
               return newConnected;
@@ -182,7 +186,7 @@ export const WebSocketProvider = ({ children }) => {
           // Only update if paths actually changed
           setClientDefaultPaths(prev => {
             const newPaths = batch.clientDefaultPaths || {};
-            if (prev.amule === newPaths.amule && prev.rtorrent === newPaths.rtorrent) {
+            if (prev.amule === newPaths.amule && prev.rtorrent === newPaths.rtorrent && prev.qbittorrent === newPaths.qbittorrent) {
               return prev; // Keep same reference
             }
             return newPaths;
@@ -240,6 +244,7 @@ export const WebSocketProvider = ({ children }) => {
       // Format: "Failed X action(s) on:\n• file1 - error1\n• file2 - error2"
       'batch-pause-complete': () => handleBatchComplete('pause'),
       'batch-resume-complete': () => handleBatchComplete('resume'),
+      'batch-stop-complete': () => handleBatchComplete('stop'),
       'batch-delete-complete': () => handleBatchComplete('delete'),
       'batch-category-changed': () => handleBatchComplete('category change'),
       'batch-label-changed': () => handleBatchComplete('label change'),
@@ -264,6 +269,10 @@ export const WebSocketProvider = ({ children }) => {
         setDataAppLogs(data.data || '');
         markStaticDataLoaded('appLogs');
       },
+      'qbittorrent-log-update': () => {
+        setDataQbittorrentLogs(data.data || '');
+        markStaticDataLoaded('qbittorrentLogs');
+      },
       'stats-tree-update': () => {
         setDataStatsTree(data.data);
       },
@@ -273,7 +282,7 @@ export const WebSocketProvider = ({ children }) => {
           // Only update if paths actually changed
           setClientDefaultPaths(prev => {
             const newPaths = data.clientDefaultPaths;
-            if (prev.amule === newPaths.amule && prev.rtorrent === newPaths.rtorrent) {
+            if (prev.amule === newPaths.amule && prev.rtorrent === newPaths.rtorrent && prev.qbittorrent === newPaths.qbittorrent) {
               return prev;
             }
             return newPaths;
@@ -358,7 +367,7 @@ export const WebSocketProvider = ({ children }) => {
     markLiveDataLoaded,
     // Static data setters
     setDataServers, setDataCategories, setClientDefaultPaths, setClientsEnabled, setClientsConnected,
-    setKnownTrackers, setHistoryTrackUsername, setDataLogs, setDataServerInfo,
+    setKnownTrackers, setHistoryTrackUsername, setDataLogs, setDataServerInfo, setDataQbittorrentLogs,
     setDataStatsTree, setDataServersEd2kLinks,
     markStaticDataLoaded, resetStaticDataLoaded,
     // Search setters

@@ -11,6 +11,7 @@ const { parseBasicAuth, verifyPassword } = require('../lib/authUtils');
 
 // Singleton managers - imported directly instead of injected
 const amuleManager = require('./amuleManager');
+const qbittorrentManager = require('./qbittorrentManager');
 
 class QBittorrentAPI extends BaseModule {
   constructor() {
@@ -112,6 +113,36 @@ class QBittorrentAPI extends BaseModule {
 
     // Mount protected router under /api/v2
     app.use('/api/v2', router);
+
+    // Real qBittorrent client API (separate from compatibility API above)
+    // Get files for a torrent from the real qBittorrent client
+    app.get('/api/qbittorrent/files/:hash', async (req, res) => {
+      try {
+        const { hash } = req.params;
+
+        if (!qbittorrentManager || !qbittorrentManager.isConnected()) {
+          return res.status(503).json({ error: 'qBittorrent not connected' });
+        }
+
+        const files = await qbittorrentManager.getFiles(hash);
+
+        // Normalize to same format as rtorrent files API
+        const normalizedFiles = files.map((file, index) => ({
+          index,
+          path: file.name,
+          size: file.size,
+          sizeBytes: file.size,
+          downloaded: Math.round(file.size * (file.progress || 0)),
+          priority: file.priority,
+          progress: Math.round((file.progress || 0) * 100)
+        }));
+
+        res.json({ files: normalizedFiles });
+      } catch (err) {
+        this.log('Error fetching qBittorrent files:', err.message);
+        res.status(500).json({ error: err.message });
+      }
+    });
 
     this.log('🗃️ qBittorrent API routes registered with Basic Auth protection');
   }

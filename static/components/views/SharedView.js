@@ -172,7 +172,7 @@ const SharedView = () => {
     dataArray: sharedFiles,
     selectedFiles,
     getSelectedHashes,
-    rtorrentOnly: true
+    bittorrentOnly: true
   });
 
   const handleShowInfo = useCallback((item) => {
@@ -182,12 +182,12 @@ const SharedView = () => {
   // ============================================================================
   // BULK OPERATIONS
   // ============================================================================
-  // Check if selection contains rtorrent items (for showing pause/resume buttons)
-  const hasSelectedRtorrentItems = useMemo(() => {
+  // Check if selection contains BitTorrent items (for showing pause/resume/stop buttons)
+  const hasSelectedBittorrentItems = useMemo(() => {
     if (!selectionMode || selectedCount === 0) return false;
     return Array.from(selectedFiles).some(hash => {
       const file = sharedFiles.find(f => f.hash === hash);
-      return file?.client === 'rtorrent';
+      return file?.client === 'rtorrent' || file?.client === 'qbittorrent';
     });
   }, [selectionMode, selectedCount, selectedFiles, sharedFiles]);
 
@@ -206,7 +206,7 @@ const SharedView = () => {
     onStop: handleStop,
     onCopyLink: handleCopyLink,
     copiedHash,
-    actionsForRtorrentOnly: true,
+    actionsForBittorrentOnly: true,
     onSelect: enterSelectionWithItem
   });
 
@@ -445,7 +445,7 @@ const SharedView = () => {
                   formatBytes(item.uploadTotal) + (item.requestsAcceptedTotal != null ? ` (${item.requestsAcceptedTotal})` : '')
                 ),
                 (() => {
-                  const hasSession = item.client !== 'rtorrent' && item.uploadSession !== null && item.uploadSession > 0;
+                  const hasSession = item.uploadSession !== null && item.uploadSession > 0;
                   if (!hasSession) return null;
                   return [
                     h('span', { key: 'dot', className: 'text-gray-400' }, '·'),
@@ -513,9 +513,9 @@ const SharedView = () => {
       onClearAll: clearAllSelections,
       onExit: toggleSelectionMode
     },
-      hasSelectedRtorrentItems && h(Button, { variant: 'warning', onClick: handleBatchPause, icon: 'pause', iconSize: 14 }, 'Pause'),
-      hasSelectedRtorrentItems && h(Button, { variant: 'success', onClick: handleBatchResume, icon: 'play', iconSize: 14 }, 'Resume'),
-      hasSelectedRtorrentItems && h(Button, { variant: 'secondary', onClick: handleBatchStop, icon: 'stop', iconSize: 14 }, 'Stop'),
+      hasSelectedBittorrentItems && h(Button, { variant: 'warning', onClick: handleBatchPause, icon: 'pause', iconSize: 14 }, 'Pause'),
+      hasSelectedBittorrentItems && h(Button, { variant: 'success', onClick: handleBatchResume, icon: 'play', iconSize: 14 }, 'Resume'),
+      hasSelectedBittorrentItems && h(Button, { variant: 'secondary', onClick: handleBatchStop, icon: 'stop', iconSize: 14 }, 'Stop'),
       h(Button, { variant: 'orange', onClick: handleBatchSetCategory, icon: 'folder', iconSize: 14 }, 'Edit Category'),
       h(Button, { variant: batchCopyStatus === 'success' ? 'success' : 'purple', onClick: handleBatchExport, disabled: batchCopyStatus === 'success', icon: batchCopyStatus === 'success' ? 'check' : 'share', iconSize: 14 }, batchCopyStatus === 'success' ? 'Copied!' : 'Export Links'),
       h(Button, { variant: 'danger', onClick: handleBatchDeleteClick, icon: 'trash', iconSize: 14 }, 'Delete')

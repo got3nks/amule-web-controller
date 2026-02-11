@@ -16,14 +16,14 @@ const { useState, useCallback } = React;
  * @param {Array} options.dataArray - Array of items (downloads/shared files)
  * @param {Set} options.selectedFiles - Set of selected file hashes
  * @param {function} options.getSelectedHashes - Function to get array of selected hashes
- * @param {boolean} options.rtorrentOnly - If true, batch actions only affect rtorrent items (default false)
+ * @param {boolean} options.bittorrentOnly - If true, batch actions only affect BitTorrent items (rtorrent/qbittorrent) (default false)
  * @returns {Object} Action handlers and state
  */
 export function useItemActions({
   dataArray,
   selectedFiles,
   getSelectedHashes,
-  rtorrentOnly = false
+  bittorrentOnly = false
 }) {
   const actions = useActions();
 
@@ -34,18 +34,18 @@ export function useItemActions({
   // SINGLE ITEM ACTIONS
   // ============================================================================
   const handlePause = useCallback((fileHash, clientType = 'amule', fileName = null) => {
-    const client = rtorrentOnly ? 'rtorrent' : clientType;
-    actions.files.pause(fileHash, client, fileName);
-  }, [actions.files, rtorrentOnly]);
+    // Use the actual client type passed from the item
+    actions.files.pause(fileHash, clientType, fileName);
+  }, [actions.files]);
 
   const handleResume = useCallback((fileHash, clientType = 'amule', fileName = null) => {
-    const client = rtorrentOnly ? 'rtorrent' : clientType;
-    actions.files.resume(fileHash, client, fileName);
-  }, [actions.files, rtorrentOnly]);
+    // Use the actual client type passed from the item
+    actions.files.resume(fileHash, clientType, fileName);
+  }, [actions.files]);
 
-  const handleStop = useCallback((fileHash, fileName = null) => {
-    // Stop is always rtorrent-only
-    actions.files.stop(fileHash, 'rtorrent', fileName);
+  const handleStop = useCallback((fileHash, clientType = 'rtorrent', fileName = null) => {
+    // Stop is for BitTorrent clients (rtorrent and qbittorrent)
+    actions.files.stop(fileHash, clientType, fileName);
   }, [actions.files]);
 
   const handleCopyLink = useCallback(async (item) => {
@@ -62,38 +62,38 @@ export function useItemActions({
   // ============================================================================
   // BATCH ACTIONS
   // ============================================================================
-  const filterRtorrentHashes = useCallback((hashes) => {
+  const filterBittorrentHashes = useCallback((hashes) => {
     return hashes.filter(hash => {
       const item = dataArray.find(d => d.hash === hash);
-      return item?.client === 'rtorrent';
+      return item?.client === 'rtorrent' || item?.client === 'qbittorrent';
     });
   }, [dataArray]);
 
   const handleBatchPause = useCallback(() => {
-    const hashes = rtorrentOnly
-      ? filterRtorrentHashes(Array.from(selectedFiles))
+    const hashes = bittorrentOnly
+      ? filterBittorrentHashes(Array.from(selectedFiles))
       : getSelectedHashes();
     if (hashes.length > 0) {
       actions.files.pause(hashes, dataArray);
     }
-  }, [actions.files, selectedFiles, getSelectedHashes, dataArray, rtorrentOnly, filterRtorrentHashes]);
+  }, [actions.files, selectedFiles, getSelectedHashes, dataArray, bittorrentOnly, filterBittorrentHashes]);
 
   const handleBatchResume = useCallback(() => {
-    const hashes = rtorrentOnly
-      ? filterRtorrentHashes(Array.from(selectedFiles))
+    const hashes = bittorrentOnly
+      ? filterBittorrentHashes(Array.from(selectedFiles))
       : getSelectedHashes();
     if (hashes.length > 0) {
       actions.files.resume(hashes, dataArray);
     }
-  }, [actions.files, selectedFiles, getSelectedHashes, dataArray, rtorrentOnly, filterRtorrentHashes]);
+  }, [actions.files, selectedFiles, getSelectedHashes, dataArray, bittorrentOnly, filterBittorrentHashes]);
 
   const handleBatchStop = useCallback(() => {
-    // Stop is always rtorrent-only
-    const rtorrentHashes = filterRtorrentHashes(getSelectedHashes());
-    if (rtorrentHashes.length > 0) {
-      actions.files.stop(rtorrentHashes, dataArray);
+    // Stop is for BitTorrent clients (rtorrent and qbittorrent)
+    const bittorrentHashes = filterBittorrentHashes(getSelectedHashes());
+    if (bittorrentHashes.length > 0) {
+      actions.files.stop(bittorrentHashes, dataArray);
     }
-  }, [actions.files, getSelectedHashes, dataArray, filterRtorrentHashes]);
+  }, [actions.files, getSelectedHashes, dataArray, filterBittorrentHashes]);
 
   return {
     // State

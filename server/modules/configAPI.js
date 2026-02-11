@@ -14,6 +14,7 @@ const eventScriptingManager = require('../lib/EventScriptingManager');
 // Singleton managers - imported directly instead of injected
 const amuleManager = require('./amuleManager');
 const rtorrentManager = require('./rtorrentManager');
+const qbittorrentManager = require('./qbittorrentManager');
 
 class ConfigAPI extends BaseModule {
   constructor() {
@@ -52,6 +53,12 @@ class ConfigAPI extends BaseModule {
         rtorrentPath: config.isFromEnv('rtorrent.path'),
         rtorrentUsername: config.isFromEnv('rtorrent.username'),
         rtorrentPassword: config.isFromEnv('rtorrent.password'),
+        qbittorrentEnabled: config.isFromEnv('qbittorrent.enabled'),
+        qbittorrentHost: config.isFromEnv('qbittorrent.host'),
+        qbittorrentPort: config.isFromEnv('qbittorrent.port'),
+        qbittorrentUsername: config.isFromEnv('qbittorrent.username'),
+        qbittorrentPassword: config.isFromEnv('qbittorrent.password'),
+        qbittorrentUseSsl: config.isFromEnv('qbittorrent.useSsl'),
         sonarrUrl: config.isFromEnv('integrations.sonarr.url'),
         sonarrApiKey: config.isFromEnv('integrations.sonarr.apiKey'),
         sonarrSearchInterval: config.isFromEnv('integrations.sonarr.searchIntervalHours'),
@@ -78,6 +85,12 @@ class ConfigAPI extends BaseModule {
         rtorrentPath: !!process.env.RTORRENT_PATH,
         rtorrentUsername: !!process.env.RTORRENT_USERNAME,
         rtorrentPassword: !!process.env.RTORRENT_PASSWORD,
+        qbittorrentEnabled: process.env.QBITTORRENT_ENABLED !== undefined,
+        qbittorrentHost: !!process.env.QBITTORRENT_HOST,
+        qbittorrentPort: !!process.env.QBITTORRENT_PORT,
+        qbittorrentUsername: !!process.env.QBITTORRENT_USERNAME,
+        qbittorrentPassword: !!process.env.QBITTORRENT_PASSWORD,
+        qbittorrentUseSsl: process.env.QBITTORRENT_USE_SSL !== undefined,
         sonarrUrl: !!process.env.SONARR_URL,
         sonarrApiKey: !!process.env.SONARR_API_KEY,
         sonarrSearchInterval: !!process.env.SONARR_SEARCH_INTERVAL_HOURS,
@@ -101,6 +114,7 @@ class ConfigAPI extends BaseModule {
       { new: 'server.auth.password', current: 'server.auth.password' },
       { new: 'amule.password', current: 'amule.password' },
       { new: 'rtorrent.password', current: 'rtorrent.password' },
+      { new: 'qbittorrent.password', current: 'qbittorrent.password' },
       { new: 'integrations.sonarr.apiKey', current: 'integrations.sonarr.apiKey' },
       { new: 'integrations.radarr.apiKey', current: 'integrations.radarr.apiKey' },
       { new: 'integrations.prowlarr.apiKey', current: 'integrations.prowlarr.apiKey' }
@@ -252,6 +266,21 @@ class ConfigAPI extends BaseModule {
           password
         );
         this.logTestResult('rtorrent connection', results.rtorrent);
+      }
+
+      // Test qBittorrent connection if provided and enabled
+      const { qbittorrent } = req.body;
+      if (qbittorrent && qbittorrent.enabled) {
+        const password = qbittorrent.password || currentConfig.qbittorrent?.password;
+        this.log(`🧪 Testing qBittorrent connection to ${qbittorrent.host}:${qbittorrent.port}...`);
+        results.qbittorrent = await configTester.testQbittorrentConnection(
+          qbittorrent.host,
+          qbittorrent.port,
+          qbittorrent.username,
+          password,
+          qbittorrent.useSsl
+        );
+        this.logTestResult('qBittorrent connection', results.qbittorrent);
       }
 
       // Test directories if provided
@@ -412,6 +441,15 @@ class ConfigAPI extends BaseModule {
         }
       }
 
+      if (qbittorrentManager) {
+        this.log('🔄 Closing existing qBittorrent connection...');
+        try {
+          await qbittorrentManager.shutdown();
+        } catch (err) {
+          this.log('⚠️  Error shutting down qBittorrent connection:', err.message);
+        }
+      }
+
       // Initialize services or restart connections based on context
       if (wasFirstRun && this.initializeServices) {
         // This is completing first-run setup - initialize all services now
@@ -441,6 +479,16 @@ class ConfigAPI extends BaseModule {
             this.log('✅ rtorrent reconnected successfully');
           } catch (err) {
             this.log('⚠️  rtorrent reconnection failed:', err.message);
+          }
+        }
+
+        if (qbittorrentManager) {
+          this.log('🔄 Connecting to qBittorrent with new settings...');
+          try {
+            await qbittorrentManager.startConnection();
+            this.log('✅ qBittorrent reconnected successfully');
+          } catch (err) {
+            this.log('⚠️  qBittorrent reconnection failed:', err.message);
           }
         }
       }

@@ -1,15 +1,19 @@
 /**
  * ClientFilterContext
  *
- * Provides global client filter state (aMule/rtorrent enabled/disabled)
+ * Provides global client filter state (aMule vs BitTorrent clients)
  * Used by all views to filter data by client type
  * Persists to localStorage
  *
+ * The filter operates on two categories:
+ * - aMule (ED2K/Kademlia)
+ * - BitTorrent (rtorrent and qBittorrent combined)
+ *
  * The "enabled" state combines:
  * - User preference (UI toggle) - persisted to localStorage
- * - Connection status - whether the client is actually configured and connected
+ * - Connection status - whether any client in that category is connected
  *
- * A client is only considered "enabled" if both conditions are true.
+ * A category is only considered "enabled" if both conditions are true.
  */
 
 import React, { createContext, useContext, useState, useCallback, useMemo, useEffect } from 'https://esm.sh/react@18.2.0';
@@ -26,6 +30,9 @@ export const ClientFilterProvider = ({ children }) => {
   const { clientsConnected } = useStaticData();
   const amuleConnected = clientsConnected?.amule === true;
   const rtorrentConnected = clientsConnected?.rtorrent === true;
+  const qbittorrentConnected = clientsConnected?.qbittorrent === true;
+  // Any BitTorrent client connected
+  const bittorrentConnected = rtorrentConnected || qbittorrentConnected;
 
   // Client enabled state (user preference) - both enabled by default
   const [enabledClients, setEnabledClients] = useState(() => {
@@ -88,12 +95,16 @@ export const ClientFilterProvider = ({ children }) => {
   // Filter an array of items by enabled clients
   const filterByEnabledClients = useCallback((items) => {
     if (!Array.isArray(items)) return items;
-    // If both enabled, return all
+    // If both categories enabled, return all
     if (enabledClients.amule && enabledClients.rtorrent) {
       return items;
     }
     return items.filter(item => {
       const clientType = item.client || 'amule'; // Default to amule if not specified
+      // Both rtorrent and qbittorrent use the 'rtorrent' toggle (BitTorrent category)
+      if (clientType === 'qbittorrent') {
+        return enabledClients.rtorrent;
+      }
       return enabledClients[clientType];
     });
   }, [enabledClients]);
@@ -103,9 +114,10 @@ export const ClientFilterProvider = ({ children }) => {
     return enabledClients[client] === true;
   }, [enabledClients]);
 
-  // Derived: is client actually enabled (user preference AND connected)
+  // Derived: is category actually enabled (user preference AND any client in category connected)
   const isAmuleEnabled = enabledClients.amule && amuleConnected;
-  const isRtorrentEnabled = enabledClients.rtorrent && rtorrentConnected;
+  // BitTorrent category: user has BT toggle enabled AND any BT client is connected
+  const isBittorrentEnabled = enabledClients.rtorrent && bittorrentConnected;
 
   // Memoize context value
   const value = useMemo(() => ({
@@ -117,12 +129,14 @@ export const ClientFilterProvider = ({ children }) => {
     // Connection status (whether client is configured and connected)
     amuleConnected,
     rtorrentConnected,
+    qbittorrentConnected,
+    bittorrentConnected, // Any BitTorrent client
     // Convenience booleans: user preference AND connected
     isAmuleEnabled,
-    isRtorrentEnabled,
+    isBittorrentEnabled,
     // Check if both are enabled (no filtering needed)
-    allClientsEnabled: isAmuleEnabled && isRtorrentEnabled
-  }), [enabledClients, toggleClient, setClientEnabled, filterByEnabledClients, isClientEnabled, amuleConnected, rtorrentConnected, isAmuleEnabled, isRtorrentEnabled]);
+    allClientsEnabled: isAmuleEnabled && isBittorrentEnabled
+  }), [enabledClients, toggleClient, setClientEnabled, filterByEnabledClients, isClientEnabled, amuleConnected, rtorrentConnected, qbittorrentConnected, bittorrentConnected, isAmuleEnabled, isBittorrentEnabled]);
 
   return h(ClientFilterContext.Provider, { value }, children);
 };

@@ -171,12 +171,12 @@ async function checkDirectoryAccess(targetPath, testWrite = false) {
 
 /**
  * Resolve the file/directory path for an item (download or shared file)
- * Handles both aMule and rTorrent items, single and multi-file
+ * Handles aMule, rTorrent, and qBittorrent items, single and multi-file
  * @param {Object} item - Cached item from dataFetchService
  * @returns {Object|null} Path info or null if path cannot be resolved
  * @returns {string} .localPath - Translated path (what app sees)
  * @returns {string} .remotePath - Original path (what client sees)
- * @returns {string} .clientType - Client type ('amule' or 'rtorrent')
+ * @returns {string} .clientType - Client type ('amule', 'rtorrent', or 'qbittorrent')
  * @returns {boolean} .isMultiFile - Whether this is a multi-file item
  * @returns {string} .baseDir - The directory portion (for destination comparison)
  */
@@ -198,8 +198,8 @@ function resolveItemPath(item) {
   }
 
   // For single files, join with filename
-  // aMule is always single file, rTorrent depends on multiFile flag
-  const isMultiFile = clientType === 'rtorrent' && item.multiFile;
+  // aMule is always single file, rTorrent/qBittorrent depend on multiFile flag
+  const isMultiFile = (clientType === 'rtorrent' || clientType === 'qbittorrent') && item.multiFile;
   const remotePath = isMultiFile ? baseDir : path.join(baseDir, item.name);
 
   // Translate path using category mappings
@@ -220,7 +220,7 @@ function resolveItemPath(item) {
  * Resolve destination paths for a category and client type
  * Handles path mappings, Default category fallback, and client defaults
  * @param {Object} category - Target category object
- * @param {string} clientType - Client type ('amule' or 'rtorrent')
+ * @param {string} clientType - Client type ('amule', 'rtorrent', or 'qbittorrent')
  * @returns {Object} Destination paths
  * @returns {string|null} .localPath - Local path (what app sees)
  * @returns {string|null} .remotePath - Remote path (what client sees)

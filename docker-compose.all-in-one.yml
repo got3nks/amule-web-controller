@@ -36,6 +36,24 @@ services:
       - TZ=Europe/Rome
     restart: unless-stopped
 
+  qbittorrent:
+    image: linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    ports:
+      - "127.0.0.1:8080:8080"  # WebUI
+      - "6882:6882"            # BitTorrent
+      - "6882:6882/udp"        # BitTorrent DHT
+    volumes:
+      - ./data/qBittorrent/config:/config
+      - ./data/qBittorrent/downloads:/downloads
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Rome
+      - WEBUI_PORT=8080
+      - TORRENTING_PORT=6882
+    restart: unless-stopped
+
   amutorrent:
     image: g0t3nks/amutorrent:latest
     user: "1000:1000"
@@ -43,6 +61,7 @@ services:
     depends_on:
       - amule
       - rtorrent
+      - qbittorrent
     ports:
       - "${PORT:-4000}:${PORT:-4000}"
     environment:
@@ -62,7 +81,13 @@ services:
       - RTORRENT_HOST=rtorrent  # rTorrent container service name
       - RTORRENT_PORT=8000
       - RTORRENT_PATH=/RPC2
-      # Prowlarr Integration (requires rTorrent)
+      # qBittorrent Connection
+      - QBITTORRENT_ENABLED=true
+      - QBITTORRENT_HOST=qbittorrent  # qBittorrent container service name
+      - QBITTORRENT_PORT=8080
+      - QBITTORRENT_USERNAME=admin
+      - QBITTORRENT_PASSWORD= # You have to set your password through qBittorrent WebUI: Tools > Options > Web UI > Authentication
+      # Prowlarr Integration (requires rTorrent or qBittorrent)
       - PROWLARR_ENABLED=true
       - PROWLARR_URL=http://prowlarr:9696
       # - PROWLARR_API_KEY=your_api_key  # Get from Prowlarr Settings → General
@@ -75,10 +100,11 @@ services:
       - ./logs:/usr/src/app/server/logs
       - ./data:/usr/src/app/server/data
       # Event Scripting: Edit scripts/custom.sh to run your own scripts on events
-      - ./scripts:/usr/src/app/scripts
+      # - ./scripts:/usr/src/app/scripts
       # Download directories (optional): Required for moving/deleting files
       - ./data/aMule/incoming:/incoming
-      - ./data/rTorrent/downloads:/downloads
+      - ./data/rTorrent/downloads:/downloads/rTorrent
+      - ./data/qBittorrent/downloads:/downloads/qBittorrent
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:' + (process.env.PORT || 4000) + '/health', r => r.statusCode === 200 ? process.exit(0) : process.exit(1)).on('error', () => process.exit(1))"]
       interval: 30s
@@ -86,7 +112,7 @@ services:
       retries: 3
     restart: unless-stopped
 
-  # Optional: Prowlarr for torrent search (results go to rTorrent)
+  # Optional: Prowlarr for torrent search (results go to rTorrent or qBittorrent)
   prowlarr:
     image: linuxserver/prowlarr:latest
     container_name: prowlarr

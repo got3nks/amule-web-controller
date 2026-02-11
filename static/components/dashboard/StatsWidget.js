@@ -33,11 +33,12 @@ const StatCardSkeleton = ({ compact = false }) => {
  * Desktop (xl+): icon value · icon value (inline with dot separator)
  * Tablet/Mobile (<xl): icon value (two lines)
  * Compact mode: always two lines with smaller text
+ * Shows aMule vs BitTorrent (aggregated rtorrent + qbittorrent)
  */
-const ClientBreakdownValue = ({ amuleValue, rtorrentValue, showClientIcons, showAmule, showRtorrent, compact = false, formatter = (v) => v }) => {
+const ClientBreakdownValue = ({ amuleValue, bittorrentValue, showClientIcons, showAmule, showBittorrent, compact = false, formatter = (v) => v }) => {
   if (!showClientIcons) {
     // Only one client configured - show plain value
-    return h('span', null, formatter(amuleValue + rtorrentValue));
+    return h('span', null, formatter(amuleValue + bittorrentValue));
   }
 
   // Compact mode (mobile dashboard): always two lines with smaller text
@@ -47,9 +48,9 @@ const ClientBreakdownValue = ({ amuleValue, rtorrentValue, showClientIcons, show
         h(ClientIcon, { clientType: 'amule', size: 12 }),
         h('span', null, formatter(amuleValue))
       ),
-      showRtorrent && h('span', { key: 'rtorrent', className: 'flex items-center gap-1' },
-        h(ClientIcon, { clientType: 'rtorrent', size: 12 }),
-        h('span', null, formatter(rtorrentValue))
+      showBittorrent && h('span', { key: 'bittorrent', className: 'flex items-center gap-1' },
+        h(ClientIcon, { clientType: 'bittorrent', size: 12 }),
+        h('span', null, formatter(bittorrentValue))
       )
     );
   }
@@ -61,9 +62,9 @@ const ClientBreakdownValue = ({ amuleValue, rtorrentValue, showClientIcons, show
       h(ClientIcon, { clientType: 'amule', size: 14 }),
       h('span', null, formatter(amuleValue))
     ),
-    showRtorrent && h('span', { key: 'rtorrent', className: 'flex items-center gap-1' },
-      h(ClientIcon, { clientType: 'rtorrent', size: 14 }),
-      h('span', null, formatter(rtorrentValue))
+    showBittorrent && h('span', { key: 'bittorrent', className: 'flex items-center gap-1' },
+      h(ClientIcon, { clientType: 'bittorrent', size: 14 }),
+      h('span', null, formatter(bittorrentValue))
     )
   );
 
@@ -77,14 +78,14 @@ const ClientBreakdownValue = ({ amuleValue, rtorrentValue, showClientIcons, show
       )
     );
   }
-  if (showAmule && showRtorrent) {
+  if (showAmule && showBittorrent) {
     inlineParts.push(h('span', { key: 'dot', className: 'text-gray-400 mx-1' }, '·'));
   }
-  if (showRtorrent) {
+  if (showBittorrent) {
     inlineParts.push(
-      h('span', { key: 'rtorrent', className: 'flex items-center gap-1' },
-        h(ClientIcon, { clientType: 'rtorrent', size: 14 }),
-        h('span', null, formatter(rtorrentValue))
+      h('span', { key: 'bittorrent', className: 'flex items-center gap-1' },
+        h(ClientIcon, { clientType: 'bittorrent', size: 14 }),
+        h('span', null, formatter(bittorrentValue))
       )
     );
   }
@@ -96,8 +97,9 @@ const ClientBreakdownValue = ({ amuleValue, rtorrentValue, showClientIcons, show
 /**
  * Helper component for compact mode combined stats (total · avg speed per client)
  * Shows: icon total · avg (one line per client if both connected, or single line if one client)
+ * Shows aMule vs BitTorrent (aggregated rtorrent + qbittorrent)
  */
-const CompactCombinedValue = ({ amuleTotal, rtorrentTotal, amuleAvg, rtorrentAvg, showClientIcons, showAmule, showRtorrent }) => {
+const CompactCombinedValue = ({ amuleTotal, bittorrentTotal, amuleAvg, bittorrentAvg, showClientIcons, showAmule, showBittorrent }) => {
   const renderClientLine = (clientType, total, avg) => (
     h('span', { className: 'flex items-center gap-1' },
       showClientIcons && h(ClientIcon, { clientType, size: 12 }),
@@ -109,8 +111,8 @@ const CompactCombinedValue = ({ amuleTotal, rtorrentTotal, amuleAvg, rtorrentAvg
 
   if (!showClientIcons) {
     // Single client - show combined values inline
-    const total = (showAmule ? amuleTotal : 0) + (showRtorrent ? rtorrentTotal : 0);
-    const avg = (showAmule ? amuleAvg : 0) + (showRtorrent ? rtorrentAvg : 0);
+    const total = (showAmule ? amuleTotal : 0) + (showBittorrent ? bittorrentTotal : 0);
+    const avg = (showAmule ? amuleAvg : 0) + (showBittorrent ? bittorrentAvg : 0);
     return h('span', { className: 'flex items-center gap-1' },
       h('span', null, formatBytes(total)),
       h('span', { className: 'text-gray-400' }, '·'),
@@ -121,7 +123,7 @@ const CompactCombinedValue = ({ amuleTotal, rtorrentTotal, amuleAvg, rtorrentAvg
   // Both clients - show one line per client
   return h('div', { className: 'flex flex-col gap-0.5 text-xs' },
     showAmule && renderClientLine('amule', amuleTotal, amuleAvg),
-    showRtorrent && renderClientLine('rtorrent', rtorrentTotal, rtorrentAvg)
+    showBittorrent && renderClientLine('bittorrent', bittorrentTotal, bittorrentAvg)
   );
 };
 
@@ -133,15 +135,16 @@ const CompactCombinedValue = ({ amuleTotal, rtorrentTotal, amuleAvg, rtorrentAvg
  * @param {string} timeRange - Time range label to display (default: '24h')
  */
 const StatsWidget = ({ stats, showPeakSpeeds = true, compact = false, timeRange = '24h' }) => {
-  const { isAmuleEnabled, isRtorrentEnabled, amuleConnected, rtorrentConnected } = useClientFilter();
+  const { isAmuleEnabled, isBittorrentEnabled, amuleConnected, bittorrentConnected } = useClientFilter();
   const { dataStats: liveStats } = useLiveData();
 
-  // Show client icons if both clients are configured/connected (regardless of user filter)
-  const showClientIcons = amuleConnected && rtorrentConnected;
+  // Show client icons if both network types are connected (regardless of user filter)
+  // bittorrentConnected = rtorrent OR qbittorrent
+  const showClientIcons = amuleConnected && bittorrentConnected;
 
   // Which clients to show (isXEnabled includes connection check)
   const showAmule = isAmuleEnabled;
-  const showRtorrent = isRtorrentEnabled;
+  const showBittorrent = isBittorrentEnabled;
 
   // Show loading skeleton if either data source is missing:
   // - stats: historical data from API
@@ -149,14 +152,15 @@ const StatsWidget = ({ stats, showPeakSpeeds = true, compact = false, timeRange 
   const isLoading = !stats || !liveStats;
 
   // Get per-client stats (with fallbacks)
+  // Use combined 'bittorrent' stats (rtorrent + qbittorrent) for the BitTorrent category
   const amuleStats = stats?.amule || { totalUploaded: 0, totalDownloaded: 0, avgUploadSpeed: 0, avgDownloadSpeed: 0, peakUploadSpeed: 0, peakDownloadSpeed: 0 };
-  const rtStats = stats?.rtorrent || { totalUploaded: 0, totalDownloaded: 0, avgUploadSpeed: 0, avgDownloadSpeed: 0, peakUploadSpeed: 0, peakDownloadSpeed: 0 };
+  const btStats = stats?.bittorrent || { totalUploaded: 0, totalDownloaded: 0, avgUploadSpeed: 0, avgDownloadSpeed: 0, peakUploadSpeed: 0, peakDownloadSpeed: 0 };
 
   // Calculate displayed values based on filter
-  const getFilteredValue = (amuleVal, rtVal) => {
+  const getFilteredValue = (amuleVal, btVal) => {
     let total = 0;
     if (showAmule) total += amuleVal;
-    if (showRtorrent) total += rtVal;
+    if (showBittorrent) total += btVal;
     return total;
   };
 
@@ -169,12 +173,12 @@ const StatsWidget = ({ stats, showPeakSpeeds = true, compact = false, timeRange 
               label: `Downloaded · Avg (${timeRange})`,
               value: h(CompactCombinedValue, {
                 amuleTotal: amuleStats.totalDownloaded,
-                rtorrentTotal: rtStats.totalDownloaded,
+                bittorrentTotal: btStats.totalDownloaded,
                 amuleAvg: amuleStats.avgDownloadSpeed,
-                rtorrentAvg: rtStats.avgDownloadSpeed,
+                bittorrentAvg: btStats.avgDownloadSpeed,
                 showClientIcons,
                 showAmule,
-                showRtorrent
+                showBittorrent
               }),
               icon: 'download',
               iconColor: 'text-blue-600 dark:text-blue-400',
@@ -188,12 +192,12 @@ const StatsWidget = ({ stats, showPeakSpeeds = true, compact = false, timeRange 
               label: `Uploaded · Avg (${timeRange})`,
               value: h(CompactCombinedValue, {
                 amuleTotal: amuleStats.totalUploaded,
-                rtorrentTotal: rtStats.totalUploaded,
+                bittorrentTotal: btStats.totalUploaded,
                 amuleAvg: amuleStats.avgUploadSpeed,
-                rtorrentAvg: rtStats.avgUploadSpeed,
+                bittorrentAvg: btStats.avgUploadSpeed,
                 showClientIcons,
                 showAmule,
-                showRtorrent
+                showBittorrent
               }),
               icon: 'upload',
               iconColor: 'text-green-600 dark:text-green-400',
@@ -216,13 +220,13 @@ const StatsWidget = ({ stats, showPeakSpeeds = true, compact = false, timeRange 
           value: showClientIcons
             ? h(ClientBreakdownValue, {
                 amuleValue: amuleStats.totalUploaded,
-                rtorrentValue: rtStats.totalUploaded,
+                bittorrentValue: btStats.totalUploaded,
                 showClientIcons,
                 showAmule,
-                showRtorrent,
+                showBittorrent,
                 formatter: formatBytes
               })
-            : formatBytes(getFilteredValue(amuleStats.totalUploaded, rtStats.totalUploaded)),
+            : formatBytes(getFilteredValue(amuleStats.totalUploaded, btStats.totalUploaded)),
           icon: 'upload',
           iconColor: 'text-green-600 dark:text-green-400'
         })
@@ -235,13 +239,13 @@ const StatsWidget = ({ stats, showPeakSpeeds = true, compact = false, timeRange 
           value: showClientIcons
             ? h(ClientBreakdownValue, {
                 amuleValue: amuleStats.avgUploadSpeed,
-                rtorrentValue: rtStats.avgUploadSpeed,
+                bittorrentValue: btStats.avgUploadSpeed,
                 showClientIcons,
                 showAmule,
-                showRtorrent,
+                showBittorrent,
                 formatter: formatSpeed
               })
-            : formatSpeed(getFilteredValue(amuleStats.avgUploadSpeed, rtStats.avgUploadSpeed)),
+            : formatSpeed(getFilteredValue(amuleStats.avgUploadSpeed, btStats.avgUploadSpeed)),
           icon: 'trendingUp',
           iconColor: 'text-green-600 dark:text-green-400'
         })
@@ -254,13 +258,13 @@ const StatsWidget = ({ stats, showPeakSpeeds = true, compact = false, timeRange 
           value: showClientIcons
             ? h(ClientBreakdownValue, {
                 amuleValue: amuleStats.peakUploadSpeed,
-                rtorrentValue: rtStats.peakUploadSpeed,
+                bittorrentValue: btStats.peakUploadSpeed,
                 showClientIcons,
                 showAmule,
-                showRtorrent,
+                showBittorrent,
                 formatter: formatSpeed
               })
-            : formatSpeed(getFilteredValue(amuleStats.peakUploadSpeed, rtStats.peakUploadSpeed)),
+            : formatSpeed(getFilteredValue(amuleStats.peakUploadSpeed, btStats.peakUploadSpeed)),
           icon: 'zap',
           iconColor: 'text-green-600 dark:text-green-400'
         })
@@ -273,13 +277,13 @@ const StatsWidget = ({ stats, showPeakSpeeds = true, compact = false, timeRange 
           value: showClientIcons
             ? h(ClientBreakdownValue, {
                 amuleValue: amuleStats.totalDownloaded,
-                rtorrentValue: rtStats.totalDownloaded,
+                bittorrentValue: btStats.totalDownloaded,
                 showClientIcons,
                 showAmule,
-                showRtorrent,
+                showBittorrent,
                 formatter: formatBytes
               })
-            : formatBytes(getFilteredValue(amuleStats.totalDownloaded, rtStats.totalDownloaded)),
+            : formatBytes(getFilteredValue(amuleStats.totalDownloaded, btStats.totalDownloaded)),
           icon: 'download',
           iconColor: 'text-blue-600 dark:text-blue-400'
         })
@@ -292,13 +296,13 @@ const StatsWidget = ({ stats, showPeakSpeeds = true, compact = false, timeRange 
           value: showClientIcons
             ? h(ClientBreakdownValue, {
                 amuleValue: amuleStats.avgDownloadSpeed,
-                rtorrentValue: rtStats.avgDownloadSpeed,
+                bittorrentValue: btStats.avgDownloadSpeed,
                 showClientIcons,
                 showAmule,
-                showRtorrent,
+                showBittorrent,
                 formatter: formatSpeed
               })
-            : formatSpeed(getFilteredValue(amuleStats.avgDownloadSpeed, rtStats.avgDownloadSpeed)),
+            : formatSpeed(getFilteredValue(amuleStats.avgDownloadSpeed, btStats.avgDownloadSpeed)),
           icon: 'trendingUp',
           iconColor: 'text-blue-600 dark:text-blue-400'
         })
@@ -311,13 +315,13 @@ const StatsWidget = ({ stats, showPeakSpeeds = true, compact = false, timeRange 
           value: showClientIcons
             ? h(ClientBreakdownValue, {
                 amuleValue: amuleStats.peakDownloadSpeed,
-                rtorrentValue: rtStats.peakDownloadSpeed,
+                bittorrentValue: btStats.peakDownloadSpeed,
                 showClientIcons,
                 showAmule,
-                showRtorrent,
+                showBittorrent,
                 formatter: formatSpeed
               })
-            : formatSpeed(getFilteredValue(amuleStats.peakDownloadSpeed, rtStats.peakDownloadSpeed)),
+            : formatSpeed(getFilteredValue(amuleStats.peakDownloadSpeed, btStats.peakDownloadSpeed)),
           icon: 'zap',
           iconColor: 'text-blue-600 dark:text-blue-400'
         })

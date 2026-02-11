@@ -23,15 +23,16 @@ export const StaticDataProvider = ({ children }) => {
   // Static data state (changes less frequently)
   const [dataServers, setDataServers] = useState([]);
   const [dataCategories, setDataCategories] = useState([]);  // Unified categories (aMule + rtorrent)
-  const [clientDefaultPaths, setClientDefaultPaths] = useState({ amule: null, rtorrent: null });  // Default paths from clients
-  const [clientsEnabled, setClientsEnabled] = useState({ amule: true, rtorrent: false, prowlarr: false });  // Which clients are enabled in config
-  const [clientsConnected, setClientsConnected] = useState({ amule: false, rtorrent: false });  // Which clients are currently connected
+  const [clientDefaultPaths, setClientDefaultPaths] = useState({ amule: null, rtorrent: null, qbittorrent: null });  // Default paths from clients
+  const [clientsEnabled, setClientsEnabled] = useState({ amule: false, rtorrent: false, qbittorrent: false, prowlarr: false });  // Which clients are enabled in config (populated from backend)
+  const [clientsConnected, setClientsConnected] = useState({ amule: false, rtorrent: false, qbittorrent: false });  // Which clients are currently connected
   const [knownTrackers, setKnownTrackers] = useState([]);  // Known trackers from rtorrent items
   const [historyTrackUsername, setHistoryTrackUsername] = useState(false);  // Whether to track username in history
   const [hasCategoryPathWarnings, setHasCategoryPathWarnings] = useState(false);  // Whether any category has path issues
   const [dataLogs, setDataLogs] = useState('');
   const [dataServerInfo, setDataServerInfo] = useState('');
   const [dataAppLogs, setDataAppLogs] = useState('');
+  const [dataQbittorrentLogs, setDataQbittorrentLogs] = useState('');
   const [dataStatsTree, setDataStatsTree] = useState(null);
   const [dataDownloadedFiles, setDataDownloadedFiles] = useState(new Set());
 
@@ -41,7 +42,8 @@ export const StaticDataProvider = ({ children }) => {
     categories: false,
     logs: false,
     serverInfo: false,
-    appLogs: false
+    appLogs: false,
+    qbittorrentLogs: false
   });
 
   // Helper to mark a data type as loaded
@@ -66,10 +68,16 @@ export const StaticDataProvider = ({ children }) => {
   // lastEd2kWasServerList - just a ref, no state needed (not used for rendering)
   const lastEd2kWasServerListRef = useRef(false);
 
-  // Derived: check if both clients are connected (for showing ED2K/BT badges)
+  // Derived: check if multiple clients are connected (for showing ED2K/BT badges)
+  // Show badges when aMule + any BitTorrent client, or when multiple BitTorrent clients
   const bothClientsConnected = useMemo(() => {
-    return clientsConnected.amule === true && clientsConnected.rtorrent === true;
-  }, [clientsConnected.amule, clientsConnected.rtorrent]);
+    const amule = clientsConnected.amule === true;
+    const rtorrent = clientsConnected.rtorrent === true;
+    const qbittorrent = clientsConnected.qbittorrent === true;
+    const btCount = (rtorrent ? 1 : 0) + (qbittorrent ? 1 : 0);
+    // Show badges if aMule + any BT client, or if multiple BT clients
+    return (amule && btCount > 0) || btCount > 1;
+  }, [clientsConnected.amule, clientsConnected.rtorrent, clientsConnected.qbittorrent]);
 
   // Memoize context value to prevent unnecessary re-renders
   const value = useMemo(() => ({
@@ -88,6 +96,7 @@ export const StaticDataProvider = ({ children }) => {
     dataLogs,
     dataServerInfo,
     dataAppLogs,
+    dataQbittorrentLogs,
     dataStatsTree,
     dataDownloadedFiles,
     dataServersEd2kLinks,
@@ -106,6 +115,7 @@ export const StaticDataProvider = ({ children }) => {
     setDataLogs,
     setDataServerInfo,
     setDataAppLogs,
+    setDataQbittorrentLogs,
     setDataStatsTree,
     setDataDownloadedFiles,
     setDataServersEd2kLinks,
@@ -114,7 +124,7 @@ export const StaticDataProvider = ({ children }) => {
   }), [
     dataServers, dataCategories, clientDefaultPaths, clientsEnabled, clientsConnected, knownTrackers,
     historyTrackUsername, hasCategoryPathWarnings, bothClientsConnected,
-    dataLogs, dataServerInfo, dataAppLogs, dataStatsTree, dataDownloadedFiles, dataServersEd2kLinks,
+    dataLogs, dataServerInfo, dataAppLogs, dataQbittorrentLogs, dataStatsTree, dataDownloadedFiles, dataServersEd2kLinks,
     dataLoaded, markDataLoaded, resetDataLoaded
   ]);
 

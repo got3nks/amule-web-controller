@@ -14,6 +14,7 @@ const response = require('../lib/responseFormatter');
 
 // Singleton managers - imported directly instead of injected
 const rtorrentManager = require('./rtorrentManager');
+const qbittorrentManager = require('./qbittorrentManager');
 const categoryManager = require('../lib/CategoryManager');
 
 class ProwlarrAPI extends BaseModule {
@@ -251,19 +252,25 @@ class ProwlarrAPI extends BaseModule {
 
   /**
    * POST /api/prowlarr/add
-   * Add a torrent to rtorrent
-   * Body: { downloadUrl, title?, label? }
+   * Add a torrent to a BitTorrent client (rTorrent or qBittorrent)
+   * Body: { downloadUrl, title?, label?, clientId? }
    */
   async addTorrent(req, res) {
     let tempFile = null;
 
     try {
-      // Check if rtorrent is available
-      if (!rtorrentManager || !rtorrentManager.isConnected()) {
-        return response.badRequest(res, 'rtorrent is not connected');
-      }
+      const { downloadUrl, title, label, clientId = 'rtorrent' } = req.body;
 
-      const { downloadUrl, title, label } = req.body;
+      // Check if the selected client is available
+      if (clientId === 'qbittorrent') {
+        if (!qbittorrentManager || !qbittorrentManager.isConnected()) {
+          return response.badRequest(res, 'qBittorrent is not connected');
+        }
+      } else {
+        if (!rtorrentManager || !rtorrentManager.isConnected()) {
+          return response.badRequest(res, 'rTorrent is not connected');
+        }
+      }
 
       if (!downloadUrl) {
         return response.badRequest(res, 'Download URL is required');
@@ -278,11 +285,37 @@ class ProwlarrAPI extends BaseModule {
       const category = label ? categoryManager.getByName(label) : null;
       const directory = category?.path || null;
 
-      this.log(`➕ Adding torrent: ${title || downloadUrl.substring(0, 50)}...${directory ? ` (path: ${directory})` : ''}${username ? ` (user: ${username})` : ''}`);
+      const clientName = clientId === 'qbittorrent' ? 'qBittorrent' : 'rTorrent';
+      this.log(`➕ Adding torrent to ${clientName}: ${title || downloadUrl.substring(0, 50)}...${directory ? ` (path: ${directory})` : ''}${username ? ` (user: ${username})` : ''}`);
+
+      // Helper to add to the selected client
+      const addMagnetToClient = async (magnetUri) => {
+        if (clientId === 'qbittorrent') {
+          await qbittorrentManager.addMagnet(magnetUri, {
+            category: label || '',
+            savepath: directory,
+            username
+          });
+        } else {
+          await rtorrentManager.addMagnet(magnetUri, { label, directory, username });
+        }
+      };
+
+      const addTorrentBufferToClient = async (buffer) => {
+        if (clientId === 'qbittorrent') {
+          await qbittorrentManager.addTorrentRaw(buffer, {
+            category: label || '',
+            savepath: directory,
+            username
+          });
+        } else {
+          await rtorrentManager.addTorrentRaw(buffer, { label, directory, username });
+        }
+      };
 
       // Check if it's a magnet link
       if (downloadUrl.startsWith('magnet:')) {
-        await rtorrentManager.addMagnet(downloadUrl, { label, directory, username });
+        await addMagnetToClient(downloadUrl);
       } else {
         // It's a torrent file URL - download and add using raw buffer
         this.log(`📥 Downloading torrent file from ${downloadUrl.substring(0, 50)}...`);
@@ -291,19 +324,19 @@ class ProwlarrAPI extends BaseModule {
         // Check if Prowlarr redirected to a magnet link
         if (result && typeof result === 'object' && result.magnet) {
           this.log(`🧲 Prowlarr redirected to magnet link`);
-          await rtorrentManager.addMagnet(result.magnet, { label, directory, username });
+          await addMagnetToClient(result.magnet);
         } else {
           tempFile = result;
           const torrentBuffer = await fs.readFile(tempFile);
-          await rtorrentManager.addTorrentRaw(torrentBuffer, { label, directory, username });
+          await addTorrentBufferToClient(torrentBuffer);
         }
       }
 
-      this.log(`✅ Torrent added successfully`);
+      this.log(`✅ Torrent added to ${clientName} successfully`);
 
       res.json({
         success: true,
-        message: 'Torrent added to rtorrent'
+        message: `Torrent added to ${clientName}`
       });
     } catch (err) {
       this.log('❌ Error adding torrent:', err.message);

@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - qBittorrent Support
+
+### 🎉 Major Release - Three-Client Support
+
+This release adds full **qBittorrent** integration, making aMuTorrent a unified download manager for aMule, rTorrent, and qBittorrent simultaneously.
+
+### ✨ Added
+
+#### **qBittorrent Integration**
+- **Full qBittorrent Support** - Connect to qBittorrent via its WebUI API
+- **Auto-Reconnect** - Automatic connection recovery on disconnect
+- **Torrent Management** - Add magnets and torrent files, pause/resume/stop/delete
+- **Category Sync** - Bidirectional category synchronization between aMuTorrent and qBittorrent
+- **Native File Moves** - Uses qBittorrent's `setLocation()` API for efficient moves (no filesystem access needed)
+- **Native File Deletion** - Deletes via API (no volume mount required for delete operations)
+- **Transfer Statistics** - Upload/download speeds and totals tracked in metrics
+- **Connection Status** - Real-time status with port information in footer
+- **Application Logs** - View qBittorrent logs in the Logs page
+- **Configuration** - Full setup via Settings page or environment variables (`QBITTORRENT_ENABLED`, `QBITTORRENT_HOST`, `QBITTORRENT_PORT`, `QBITTORRENT_USERNAME`, `QBITTORRENT_PASSWORD`, `QBITTORRENT_USE_SSL`)
+
+#### **Event Scripting Enhancements**
+- **File Path in Events** - `downloadFinished`, `fileDeleted`, and `categoryChanged` events now include `path` (full file/directory path) and `multiFile` fields
+- **Debug Script** - New `scripts/log-to-file.sh` logs all event data to `server/logs/events.log` for debugging
+- **JSON Payload Examples** - Complete examples for all 5 event types in `scripts/README.md`
+
+### 🔧 Changed
+
+#### **UI Restructuring**
+- **Unified BitTorrent Section** - Settings page combines rTorrent and qBittorrent under "BitTorrent Integration" with sub-sections
+- **Client Filter Toggle** - Header ED2K/BT toggle filters all BitTorrent clients (rTorrent + qBittorrent) as one group
+- **Multi-Client Footer** - Speed totals from all connected clients with per-client tooltip breakdown
+- **Statistics Charts** - Renamed from "rTorrent" to "BitTorrent" to reflect all BT clients
+- **Client Display Names** - New `CLIENT_NAMES` constant as single source of truth for client names across the UI
+- **Client Icons** - Distinct icons for rTorrent (dedicated SVG) and qBittorrent (dedicated SVG); generic BitTorrent icon for the BT filter toggle
+
+#### **Architecture Improvements**
+- **Download Normalizer** - Extended with `normalizeQBittorrentDownload()` for unified item format
+- **Unified Item Builder** - Renamed `RTORRENT_DEFAULTS` to `TORRENT_DEFAULTS`, added `isTorrentClient()` helper
+- **Data Fetch Service** - qBittorrent added as data source alongside aMule and rTorrent
+- **Metrics Collection** - qBittorrent speeds and totals tracked (uses all-time totals, no restart detection needed)
+- **Auto Refresh Manager** - Extended refresh loop with qBittorrent stats, history tracking, and external download detection
+- **Config Tester** - Added qBittorrent connection testing with detailed diagnostics
+- **Field Formatters** - Support for 50+ qBittorrent-specific field labels and state formatting
+
+#### **Category Management**
+- **qBittorrent Category Sync** - Categories created/updated/deleted in aMuTorrent are synced to qBittorrent
+- **Path Validation** - Enhanced logging showing specific paths and reasons for each warning
+- **Default Paths** - Tracked per client (aMule, rTorrent, qBittorrent) for accurate Default category display
+
+#### **Move Operations**
+- **qBittorrent Native Moves** - Uses API-based `setLocation()` instead of manual file operations
+- **Improved Size Verification** - Uses actual measured size for incomplete downloads
+- **Cross-Filesystem Fallback** - Falls back from rename to copy with logging
+
+### 🐛 Fixed
+
+- **aMule Delete Event** - `deletedFromDisk` now correctly reports `true` when cancelling aMule downloads (aMule always deletes temp files)
+- **Move Size Verification** - Fixed incorrect size comparison for incomplete downloads
+- **Path Translation** - Fixed path mapping to handle both prefix matching and fallback patterns
+
+### 📝 Documentation
+
+- **qBittorrent Integration Guide** - New `docs/QBITTORRENT.md` covering setup, Docker, categories, and first-time password configuration
+- **Updated All Docs** - CONFIGURATION.md, RTORRENT.md, PROWLARR.md, and README.md updated to reflect three-client support
+- **Event Scripting README** - Added full JSON payload examples for all event types, documented `path` and `multiFile` fields
+- **Debug Script** - New `scripts/log-to-file.sh` with usage documentation
+- **Documentation Website** - Added GitHub Pages deployment with Starlight, qBittorrent added to sidebar
+
+---
+
 ## [3.0.2]
 
 ### ✨ Added

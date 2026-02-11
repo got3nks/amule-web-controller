@@ -15,6 +15,7 @@ const { extractTrackerDomain } = require('../lib/downloadNormalizer');
 // Singleton managers - imported directly instead of injected
 const amuleManager = require('./amuleManager');
 const rtorrentManager = require('./rtorrentManager');
+const qbittorrentManager = require('./qbittorrentManager');
 
 // How often to update download history status (in milliseconds)
 const HISTORY_UPDATE_INTERVAL = 30000; // 30 seconds
@@ -41,9 +42,10 @@ class AutoRefreshManager extends BaseModule {
   async autoRefreshLoop() {
     const amuleConnected = amuleManager && amuleManager.isConnected();
     const rtorrentConnected = rtorrentManager && rtorrentManager.isConnected();
+    const qbittorrentConnected = qbittorrentManager && qbittorrentManager.isConnected();
 
-    // If neither client is connected, wait and retry
-    if (!amuleConnected && !rtorrentConnected) {
+    // If no client is connected, wait and retry
+    if (!amuleConnected && !rtorrentConnected && !qbittorrentConnected) {
       this.refreshInterval = setTimeout(() => this.autoRefreshLoop(), config.AUTO_REFRESH_INTERVAL);
       return;
     }
@@ -66,8 +68,18 @@ class AutoRefreshManager extends BaseModule {
         }
       }
 
-      // Store metrics in database (both aMule and rtorrent)
-      if (stats || rtorrentStats) {
+      // Get qBittorrent stats if connected
+      let qbittorrentStats = null;
+      if (qbittorrentConnected) {
+        try {
+          qbittorrentStats = await qbittorrentManager.getGlobalStats();
+        } catch (err) {
+          this.log('⚠️  Error fetching qBittorrent stats:', err.message);
+        }
+      }
+
+      // Store metrics in database (aMule, rtorrent, and qBittorrent)
+      if (stats || rtorrentStats || qbittorrentStats) {
         try {
           const uploadSpeed = stats?.EC_TAG_STATS_UL_SPEED || 0;
           const downloadSpeed = stats?.EC_TAG_STATS_DL_SPEED || 0;
@@ -85,7 +97,15 @@ class AutoRefreshManager extends BaseModule {
             pid: rtorrentStats.pid || 0  // For restart detection (PID changes on restart)
           } : null;
 
-          this.metricsDB.insertMetric(uploadSpeed, downloadSpeed, totalUploaded, totalDownloaded, rtMetrics);
+          // Format qBittorrent stats for metrics DB (uses all-time totals, no restart detection needed)
+          const qbMetrics = qbittorrentStats ? {
+            uploadSpeed: qbittorrentStats.uploadSpeed || 0,
+            downloadSpeed: qbittorrentStats.downloadSpeed || 0,
+            uploadTotal: qbittorrentStats.uploadTotal || 0,
+            downloadTotal: qbittorrentStats.downloadTotal || 0
+          } : null;
+
+          this.metricsDB.insertMetric(uploadSpeed, downloadSpeed, totalUploaded, totalDownloaded, rtMetrics, qbMetrics);
         } catch (err) {
           this.log('⚠️  Error saving metrics:', err.message);
         }
@@ -108,7 +128,7 @@ class AutoRefreshManager extends BaseModule {
         // Build batch update object - only include successful fetches
         const batchUpdate = {};
 
-        // Combine stats from both clients
+        // Combine stats from all clients
         const combinedStats = stats || {};
         if (rtorrentStats) {
           combinedStats.rtorrent = {
@@ -124,16 +144,32 @@ class AutoRefreshManager extends BaseModule {
           combinedStats.rtorrent = { connected: true };
         }
 
+        if (qbittorrentStats) {
+          combinedStats.qbittorrent = {
+            connected: true,
+            downloadSpeed: qbittorrentStats.downloadSpeed || 0,
+            uploadSpeed: qbittorrentStats.uploadSpeed || 0,
+            downloadTotal: qbittorrentStats.downloadTotal || 0,
+            uploadTotal: qbittorrentStats.uploadTotal || 0,
+            connectionStatus: qbittorrentStats.connectionStatus || 'disconnected',
+            listenPort: qbittorrentStats.listenPort || 0
+          };
+        } else if (qbittorrentConnected) {
+          combinedStats.qbittorrent = { connected: true };
+        }
+
         // Add connection status
         combinedStats.clients = {
           amule: amuleConnected,
-          rtorrent: rtorrentConnected
+          rtorrent: rtorrentConnected,
+          qbittorrent: qbittorrentConnected
         };
 
         // Add config-level enabled status (for UI visibility decisions)
         combinedStats.clientsEnabled = {
           amule: config.AMULE_ENABLED,
           rtorrent: config.RTORRENT_ENABLED,
+          qbittorrent: config.QBITTORRENT_ENABLED,
           prowlarr: config.getConfig()?.integrations?.prowlarr?.enabled === true
         };
 
@@ -278,6 +314,7 @@ class AutoRefreshManager extends BaseModule {
           name: f.name || existing.name,
           uploaded,
           ratio,
+          directory: f.path || existing.directory || null,
           clientType: 'amule'
           // No trackerDomain for aMule
         });
@@ -313,7 +350,45 @@ class AutoRefreshManager extends BaseModule {
           uploaded: d.uploadTotal || 0,
           ratio: d.ratio || 0,
           trackerDomain,
+          directory: d.directory || null,
+          multiFile: d.isMultiFile || false,
           clientType: 'rtorrent'
+        });
+      }
+
+      // Process qBittorrent data
+      const qbittorrentDownloads = batchData._qbittorrentDownloads || [];
+
+      for (const d of qbittorrentDownloads) {
+        const hash = d.hash?.toLowerCase();
+        if (!hash) continue;
+
+        // Detect external additions (not in database) - only for incomplete downloads
+        if (!knownHashes.has(hash) && d.progress < 100) {
+          this.downloadHistoryDB.addExternalDownload(hash, d.name, d.size, 'qbittorrent');
+          knownHashes.add(hash); // Add to known set to avoid duplicate detection
+        }
+
+        if (d.progress >= 100) {
+          completedHashes.add(hash);
+        } else {
+          activeHashes.add(hash);
+        }
+
+        // Extract primary tracker domain (with subdomain removal)
+        const trackerDomain = extractTrackerDomain(d.trackers);
+
+        // Store metadata for potential updates (including transfer stats)
+        metadataMap.set(hash, {
+          size: d.size,
+          name: d.name,
+          downloaded: d.sizeDownloaded || 0,
+          uploaded: d.uploadTotal || 0,
+          ratio: d.ratio || 0,
+          trackerDomain,
+          directory: d.directory || null,
+          multiFile: d.isMultiFile || false,
+          clientType: 'qbittorrent'
         });
       }
 

@@ -1,7 +1,7 @@
 /**
  * MoveOperationManager - Manages file move operations for download clients
  *
- * Supports both rtorrent and aMule clients.
+ * Supports rtorrent, qBittorrent, and aMule clients.
  *
  * Handles the complete move workflow:
  * 1. Close/pause download (release file handles)
@@ -13,6 +13,7 @@
  *
  * Notes:
  * - rtorrent: Can have single or multi-file torrents (directories)
+ * - qBittorrent: Can have single or multi-file torrents (directories)
  * - aMule: Always single files (no directory support)
  *
  * Supports recovery on restart and error handling.
@@ -29,6 +30,7 @@ const logger = require('./logger');
 // Singleton managers - imported directly instead of injected
 const amuleManager = require('../modules/amuleManager');
 const rtorrentManager = require('../modules/rtorrentManager');
+const qbittorrentManager = require('../modules/qbittorrentManager');
 const categoryManager = require('./CategoryManager');
 const eventScriptingManager = require('./EventScriptingManager');
 
@@ -64,7 +66,7 @@ class MoveOperationManager extends BaseModule {
    * @param {Object} options - Move options
    * @param {string} options.hash - Download hash
    * @param {string} options.name - Download name
-   * @param {string} options.clientType - Client type ('rtorrent' or 'amule')
+   * @param {string} options.clientType - Client type ('rtorrent', 'qbittorrent', or 'amule')
    * @param {string} options.sourcePathRemote - Source directory (remote path as client sees it)
    * @param {string} options.destPathLocal - Destination directory (LOCAL path where app can access)
    * @param {string} options.destPathRemote - Destination directory (remote path for client)
@@ -78,7 +80,7 @@ class MoveOperationManager extends BaseModule {
       throw new Error('Move operation manager not initialized');
     }
 
-    // aMule files are always single files
+    // aMule files are always single files; rtorrent and qBittorrent can have multi-file
     const actualIsMultiFile = clientType === 'amule' ? false : isMultiFile;
 
     // Translate source path from remote (client view) to local (app view)
@@ -157,57 +159,24 @@ class MoveOperationManager extends BaseModule {
    */
   async executeMove(operation) {
     const { hash, name, clientType = 'rtorrent', sourcePath, destPath, remoteSourcePath, remoteDestPath, isMultiFile } = operation;
+    const clientDestPath = remoteDestPath || destPath;
 
-    this.log(`📦 Moving: ${name} -> ${remoteDestPath || destPath}`);
+    this.log(`📦 Moving: ${name} -> ${clientDestPath}`);
 
     try {
-      // Step 1: Pause/close the download to release file handles
-      await this.pauseDownload(hash, clientType);
-
-      // Small delay to ensure files are released
-      await this.sleep(500);
-
-      // Step 2: Update status to moving
+      // Update status to moving
       this.db.updateStatus(hash, 'moving');
       this.updateActiveOperation(hash);
 
-      // Step 3: Move files (returns true if rename was used, false if copy was used)
-      // aMule is always single file, rtorrent can be either
-      let usedRename;
-      if (isMultiFile) {
-        usedRename = await this.moveDirectory(operation);
+      // qBittorrent: Use native setLocation API (handles pause/move/resume internally)
+      if (clientType === 'qbittorrent') {
+        await this.executeQBittorrentNativeMove(operation);
       } else {
-        usedRename = await this.moveSingleFile(operation);
+        // rtorrent/aMule: Manual file move
+        await this.executeManualMove(operation);
       }
 
-      // Step 4: Verify
-      this.db.updateStatus(hash, 'verifying');
-      this.updateActiveOperation(hash);
-      await this.verifyMove(operation);
-
-      // Step 5: Update client's directory setting (use remote path)
-      const clientDestPath = remoteDestPath || destPath;
-      await this.updateClientDirectory(hash, clientDestPath, clientType);
-
-      // Step 6: Cleanup source (skip if rename was used - source already moved)
-      if (!usedRename) {
-        await this.cleanupSource(operation);
-      }
-
-      // Step 7: Resume download
-      await this.resumeDownload(hash, clientType);
-
-      // Step 8: For aMule, refresh shared files to update the list
-      if (clientType === 'amule') {
-        try {
-          await amuleManager.getClient().refreshSharedFiles();
-          await this.sleep(500); // Give aMule time to process
-        } catch (err) {
-          this.log(`⚠️ Failed to refresh aMule shared files: ${err.message}`);
-        }
-      }
-
-      // Step 9: Mark completed
+      // Mark completed
       this.db.updateStatus(hash, 'completed');
       this.activeOperations.delete(hash.toLowerCase());
 
@@ -235,16 +204,18 @@ class MoveOperationManager extends BaseModule {
       this.db.updateStatus(hash, 'failed', err.message);
       this.updateActiveOperation(hash);
 
-      // Try to resume download at original location
-      try {
-        await this.resumeDownload(hash, clientType);
-        this.log(`🔄 Resumed download at original location: ${name}`);
-      } catch (startErr) {
-        this.log(`⚠️ Failed to resume download: ${startErr.message}`);
-      }
+      // Try to resume download at original location (skip for qBittorrent - it handles this)
+      if (clientType !== 'qbittorrent') {
+        try {
+          await this.resumeDownload(hash, clientType);
+          this.log(`🔄 Resumed download at original location: ${name}`);
+        } catch (startErr) {
+          this.log(`⚠️ Failed to resume download: ${startErr.message}`);
+        }
 
-      // Cleanup any partial destination files
-      await this.cleanupPartialDest(operation);
+        // Cleanup any partial destination files
+        await this.cleanupPartialDest(operation);
+      }
 
       // Notify error
       this.broadcastError(`Failed to move "${name}": ${err.message}`);
@@ -260,6 +231,127 @@ class MoveOperationManager extends BaseModule {
   }
 
   /**
+   * Execute move using qBittorrent's native setLocation API
+   * qBittorrent handles pause/move/resume internally
+   * @param {Object} operation - Operation record
+   */
+  async executeQBittorrentNativeMove(operation) {
+    const { hash, name, remoteDestPath, destPath, isMultiFile } = operation;
+    const clientDestPath = remoteDestPath || destPath;
+
+    if (!qbittorrentManager || !qbittorrentManager.isConnected()) {
+      throw new Error('qBittorrent not connected');
+    }
+
+    this.log(`📦 Using qBittorrent native move for: ${name}`);
+
+    // For multi-file torrents, destination is the parent folder
+    // For single-file torrents, destination is also the parent folder
+    // qBittorrent's setLocation expects the parent directory, not the file/folder path
+    await qbittorrentManager.getClient().setLocation(hash, clientDestPath);
+
+    // Wait for qBittorrent to complete the move
+    // Poll the torrent's state until it's no longer moving
+    let attempts = 0;
+    const maxAttempts = 120; // 2 minutes max wait
+    const pollInterval = 1000;
+
+    while (attempts < maxAttempts) {
+      await this.sleep(pollInterval);
+      attempts++;
+
+      try {
+        const torrents = await qbittorrentManager.getTorrents();
+        const torrent = torrents.find(t => t.hash.toLowerCase() === hash.toLowerCase());
+
+        if (!torrent) {
+          throw new Error('Torrent not found after move');
+        }
+
+        // Check if move is complete (state is not 'moving')
+        if (torrent.state !== 'moving') {
+          // Verify the new path matches
+          const newPath = torrent.save_path || torrent.content_path;
+          if (newPath && newPath.includes(clientDestPath.split('/').pop())) {
+            this.log(`📦 qBittorrent move completed: ${name} -> ${newPath}`);
+            return;
+          }
+          // Path updated, move complete
+          this.log(`📦 qBittorrent move completed: ${name}`);
+          return;
+        }
+
+        // Still moving, update progress
+        this.db.updateStatus(hash, 'moving');
+        this.updateActiveOperation(hash);
+      } catch (pollErr) {
+        this.log(`⚠️ Error polling move status: ${pollErr.message}`);
+      }
+    }
+
+    throw new Error('Move timed out waiting for qBittorrent');
+  }
+
+  /**
+   * Execute manual file move (for rtorrent/aMule)
+   * @param {Object} operation - Operation record
+   */
+  async executeManualMove(operation) {
+    const { hash, name, clientType, sourcePath, remoteDestPath, destPath, isMultiFile } = operation;
+    const clientDestPath = remoteDestPath || destPath;
+
+    // Step 1: Pause/close the download to release file handles
+    await this.pauseDownload(hash, clientType);
+
+    // Small delay to ensure files are released
+    await this.sleep(500);
+
+    // Step 2: Measure actual source size on disk (for incomplete downloads, this may differ from totalSize)
+    let actualSourceSize;
+    if (isMultiFile) {
+      actualSourceSize = await this.getDirectorySize(sourcePath);
+    } else {
+      const sourceFilePath = path.join(sourcePath, name);
+      const stats = await fs.stat(sourceFilePath);
+      actualSourceSize = stats.size;
+    }
+
+    // Step 3: Move files (returns true if rename was used, false if copy was used)
+    let usedRename;
+    if (isMultiFile) {
+      usedRename = await this.moveDirectory(operation);
+    } else {
+      usedRename = await this.moveSingleFile(operation);
+    }
+
+    // Step 4: Verify (compare against actual source size, not totalSize)
+    this.db.updateStatus(hash, 'verifying');
+    this.updateActiveOperation(hash);
+    await this.verifyMove(operation, actualSourceSize);
+
+    // Step 4: Update client's directory setting (use remote path)
+    await this.updateClientDirectory(hash, clientDestPath, clientType);
+
+    // Step 5: Cleanup source (skip if rename was used - source already moved)
+    if (!usedRename) {
+      await this.cleanupSource(operation);
+    }
+
+    // Step 6: Resume download
+    await this.resumeDownload(hash, clientType);
+
+    // Step 7: For aMule, refresh shared files to update the list
+    if (clientType === 'amule') {
+      try {
+        await amuleManager.getClient().refreshSharedFiles();
+        await this.sleep(500); // Give aMule time to process
+      } catch (err) {
+        this.log(`⚠️ Failed to refresh aMule shared files: ${err.message}`);
+      }
+    }
+  }
+
+  /**
    * Pause/close a download to release file handles
    * @param {string} hash - Download hash
    * @param {string} clientType - Client type
@@ -270,6 +362,11 @@ class MoveOperationManager extends BaseModule {
         throw new Error('rtorrent manager not available');
       }
       await rtorrentManager.closeDownload(hash);
+    } else if (clientType === 'qbittorrent') {
+      if (!qbittorrentManager) {
+        throw new Error('qBittorrent manager not available');
+      }
+      await qbittorrentManager.stopDownload(hash);
     } else if (clientType === 'amule') {
       // aMule: File handle release not required for shared files
     }
@@ -286,6 +383,11 @@ class MoveOperationManager extends BaseModule {
         throw new Error('rtorrent manager not available');
       }
       await rtorrentManager.startDownload(hash);
+    } else if (clientType === 'qbittorrent') {
+      if (!qbittorrentManager) {
+        throw new Error('qBittorrent manager not available');
+      }
+      await qbittorrentManager.startDownload(hash);
     } else if (clientType === 'amule') {
       // aMule: Resume not required for shared files
     }
@@ -303,6 +405,12 @@ class MoveOperationManager extends BaseModule {
         throw new Error('rtorrent manager not available');
       }
       await rtorrentManager.getClient().call('d.directory.set', [hash, newPath]);
+    } else if (clientType === 'qbittorrent') {
+      if (!qbittorrentManager) {
+        throw new Error('qBittorrent manager not available');
+      }
+      // qBittorrent: Update the torrent's save location
+      await qbittorrentManager.getClient().setLocation(hash, newPath);
     } else if (clientType === 'amule') {
       // aMule: Directory update handled automatically for shared files
     }
@@ -365,6 +473,7 @@ class MoveOperationManager extends BaseModule {
         throw err; // Re-throw if not cross-device error
       }
       // Cross-filesystem move - fall back to copy
+      this.log(`⚠️ Directory rename failed (${err.code}: ${err.message}), falling back to copy: ${name}`);
     }
 
     // Fall back to file-by-file copy for cross-filesystem moves
@@ -422,6 +531,7 @@ class MoveOperationManager extends BaseModule {
         throw err; // Re-throw if not cross-device error
       }
       // Fall back to copy for cross-filesystem
+      this.log(`⚠️ File rename failed (${err.code}: ${err.message}), falling back to copy: ${path.basename(src)}`);
       await this.copyFileWithProgress(src, dest, hash, baseBytes);
       return true; // Copy was used
     }
@@ -501,24 +611,25 @@ class MoveOperationManager extends BaseModule {
   /**
    * Verify that move completed successfully by comparing sizes
    * @param {Object} operation - Operation record
+   * @param {number} expectedSize - Actual source size measured before move (handles incomplete downloads)
    */
-  async verifyMove(operation) {
-    const { name, destPath, totalSize, isMultiFile } = operation;
+  async verifyMove(operation, expectedSize) {
+    const { name, destPath, isMultiFile } = operation;
 
     if (isMultiFile) {
       // For directories, check total size (destPath + name = actual directory)
       const destDir = path.join(destPath, name);
       const destSize = await this.getDirectorySize(destDir);
-      if (destSize < totalSize * 0.99) { // Allow 1% tolerance
-        throw new Error(`Size mismatch: expected ${totalSize}, got ${destSize}`);
+      if (destSize !== expectedSize) {
+        throw new Error(`Size mismatch: expected ${expectedSize}, got ${destSize}`);
       }
     } else {
       // For single file: sourcePath is directory, name is the filename
       const destFilePath = path.join(destPath, name);
 
       const stats = await fs.stat(destFilePath);
-      if (stats.size !== totalSize) {
-        throw new Error(`Size mismatch: expected ${totalSize}, got ${stats.size}`);
+      if (stats.size !== expectedSize) {
+        throw new Error(`Size mismatch: expected ${expectedSize}, got ${stats.size}`);
       }
     }
   }

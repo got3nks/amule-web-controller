@@ -25,7 +25,7 @@ const { createElement: h, useState, useEffect } = React;
  * @param {function} onConfirm - Confirm handler (receives deleteFiles boolean for rtorrent)
  * @param {function} onCancel - Cancel handler
  * @param {string} itemType - Type of item ('File' or 'Server', default: 'File')
- * @param {string} clientType - Client type ('amule' or 'rtorrent') - shows delete files option for rtorrent
+ * @param {string} clientType - Client type ('amule', 'rtorrent', or 'qbittorrent') - shows delete files option for rtorrent/qbittorrent
  * @param {boolean} forceShowDeleteOption - Force show delete files checkbox (for aMule shared files)
  * @param {Object} permissionCheck - Permission check results { loading, canDeleteFiles, warnings }
  * @param {boolean} skipFileMessages - Skip file-related info messages (e.g., for history deletion)
@@ -64,9 +64,9 @@ const DeleteModal = ({
   const isAmuleSharedOnly = clientType === 'amule' && forceShowDeleteOption;
   const isMixedShared = clientType === 'mixed' && forceShowDeleteOption;
 
-  // Show checkbox for rTorrent files (pure rTorrent or any mixed batches)
-  // For mixed: checkbox controls rTorrent file deletion (aMule files handled separately)
-  const showDeleteFilesOption = clientType === 'rtorrent' || clientType === 'mixed';
+  // Show checkbox for rTorrent/qBittorrent files (pure torrent clients or any mixed batches)
+  // For mixed: checkbox controls torrent file deletion (aMule files handled separately)
+  const showDeleteFilesOption = clientType === 'rtorrent' || clientType === 'qbittorrent' || clientType === 'mixed';
 
   // Permission check state
   const isCheckingPermissions = permissionCheck?.loading || false;
@@ -148,7 +148,7 @@ const DeleteModal = ({
           }),
           h('span', { className: 'text-sm text-gray-700 dark:text-gray-300' },
             isCheckingPermissions ? 'Checking file permissions...' :
-            clientType === 'mixed' ? 'Also delete rTorrent files from disk' :
+            clientType === 'mixed' ? 'Also delete torrent files from disk' :
             'Also delete files from disk'
           )
         )

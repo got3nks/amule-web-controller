@@ -16,6 +16,7 @@ const configTester = require('./configTester');
 
 // Singleton managers - imported directly instead of injected
 const amuleManager = require('../modules/amuleManager');
+const qbittorrentManager = require('../modules/qbittorrentManager');
 const config = require('../modules/config');
 
 // ============================================================================
@@ -115,7 +116,7 @@ class CategoryManager extends BaseModule {
     this.filePath = null;
     this._loaded = false;
     // Store default paths from clients (for Default category display)
-    this.clientDefaultPaths = { amule: null, rtorrent: null };
+    this.clientDefaultPaths = { amule: null, rtorrent: null, qbittorrent: null };
     // Store path validation warnings per category
     // Format: { categoryName: { path: 'warning', mappings: { amule: 'warning', rtorrent: 'warning' } } }
     this.pathWarnings = {};
@@ -204,11 +205,11 @@ class CategoryManager extends BaseModule {
 
   /**
    * Set the default path for a client
-   * @param {string} clientType - 'amule' or 'rtorrent'
+   * @param {string} clientType - 'amule', 'rtorrent', or 'qbittorrent'
    * @param {string} path - Default directory path
    */
   setClientDefaultPath(clientType, path) {
-    if (clientType === 'amule' || clientType === 'rtorrent') {
+    if (clientType === 'amule' || clientType === 'rtorrent' || clientType === 'qbittorrent') {
       this.clientDefaultPaths[clientType] = path || null;
       this.log(`📂 Set ${clientType} default path: ${path || '(none)'}`);
     }
@@ -216,7 +217,7 @@ class CategoryManager extends BaseModule {
 
   /**
    * Get the default paths for all clients
-   * @returns {Object} { amule: string|null, rtorrent: string|null }
+   * @returns {Object} { amule: string|null, rtorrent: string|null, qbittorrent: string|null }
    */
   getClientDefaultPaths() {
     return { ...this.clientDefaultPaths };
@@ -246,6 +247,17 @@ class CategoryManager extends BaseModule {
     if (hasWarnings) {
       const warningCount = Object.keys(this.pathWarnings).length;
       this.log(`⚠️ Path validation: ${warningCount} category/ies with path issues`);
+      for (const [catName, warns] of Object.entries(this.pathWarnings)) {
+        if (warns.path) {
+          const cat = this.categories.get(catName);
+          this.log(`   ⚠️ "${catName}" path (${cat?.path || '(unknown)'}): ${warns.path}`);
+        }
+        for (const [client, msg] of Object.entries(warns.mappings || {})) {
+          const cat = this.categories.get(catName);
+          const mappedPath = cat?.pathMappings?.[client] || this.clientDefaultPaths[client] || '(unknown)';
+          this.log(`   ⚠️ "${catName}" ${client} path mapping (${mappedPath}): ${msg}`);
+        }
+      }
     } else {
       this.log(`✅ Path validation: all category paths OK`);
     }
@@ -267,6 +279,7 @@ class CategoryManager extends BaseModule {
     const isDefault = category.name === 'Default';
 
     // Check if path mapping is enabled for this category
+    // Note: qBittorrent excluded - it handles moves/deletes natively via API
     const hasPathMapping = category.pathMappings &&
       (category.pathMappings.amule || category.pathMappings.rtorrent);
 
@@ -287,6 +300,7 @@ class CategoryManager extends BaseModule {
             hasWarnings = true;
           }
         }
+        // Note: qBittorrent path not validated - it handles moves/deletes natively
       } else {
         // No path mapping: check the client default paths
         if (this.clientDefaultPaths.amule) {
@@ -303,6 +317,7 @@ class CategoryManager extends BaseModule {
             hasWarnings = true;
           }
         }
+        // Note: qBittorrent default path not validated - it handles moves/deletes natively
       }
     } else {
       // Non-default category
@@ -322,6 +337,7 @@ class CategoryManager extends BaseModule {
             hasWarnings = true;
           }
         }
+        // Note: qBittorrent path not validated - it handles moves/deletes natively
       } else if (category.path) {
         // No path mapping: check regular path
         const result = await this._checkPath(category.path);
@@ -679,6 +695,20 @@ class CategoryManager extends BaseModule {
       }
     }
 
+    // Create in qBittorrent if connected (and category has a path)
+    if (qbittorrentManager.isConnected()) {
+      try {
+        const qbCategories = await qbittorrentManager.getCategories();
+        if (!qbCategories || !qbCategories[name]) {
+          await qbittorrentManager.createCategory(name, category.path || '');
+          this.log(`📤 Created category "${name}" in qBittorrent`);
+        }
+      } catch (err) {
+        this.log(`⚠️ Failed to create category in qBittorrent: ${err.message}`);
+        // Continue - category is still created in app
+      }
+    }
+
     this.categories.set(name, category);
     await this.save();
 
@@ -723,6 +753,11 @@ class CategoryManager extends BaseModule {
         amuleColor,
         category.priority || 0
       );
+    }
+
+    // Update in qBittorrent if connected and path changed
+    if (path !== undefined && qbittorrentManager.isConnected()) {
+      await this.updateQbittorrentCategory(name, path);
     }
 
     await this.save();
@@ -1020,6 +1055,102 @@ class CategoryManager extends BaseModule {
   }
 
   /**
+   * Sync categories with qBittorrent (bidirectional)
+   * Called when qBittorrent connects:
+   * 1. Creates app categories for new qBittorrent categories
+   * 2. Pushes app categories to qBittorrent if they don't exist there
+   * 3. Updates qBittorrent category paths to match app (app is source of truth)
+   * @param {Object} qbCategories - Categories from qBittorrent { name: { name, savePath } }
+   * @returns {Promise<Object>} Sync results
+   */
+  async syncWithQbittorrent(qbCategories) {
+    if (!qbCategories || typeof qbCategories !== 'object') {
+      qbCategories = {};
+    }
+
+    let createdInApp = 0;
+    let createdInQb = 0;
+    let updatedInQb = 0;
+    const usedColors = new Set(Array.from(this.categories.values()).map(c => c.color));
+    const categoryNames = Object.keys(qbCategories);
+
+    // Step 1: Import qBittorrent categories into app
+    for (const name of categoryNames) {
+      // Skip empty names
+      if (!name) {
+        continue;
+      }
+
+      // Check if category already exists in app
+      if (this.categories.has(name)) {
+        continue;
+      }
+
+      // Get the save path if available
+      const qbCat = qbCategories[name];
+      const savePath = qbCat?.savePath || null;
+
+      // Create new category from qBittorrent category
+      const now = new Date().toISOString();
+      const newCat = {
+        name: name,
+        color: getRandomColor(usedColors),
+        path: savePath, // Use qBittorrent's savePath if provided
+        pathMappings: null,
+        comment: 'Auto-created from qBittorrent category',
+        priority: 0,
+        amuleId: null,
+        createdAt: now,
+        updatedAt: now
+      };
+
+      usedColors.add(newCat.color);
+      this.categories.set(name, newCat);
+      createdInApp++;
+      this.log(`📥 Created category "${name}" from qBittorrent${savePath ? ` (path: ${savePath})` : ''}`);
+    }
+
+    // Save changes from import
+    if (createdInApp > 0) {
+      await this.save();
+    }
+
+    // Step 2: Push app categories to qBittorrent (except Default)
+    for (const [name, category] of this.categories) {
+      if (name === 'Default') {
+        continue; // Skip Default category
+      }
+
+      const qbCat = qbCategories[name];
+      const appPath = category.path || '';
+
+      if (!qbCat) {
+        // Category doesn't exist in qBittorrent - create it
+        try {
+          await qbittorrentManager.createCategory(name, appPath);
+          createdInQb++;
+          this.log(`📤 Created category "${name}" in qBittorrent (path: ${appPath})`);
+        } catch (err) {
+          this.log(`⚠️ Failed to create category "${name}" in qBittorrent: ${err.message}`);
+        }
+      } else if (qbCat.savePath !== appPath) {
+        // Category exists but path differs - update qBittorrent to match app (app is source of truth)
+        try {
+          await qbittorrentManager.editCategory(name, appPath);
+          updatedInQb++;
+          this.log(`🔄 Updated qBittorrent category "${name}" path: ${qbCat.savePath} -> ${appPath}`);
+        } catch (err) {
+          this.log(`⚠️ Failed to update category "${name}" in qBittorrent: ${err.message}`);
+        }
+      }
+    }
+
+    this.log(`📊 qBittorrent sync complete: ${createdInApp} imported, ${createdInQb} pushed, ${updatedInQb} updated`);
+
+    return { createdInApp, createdInQb, updatedInQb };
+  }
+
+  /**
    * Ensure category exists in aMule
    * Creates in aMule if connected and category doesn't have an amuleId yet
    * @param {string} name - Category name
@@ -1103,6 +1234,77 @@ class CategoryManager extends BaseModule {
     return category;
   }
 
+  /**
+   * Ensure category exists in qBittorrent
+   * Creates in qBittorrent if connected and category doesn't exist yet
+   * @param {string} name - Category name
+   * @returns {Promise<boolean>} True if category exists/created, false if not connected
+   */
+  async ensureQbittorrentCategory(name) {
+    const category = this.categories.get(name);
+    if (!category) {
+      throw new Error(`Category "${name}" not found`);
+    }
+
+    // Check if qBittorrent is connected
+    if (!qbittorrentManager.isConnected()) {
+      return false;
+    }
+
+    try {
+      // Check if category already exists in qBittorrent
+      const qbCategories = await qbittorrentManager.getCategories();
+
+      if (qbCategories && qbCategories[name]) {
+        // Category exists - check if save path needs updating
+        const qbCat = qbCategories[name];
+        const desiredPath = category.path || '';
+
+        if (qbCat.savePath !== desiredPath) {
+          await qbittorrentManager.editCategory(name, desiredPath);
+          this.log(`🔄 Updated qBittorrent category "${name}" path to: ${desiredPath}`);
+        }
+        return true;
+      }
+
+      // Create new category in qBittorrent
+      await qbittorrentManager.createCategory(name, category.path || '');
+      this.log(`📤 Created category "${name}" in qBittorrent on demand`);
+      return true;
+    } catch (err) {
+      this.log(`⚠️ Failed to ensure category in qBittorrent: ${err.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Update category in qBittorrent (sync path changes)
+   * @param {string} name - Category name
+   * @param {string} path - New path
+   * @returns {Promise<boolean>} True if updated, false if not connected or failed
+   */
+  async updateQbittorrentCategory(name, path) {
+    if (!qbittorrentManager.isConnected()) {
+      return false;
+    }
+
+    try {
+      // Check if category exists in qBittorrent
+      const qbCategories = await qbittorrentManager.getCategories();
+
+      if (qbCategories && qbCategories[name]) {
+        await qbittorrentManager.editCategory(name, path || '');
+        this.log(`🔄 Updated qBittorrent category "${name}" path to: ${path}`);
+        return true;
+      }
+      // Category doesn't exist yet in qBittorrent - that's OK, it will be created on demand
+      return false;
+    } catch (err) {
+      this.log(`⚠️ Failed to update qBittorrent category: ${err.message}`);
+      return false;
+    }
+  }
+
   // ==========================================================================
   // PATH TRANSLATION
   // ==========================================================================
@@ -1110,7 +1312,7 @@ class CategoryManager extends BaseModule {
   /**
    * Translate a client path to app path using category mappings
    * @param {string} clientPath - Full file path as reported by client
-   * @param {string} clientType - Client type ('amule' or 'rtorrent')
+   * @param {string} clientType - Client type ('amule', 'rtorrent', or 'qbittorrent')
    * @returns {string} Translated path or original if no mapping found
    */
   translatePath(clientPath, clientType) {
@@ -1154,25 +1356,31 @@ class CategoryManager extends BaseModule {
     if (defaultCategory?.pathMappings) {
       const defaultAppPath = defaultCategory.pathMappings[clientType];
       if (defaultAppPath) {
-        const normalizedDefaultPath = defaultAppPath.replace(/\/+$/, '');
+        const normalizedDefaultAppPath = defaultAppPath.replace(/\/+$/, '');
 
-        // Get the last segment of both paths to check if they match
-        const inputLastSegment = normalizedClientPath.split('/').pop();
-        const defaultLastSegment = normalizedDefaultPath.split('/').pop();
+        // Get the client's default/base path for this client type
+        // This is what the client reports as its download directory
+        const clientDefaultPath = defaultCategory.path || this.clientDefaultPaths[clientType];
+        if (clientDefaultPath) {
+          const normalizedClientDefaultPath = clientDefaultPath.replace(/\/+$/, '');
 
-        // If the last segments match, the input is likely the base directory
-        // (e.g., /downloads/temp -> /home/.../temp, both end in 'temp')
-        // In this case, return the default path directly
-        if (inputLastSegment === defaultLastSegment) {
-          return normalizedDefaultPath;
+          // If input path starts with or equals the client's default path, do prefix replacement
+          if (normalizedClientPath === normalizedClientDefaultPath) {
+            // Exact match - return the app path directly
+            return normalizedDefaultAppPath;
+          } else if (normalizedClientPath.startsWith(normalizedClientDefaultPath + '/')) {
+            // Prefix match - replace prefix with app path
+            const relativePath = normalizedClientPath.substring(normalizedClientDefaultPath.length);
+            return normalizedDefaultAppPath + relativePath;
+          }
         }
 
-        // Otherwise, extract relative path after any common parent and append
-        // For file paths like /downloads/temp/file.mkv -> /home/.../temp/file.mkv
-        const lastSlashIndex = normalizedClientPath.lastIndexOf('/');
-        if (lastSlashIndex > 0) {
-          const fileName = normalizedClientPath.substring(lastSlashIndex + 1);
-          return `${normalizedDefaultPath}/${fileName}`;
+        // Legacy fallback for edge cases (last segment matching)
+        const inputLastSegment = normalizedClientPath.split('/').pop();
+        const defaultLastSegment = normalizedDefaultAppPath.split('/').pop();
+
+        if (inputLastSegment === defaultLastSegment) {
+          return normalizedDefaultAppPath;
         }
       }
     }

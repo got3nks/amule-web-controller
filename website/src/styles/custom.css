@@ -1,0 +1,257 @@
+/* aMuTorrent custom styles */
+
+/* Accent colors */
+:root {
+  --sl-color-accent-low: #1e40af;
+  --sl-color-accent: #3b82f6;
+  --sl-color-accent-high: #93c5fd;
+}
+
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #1e3a8a;
+  --sl-color-accent: #3b82f6;
+  --sl-color-accent-high: #93c5fd;
+}
+
+:root[data-theme='dark'] .site-title {
+  color: #ffffff !important;
+}
+
+.site-title {
+  color: #000000 !important;
+}
+
+/* Fix hero tagline text visibility - make it darker/more visible */
+.hero .tagline {
+  color: #1e293b !important;
+}
+
+:root[data-theme='dark'] .hero .tagline {
+  color: #e2e8f0 !important;
+}
+
+/* Compact hero section */
+.hero {
+  padding: 2rem 0 !important;
+}
+
+.hero img {
+  max-width: 300px !important;
+  height: auto !important;
+}
+
+.hero .tagline {
+  font-size: 1rem !important;
+  margin-top: 0.5rem !important;
+}
+
+/* Mobile layout */
+@media (max-width: 768px) {
+  .hero img {
+    max-width: 120px !important;
+  }
+
+  .hero h1 {
+    font-size: 1.5rem !important;
+  }
+
+  .hero .tagline {
+    font-size: 0.8rem !important;
+  }
+}
+
+/* Compact cards */
+.card {
+  padding: 0.75rem !important;
+}
+
+.card .title {
+  font-size: 1rem !important;
+  margin-bottom: 0.25rem !important;
+}
+
+.card .body {
+  font-size: 0.875rem !important;
+}
+
+.sl-link-card {
+  padding: 0.75rem !important;
+}
+
+/* Tighter card grid */
+.card-grid {
+  gap: 0.75rem !important;
+}
+
+/* Screenshot Carousel */
+.carousel-container {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.carousel {
+  display: flex;
+  transition: transform 0.5s ease-in-out;
+}
+
+.carousel-slide {
+  min-width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.carousel-slide img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  transition: opacity 0.2s;
+  cursor: pointer;
+}
+
+.carousel-slide img:hover {
+  opacity: 0.9;
+}
+
+/* Hide carousel controls in main view */
+.carousel-nav,
+.carousel-dots {
+  display: none !important;
+}
+
+.carousel-label {
+  text-align: center;
+  padding: 0.5rem;
+  color: #94a3b8;
+  font-size: 0.875rem;
+}
+
+
+/* Mobile carousel - show 3 screenshots side by side */
+.carousel-mobile .carousel-slide {
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+  justify-content: center;
+  align-items: flex-end;
+}
+
+.carousel-mobile .carousel-slide img {
+  max-width: 100%;
+  max-height: 500px;
+  border: 1px solid #334155;
+  object-fit: contain;
+  object-position: bottom;
+}
+
+.mobile-screenshot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 30%;
+}
+
+.screenshot-label {
+  text-align: center;
+  padding: 0.5rem 0;
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+/* Lightbox */
+.lightbox {
+  display: none;
+  position: fixed;
+  z-index: 999999;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.95);
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+}
+
+.lightbox.active ~ header,
+.lightbox.active ~ * header,
+header:has(~ .lightbox.active) {
+  z-index: 1 !important;
+}
+
+/* Force header below lightbox */
+body:has(.lightbox.active) header {
+  z-index: 1 !important;
+}
+
+body:has(.lightbox.active) .header {
+  z-index: 1 !important;
+}
+
+.lightbox.active {
+  display: flex;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 20px;
+  right: 30px;
+  color: #fff;
+  font-size: 40px;
+  font-weight: bold;
+  cursor: pointer;
+  z-index: 1000000;
+  transition: color 0.2s;
+}
+
+.lightbox-close:hover {
+  color: #3b82f6;
+}
+
+.lightbox-content {
+  max-width: 90%;
+  max-height: 85%;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+#lightbox-caption {
+  color: #94a3b8;
+  padding: 1rem;
+  text-align: center;
+  font-size: 0.875rem;
+}
+
+.lightbox-trigger {
+  cursor: pointer;
+}
+
+.lightbox-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(59, 130, 246, 0.8);
+  color: white;
+  border: none;
+  padding: 1rem 1.25rem;
+  cursor: pointer;
+  font-size: 1.5rem;
+  border-radius: 4px;
+  z-index: 1000001;
+  transition: background 0.2s;
+}
+
+.lightbox-nav:hover {
+  background: rgba(59, 130, 246, 1);
+}
+
+.lightbox-prev {
+  left: 20px;
+}
+
+.lightbox-next {
+  right: 20px;
+}

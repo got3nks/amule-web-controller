@@ -449,8 +449,8 @@ const DownloadsView = () => {
     },
       h(Button, { variant: 'warning', onClick: handleBatchPause, icon: 'pause', iconSize: 14 }, 'Pause'),
       h(Button, { variant: 'success', onClick: handleBatchResume, icon: 'play', iconSize: 14 }, 'Resume'),
-      h(Tooltip, { content: !selectedClientTypes.has('rtorrent') ? 'Stop is only available for BitTorrent downloads' : 'Stop selected torrents', position: 'top' },
-        h(Button, { variant: 'secondary', onClick: handleBatchStop, icon: 'stop', iconSize: 14, disabled: !selectedClientTypes.has('rtorrent') }, 'Stop')
+      h(Tooltip, { content: !selectedClientTypes.has('rtorrent') && !selectedClientTypes.has('qbittorrent') ? 'Stop is only available for BitTorrent downloads' : 'Stop selected torrents', position: 'top' },
+        h(Button, { variant: 'secondary', onClick: handleBatchStop, icon: 'stop', iconSize: 14, disabled: !selectedClientTypes.has('rtorrent') && !selectedClientTypes.has('qbittorrent') }, 'Stop')
       ),
       h(Button, { variant: 'orange', onClick: handleBatchSetCategory, icon: 'folder', iconSize: 14 }, 'Edit Category'),
       h(Button, { variant: batchCopyStatus === 'success' ? 'success' : 'purple', onClick: handleBatchExport, disabled: batchCopyStatus === 'success', icon: batchCopyStatus === 'success' ? 'check' : 'share', iconSize: 14 }, batchCopyStatus === 'success' ? 'Copied!' : 'Export Links'),

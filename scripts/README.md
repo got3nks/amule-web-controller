@@ -7,6 +7,7 @@ This directory contains an example script for the Custom Event Script feature, w
 ## Files
 
 - **`custom.sh`** - Example script showing how to handle events
+- **`log-to-file.sh`** - Debug script that logs all received data to `server/logs/events.log`
 
 ## When to Use Custom Scripts
 
@@ -71,11 +72,102 @@ When an event occurs, your script receives:
 
 | Event | Trigger | Additional JSON Fields |
 |-------|---------|----------------------|
-| `downloadAdded` | New download started | size |
-| `downloadFinished` | Download completed | size, downloaded, uploaded, ratio, trackerDomain |
-| `categoryChanged` | Category changed | oldCategory, newCategory |
+| `downloadAdded` | New download started | size, username |
+| `downloadFinished` | Download completed | size, downloaded, uploaded, ratio, trackerDomain, path, multiFile |
+| `categoryChanged` | Category changed | oldCategory, newCategory, path, multiFile |
 | `fileMoved` | File moved | sourcePath, destPath |
-| `fileDeleted` | File deleted | deletedFromDisk |
+| `fileDeleted` | File deleted | deletedFromDisk, path, multiFile |
+
+**Common fields** (present in all events): `hash`, `filename`, `clientType`
+
+The `path` field contains the full path to the file (or the content directory for multi-file torrents). When `multiFile` is `true`, `path` points to a directory containing multiple files.
+
+## JSON Payload Examples
+
+### downloadAdded
+
+```json
+{
+  "hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "filename": "ubuntu-24.04-desktop-amd64.iso",
+  "size": 6114770944,
+  "username": "admin",
+  "clientType": "qbittorrent"
+}
+```
+
+### downloadFinished
+
+```json
+{
+  "hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "filename": "ubuntu-24.04-desktop-amd64.iso",
+  "size": 6114770944,
+  "clientType": "qbittorrent",
+  "downloaded": 6114770944,
+  "uploaded": 1528692736,
+  "ratio": 0.25,
+  "trackerDomain": "torrent.ubuntu.com",
+  "path": "/downloads/ubuntu-24.04-desktop-amd64.iso",
+  "multiFile": false
+}
+```
+
+Multi-file torrent example (path points to the content directory):
+
+```json
+{
+  "hash": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+  "filename": "My.Series.S01.Complete",
+  "size": 15032385536,
+  "clientType": "rtorrent",
+  "downloaded": 15032385536,
+  "uploaded": 7516192768,
+  "ratio": 0.5,
+  "trackerDomain": "tracker.example.com",
+  "path": "/downloads/My.Series.S01.Complete",
+  "multiFile": true
+}
+```
+
+### categoryChanged
+
+```json
+{
+  "hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "filename": "ubuntu-24.04-desktop-amd64.iso",
+  "clientType": "rtorrent",
+  "oldCategory": "Default",
+  "newCategory": "Linux ISOs",
+  "path": "/downloads/ubuntu-24.04-desktop-amd64.iso",
+  "multiFile": false
+}
+```
+
+### fileDeleted
+
+```json
+{
+  "hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "filename": "old-file.zip",
+  "clientType": "qbittorrent",
+  "deletedFromDisk": true,
+  "path": "/downloads/old-file.zip",
+  "multiFile": false
+}
+```
+
+### fileMoved
+
+```json
+{
+  "hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "filename": "movie.mkv",
+  "clientType": "rtorrent",
+  "sourcePath": "/downloads/movie.mkv",
+  "destPath": "/media/movies/movie.mkv"
+}
+```
 
 ## Examples
 
@@ -97,13 +189,17 @@ echo "[$EVENT_TYPE] $FILENAME ($SIZE bytes)"
 ```bash
 #!/bin/bash
 if [ "$1" = "downloadFinished" ]; then
-    FILENAME="$EVENT_FILENAME"
+    EVENT_JSON=$(cat)
+    FILEPATH=$(echo "$EVENT_JSON" | jq -r '.path')
+    MULTI=$(echo "$EVENT_JSON" | jq -r '.multiFile')
 
-    # Extract archives
-    case "$FILENAME" in
-        *.rar) unrar x "/downloads/$FILENAME" /extracted/ ;;
-        *.zip) unzip "/downloads/$FILENAME" -d /extracted/ ;;
-    esac
+    # Extract archives (single-file only)
+    if [ "$MULTI" = "false" ] && [ "$FILEPATH" != "null" ]; then
+        case "$FILEPATH" in
+            *.rar) unrar x "$FILEPATH" /extracted/ ;;
+            *.zip) unzip "$FILEPATH" -d /extracted/ ;;
+        esac
+    fi
 fi
 ```
 
@@ -130,7 +226,7 @@ echo "$(date -Iseconds) [$1] $EVENT_FILENAME" >> /var/log/downloads.log
 ### Test Script Manually
 
 ```bash
-echo '{"hash":"abc123","filename":"test.mkv","clientType":"qbittorrent"}' | \
+echo '{"hash":"abc123","filename":"test.mkv","clientType":"qbittorrent","path":"/downloads/test.mkv","multiFile":false}' | \
     ./scripts/custom.sh downloadFinished
 ```
 

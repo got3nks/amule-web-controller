@@ -26,7 +26,7 @@ const { createElement: h } = React;
  */
 const Header = ({ theme, onToggleTheme, isLandscape, onNavigateHome, onOpenAbout, authEnabled = false, onLogout }) => {
   const { fontSize, fontSizeConfig, cycleFontSize } = useFontSize();
-  const { isAmuleEnabled, isRtorrentEnabled, toggleClient } = useClientFilter();
+  const { isAmuleEnabled, isBittorrentEnabled, toggleClient } = useClientFilter();
   const { bothClientsConnected } = useStaticData();
   const { headerHidden } = useStickyHeader();
 
@@ -67,20 +67,20 @@ const Header = ({ theme, onToggleTheme, isLandscape, onNavigateHome, onOpenAbout
           ),
           // rtorrent/BT toggle
           h(Tooltip, {
-            content: isRtorrentEnabled ? 'Hide BT data' : 'Show BT data',
+            content: isBittorrentEnabled ? 'Hide BT data' : 'Show BT data',
             position: 'bottom',
             showOnMobile: false
           },
             h('button', {
               onClick: () => toggleClient('rtorrent'),
               className: `px-1.5 sm:px-2 py-0.5 sm:py-1 text-[10px] sm:text-xs font-bold rounded-r transition-all flex items-center gap-1 ${
-                isRtorrentEnabled
+                isBittorrentEnabled
                   ? 'bg-orange-500 text-white'
                   : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500'
               }`,
-              title: isRtorrentEnabled ? 'BT enabled' : 'BT disabled'
+              title: isBittorrentEnabled ? 'BT enabled' : 'BT disabled'
             },
-              h(ClientIcon, { client: 'rtorrent', size: 14, title: '' }),
+              h(ClientIcon, { client: 'bittorrent', size: 14, title: '' }),
               'BT'
             )
           )

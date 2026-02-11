@@ -46,6 +46,16 @@ const TestSummary = ({ testResults, formData, showDetails = false }) => {
     }
   }
 
+  // Count qbittorrent (only if enabled)
+  if (formData?.qbittorrent?.enabled && results.qbittorrent) {
+    summary.total++;
+    if (results.qbittorrent.success === false) {
+      summary.failed++;
+    } else if (results.qbittorrent.success) {
+      summary.passed++;
+    }
+  }
+
   // Count directories
   if (results.directories) {
     if (results.directories.data) {
@@ -133,9 +143,19 @@ const TestSummary = ({ testResults, formData, showDetails = false }) => {
     // rtorrent result
     if (formData?.rtorrent?.enabled && results.rtorrent && !results.rtorrent.success) {
       detailedResults.push({
-        label: 'rtorrent Connection',
+        label: 'rTorrent Connection',
         success: false,
         message: results.rtorrent.message || results.rtorrent.error,
+        warning: false
+      });
+    }
+
+    // qbittorrent result
+    if (formData?.qbittorrent?.enabled && results.qbittorrent && !results.qbittorrent.success) {
+      detailedResults.push({
+        label: 'qBittorrent Connection',
+        success: false,
+        message: results.qbittorrent.message || results.qbittorrent.error,
         warning: false
       });
     }

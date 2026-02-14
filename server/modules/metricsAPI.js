@@ -6,7 +6,8 @@
 const BaseModule = require('../lib/BaseModule');
 const timeRange = require('../lib/timeRange');
 const response = require('../lib/responseFormatter');
-const { validateTimeRange } = require('../middleware/validateRequest');
+
+const VALID_RANGES = ['24h', '7d', '30d'];
 
 class MetricsAPI extends BaseModule {
   constructor() {
@@ -145,7 +146,8 @@ class MetricsAPI extends BaseModule {
   // GET /api/metrics/history - coarser granularity for data transfer charts
   getHistory(req, res) {
     try {
-      const { range = '24h' } = req.query;
+      const range = this._validateRange(req, res);
+      if (!range) return;
       const { startTime, endTime, bucketSize } = timeRange.parseTimeRange(range);
       res.json(this._getMetricsData(range, startTime, endTime, bucketSize));
     } catch (err) {
@@ -157,7 +159,8 @@ class MetricsAPI extends BaseModule {
   // GET /api/metrics/speed-history - finer granularity for speed charts
   getSpeedHistory(req, res) {
     try {
-      const { range = '24h' } = req.query;
+      const range = this._validateRange(req, res);
+      if (!range) return;
       const { startTime, endTime, speedBucketSize } = timeRange.parseTimeRange(range);
       res.json(this._getMetricsData(range, startTime, endTime, speedBucketSize));
     } catch (err) {
@@ -169,7 +172,8 @@ class MetricsAPI extends BaseModule {
   // GET /api/metrics/stats - aggregate statistics
   getStats(req, res) {
     try {
-      const { range = '24h' } = req.query;
+      const range = this._validateRange(req, res);
+      if (!range) return;
       const { startTime, endTime } = timeRange.parseTimeRange(range);
       res.json(this._getStatsData(range, startTime, endTime));
     } catch (err) {
@@ -181,7 +185,8 @@ class MetricsAPI extends BaseModule {
   // GET /api/metrics/dashboard - combined endpoint for dashboard views
   getDashboard(req, res) {
     try {
-      const { range = '24h' } = req.query;
+      const range = this._validateRange(req, res);
+      if (!range) return;
       const { startTime, endTime, bucketSize, speedBucketSize } = timeRange.parseTimeRange(range);
 
       res.json({
@@ -195,13 +200,22 @@ class MetricsAPI extends BaseModule {
     }
   }
 
+  // Validate range query parameter, return badRequest if invalid
+  _validateRange(req, res) {
+    const range = req.query.range || '24h';
+    if (!VALID_RANGES.includes(range)) {
+      response.badRequest(res, `range must be one of: ${VALID_RANGES.join(', ')}`);
+      return null;
+    }
+    return range;
+  }
+
   // Register all metrics routes
   registerRoutes(app) {
-    // All metrics routes use validateTimeRange middleware for ?range= parameter
-    app.get('/api/metrics/dashboard', validateTimeRange, (req, res) => this.getDashboard(req, res));
-    app.get('/api/metrics/history', validateTimeRange, (req, res) => this.getHistory(req, res));
-    app.get('/api/metrics/speed-history', validateTimeRange, (req, res) => this.getSpeedHistory(req, res));
-    app.get('/api/metrics/stats', validateTimeRange, (req, res) => this.getStats(req, res));
+    app.get('/api/metrics/dashboard', (req, res) => this.getDashboard(req, res));
+    app.get('/api/metrics/history', (req, res) => this.getHistory(req, res));
+    app.get('/api/metrics/speed-history', (req, res) => this.getSpeedHistory(req, res));
+    app.get('/api/metrics/stats', (req, res) => this.getStats(req, res));
   }
 }
 

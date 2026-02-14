@@ -4,17 +4,72 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-const { createElement: h, useState } = React;
+const { createElement: h, useState, useEffect, useRef, useCallback } = React;
 import { useAuth } from '../../contexts/AuthContext.js';
 import { Icon, Button, Input } from '../common/index.js';
+
+function formatCountdown(seconds) {
+  if (seconds >= 60) {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+  return `${seconds}s`;
+}
 
 export default function LoginView() {
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingDelay, setPendingDelay] = useState(0);
+  const [countdown, setCountdown] = useState(0);
+  const [retryCountdown, setRetryCountdown] = useState(0);
+  const countdownRef = useRef(null);
+  const retryRef = useRef(null);
 
   const { login, error, clearError } = useAuth();
+
+  // Countdown during submission (progressive delay)
+  useEffect(() => {
+    if (countdown <= 0) {
+      clearInterval(countdownRef.current);
+      return;
+    }
+    countdownRef.current = setInterval(() => {
+      setCountdown(c => {
+        if (c <= 1) {
+          clearInterval(countdownRef.current);
+          return 0;
+        }
+        return c - 1;
+      });
+    }, 1000);
+    return () => clearInterval(countdownRef.current);
+  }, [countdown > 0]);
+
+  // Countdown for rate-limited wait
+  useEffect(() => {
+    if (retryCountdown <= 0) {
+      clearInterval(retryRef.current);
+      return;
+    }
+    retryRef.current = setInterval(() => {
+      setRetryCountdown(c => {
+        if (c <= 1) {
+          clearInterval(retryRef.current);
+          return 0;
+        }
+        return c - 1;
+      });
+    }, 1000);
+    return () => clearInterval(retryRef.current);
+  }, [retryCountdown > 0]);
+
+  const handleClearError = useCallback(() => {
+    clearError();
+    setRetryCountdown(0);
+  }, [clearError]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -24,15 +79,30 @@ export default function LoginView() {
     }
 
     setIsSubmitting(true);
-    const success = await login(password, rememberMe);
+    setRetryCountdown(0);
 
-    if (success) {
+    // Start countdown if we know a delay is coming
+    if (pendingDelay > 0) {
+      setCountdown(pendingDelay);
+    }
+
+    const result = await login(password, rememberMe);
+
+    if (result.success) {
       // Redirect to home
       window.location.href = '/';
     } else {
       setIsSubmitting(false);
+      setCountdown(0);
+      setPendingDelay(result.retryDelay || 0);
+
+      if (result.retryAfter > 0) {
+        setRetryCountdown(result.retryAfter);
+      }
     }
   };
+
+  const isFormDisabled = isSubmitting || retryCountdown > 0;
 
   return h('div', { className: 'min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4' },
     h('div', { className: 'max-w-md w-full space-y-8' },
@@ -55,11 +125,14 @@ export default function LoginView() {
             h('div', { className: 'flex items-start' },
               h(Icon, { name: 'warning', size: 20, className: 'text-red-600 dark:text-red-400 mt-0.5 mr-3 flex-shrink-0' }),
               h('div', { className: 'flex-1' },
-                h('p', { className: 'text-sm text-red-800 dark:text-red-200 font-medium' }, error)
+                h('p', { className: 'text-sm text-red-800 dark:text-red-200 font-medium' }, error),
+                retryCountdown > 0 && h('p', { className: 'text-sm text-red-600 dark:text-red-300 mt-1' },
+                  `Try again in ${formatCountdown(retryCountdown)}`
+                )
               ),
               h('button', {
                 type: 'button',
-                onClick: clearError,
+                onClick: handleClearError,
                 className: 'text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-200 ml-3'
               },
                 h(Icon, { name: 'close', size: 16 })
@@ -83,7 +156,7 @@ export default function LoginView() {
                 placeholder: 'Enter your password',
                 required: true,
                 autoFocus: true,
-                disabled: isSubmitting
+                disabled: isFormDisabled
               }),
               h('button', {
                 type: 'button',
@@ -107,7 +180,7 @@ export default function LoginView() {
               checked: rememberMe,
               onChange: (e) => setRememberMe(e.target.checked),
               className: 'h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded cursor-pointer',
-              disabled: isSubmitting
+              disabled: isFormDisabled
             }),
             h('label', {
               htmlFor: 'rememberMe',
@@ -119,7 +192,7 @@ export default function LoginView() {
           h(Button, {
             type: 'submit',
             variant: 'primary',
-            disabled: isSubmitting || !password,
+            disabled: isFormDisabled || !password,
             className: 'w-full justify-center py-3'
           },
             isSubmitting
@@ -134,9 +207,11 @@ export default function LoginView() {
                     h('circle', { className: 'opacity-25', cx: '12', cy: '12', r: '10', stroke: 'currentColor', strokeWidth: '4' }),
                     h('path', { className: 'opacity-75', fill: 'currentColor', d: 'M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z' })
                   ),
-                  'Signing in...'
+                  countdown > 0 ? `Signing in... ${countdown}s` : 'Signing in...'
                 ]
-              : 'Sign in'
+              : retryCountdown > 0
+                ? `Wait ${formatCountdown(retryCountdown)}`
+                : 'Sign in'
           )
         )
       ),

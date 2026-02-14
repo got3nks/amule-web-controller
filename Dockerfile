@@ -12,7 +12,7 @@ FROM node:18-alpine
 
 # Install git (required for npm to install from GitHub)
 # Install python3, pip, jq for event scripting with Apprise
-RUN apk add --no-cache git bash python3 py3-pip jq && \
+RUN apk add --no-cache git bash curl python3 py3-pip jq && \
     pip3 install --no-cache-dir --break-system-packages apprise
 
 # Create app directory

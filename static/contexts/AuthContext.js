@@ -99,15 +99,19 @@ export const AuthProvider = ({ children }) => {
       if (data.success) {
         setIsAuthenticated(true);
         setError(null);
-        return true;
+        return { success: true };
       } else {
         setError(data.message || 'Login failed');
-        return false;
+        return {
+          success: false,
+          retryDelay: data.retryDelay || 0,
+          retryAfter: data.retryAfter || 0
+        };
       }
     } catch (err) {
       console.error('Login error:', err);
       setError('An error occurred during login');
-      return false;
+      return { success: false };
     }
   }, []);
 

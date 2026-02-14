@@ -162,10 +162,11 @@ class AuthManager extends BaseModule {
    * @returns {number} Delay in milliseconds
    */
   getDelayForAttempts(count) {
-    if (count <= 3) return 0;           // No delay for first 3 attempts
-    if (count <= 6) return 2000;        // 2 seconds for attempts 4-6
-    if (count <= 9) return 5000;        // 5 seconds for attempts 7-9
-    return 0;                            // No delay after blocking (will be blocked anyway)
+    if (count < 1) return 0;
+    if (count >= 10) return 0;          // Will be blocked anyway
+    // Exponential growth rounded to whole seconds: ceil(count * 1.5^(count-1) * 0.5)s
+    // 1→1s, 2→2s, 3→4s, 4→7s, 5→13s, 6→23s, 7→40s, 8→69s, 9→116s
+    return Math.ceil(count * Math.pow(1.5, count - 1) * 500 / 1000) * 1000;
   }
 
   /**
@@ -276,6 +277,24 @@ class AuthManager extends BaseModule {
       return sess.authenticated === true;
     } catch (err) {
       this.log('Error validating session:', err.message);
+      return false;
+    }
+  }
+
+  /**
+   * Check if global rate limit is reached (total failed attempts across all IPs)
+   * @returns {boolean} True if global limit is reached
+   */
+  isGlobalLimitReached() {
+    const db = this.getSessionDB();
+    const fifteenMinutesAgo = Date.now() - minutesToMs(15);
+
+    try {
+      const stmt = db.prepare('SELECT COALESCE(SUM(count), 0) as total FROM failed_attempts WHERE last_attempt > ?');
+      const row = stmt.get(fifteenMinutesAgo);
+      return row.total >= 50;
+    } catch (err) {
+      this.log('⚠️  Error checking global rate limit:', err.message);
       return false;
     }
   }

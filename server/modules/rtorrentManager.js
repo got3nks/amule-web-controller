@@ -293,7 +293,7 @@ class RtorrentManager extends BaseModule {
 
       return true;
     } catch (err) {
-      this.log('❌ Failed to connect to rtorrent:', err.message);
+      this.log('❌ Failed to connect to rtorrent:', logger.errorDetail(err));
       this.client = null;
       this.stopTrackerRefresh();
       return false;
@@ -392,9 +392,10 @@ class RtorrentManager extends BaseModule {
       this.lastDownloads = downloads;
       return downloads;
     } catch (err) {
-      this.log('❌ Error fetching rtorrent downloads:', err.message);
+      this.log('❌ Error fetching rtorrent downloads:', logger.errorDetail(err));
       // Connection might be lost, mark as disconnected
-      if (err.message.includes('ECONNREFUSED') || err.message.includes('socket hang up')) {
+      const errDetail = logger.errorDetail(err);
+      if (errDetail.includes('ECONNREFUSED') || errDetail.includes('socket hang up')) {
         this.client = null;
         this.scheduleReconnect();
       }
@@ -501,7 +502,7 @@ class RtorrentManager extends BaseModule {
         }
       }
     } catch (err) {
-      this.log('❌ Error refreshing tracker/peer cache:', err.message);
+      this.log('❌ Error refreshing tracker/peer cache:', logger.errorDetail(err));
     }
   }
 
@@ -519,7 +520,7 @@ class RtorrentManager extends BaseModule {
       this.lastStats = stats;
       return stats;
     } catch (err) {
-      this.log('❌ Error fetching rtorrent stats:', err.message);
+      this.log('❌ Error fetching rtorrent stats:', logger.errorDetail(err));
       return this.lastStats || { downloadSpeed: 0, uploadSpeed: 0, downloadTotal: 0, uploadTotal: 0 };
     }
   }
@@ -536,7 +537,7 @@ class RtorrentManager extends BaseModule {
     try {
       return await this.client.getDefaultDirectory();
     } catch (err) {
-      this.log('❌ Error fetching rtorrent default directory:', err.message);
+      this.log('❌ Error fetching rtorrent default directory:', logger.errorDetail(err));
       return '';
     }
   }
@@ -745,7 +746,7 @@ class RtorrentManager extends BaseModule {
       try {
         this.client.disconnect();
       } catch (err) {
-        this.log('⚠️  Error during rtorrent client shutdown:', err.message);
+        this.log('⚠️  Error during rtorrent client shutdown:', logger.errorDetail(err));
       }
       this.client = null;
     }

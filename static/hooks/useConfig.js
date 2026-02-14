@@ -146,6 +146,22 @@ export const useConfig = () => {
   }, []);
 
   /**
+   * Fetch available network interfaces for bind address selection
+   */
+  const fetchInterfaces = useCallback(async () => {
+    try {
+      const response = await fetch('/api/config/interfaces');
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      return await response.json();
+    } catch (err) {
+      setError(err.message);
+      return [];
+    }
+  }, []);
+
+  /**
    * Clear test results
    */
   const clearTestResults = useCallback(() => {
@@ -172,6 +188,7 @@ export const useConfig = () => {
     fetchStatus,
     fetchCurrent,
     fetchDefaults,
+    fetchInterfaces,
     testConfig,
     saveConfig,
     clearTestResults,

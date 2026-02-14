@@ -189,6 +189,19 @@ class Logger {
   }
 
   /**
+   * Extract detailed error message including cause chain
+   * Node.js fetch() wraps the real error (ECONNRESET, ECONNREFUSED, etc.) in err.cause
+   * @param {Error} err - Error object
+   * @returns {string} Detailed error message
+   */
+  errorDetail(err) {
+    if (err.cause) {
+      return `${err.message} (${err.cause.code || err.cause.message})`;
+    }
+    return err.message;
+  }
+
+  /**
    * Close the log stream
    */
   close() {

@@ -10,6 +10,28 @@ const RtorrentHandler = require('./rtorrent/RtorrentHandler');
 const QBittorrentClient = require('./qbittorrent/QBittorrentClient');
 const ProwlarrHandler = require('./prowlarr/ProwlarrHandler');
 const { checkDirectoryAccess } = require('./pathUtils');
+const logger = require('./logger');
+
+/**
+ * Classify a network error into a user-friendly message
+ * Checks both err.message and err.cause for error codes
+ */
+function classifyNetworkError(err) {
+  const msg = err.message || '';
+  const causeCode = err.cause?.code || '';
+  const causeMsg = err.cause?.message || '';
+
+  if (err.name === 'AbortError' || msg.includes('timeout') || causeCode === 'UND_ERR_CONNECT_TIMEOUT') {
+    return 'Connection timeout - server not reachable';
+  }
+  if (msg.includes('ECONNREFUSED') || causeCode === 'ECONNREFUSED') {
+    return 'Connection refused - server not running or wrong port';
+  }
+  if (msg.includes('ENOTFOUND') || causeCode === 'ENOTFOUND') {
+    return 'Host not found - check URL';
+  }
+  return logger.errorDetail(err);
+}
 
 /**
  * Test directory access (read and write permissions)
@@ -121,7 +143,7 @@ async function testAmuleConnection(host, port, password) {
 
     return result;
   } catch (err) {
-    result.error = err.message;
+    result.error = classifyNetworkError(err);
 
     // Try to clean up connection
     if (client) {
@@ -196,7 +218,7 @@ async function testRtorrentConnection(host, port, rpcPath, username, password) {
 
     return result;
   } catch (err) {
-    result.error = err.message;
+    result.error = classifyNetworkError(err);
 
     // Try to clean up connection
     if (client) {
@@ -267,7 +289,7 @@ async function testQbittorrentConnection(host, port, username, password, useSsl)
 
     return result;
   } catch (err) {
-    result.error = err.message;
+    result.error = classifyNetworkError(err);
 
     // Try to clean up connection
     if (client) {
@@ -339,15 +361,7 @@ async function testArrAPI(serviceName, url, apiKey) {
     result.success = true;
     return result;
   } catch (err) {
-    if (err.name === 'AbortError' || err.message.includes('timeout')) {
-      result.error = 'Connection timeout - server not reachable';
-    } else if (err.message.includes('ECONNREFUSED')) {
-      result.error = 'Connection refused - server not running or wrong port';
-    } else if (err.message.includes('ENOTFOUND')) {
-      result.error = 'Host not found - check URL';
-    } else {
-      result.error = err.message;
-    }
+    result.error = classifyNetworkError(err);
     return result;
   }
 }
@@ -427,15 +441,7 @@ async function testProwlarrAPI(url, apiKey) {
 
     return result;
   } catch (err) {
-    if (err.name === 'AbortError' || err.message.includes('timeout')) {
-      result.error = 'Connection timeout - server not reachable';
-    } else if (err.message.includes('ECONNREFUSED')) {
-      result.error = 'Connection refused - server not running or wrong port';
-    } else if (err.message.includes('ENOTFOUND')) {
-      result.error = 'Host not found - check URL';
-    } else {
-      result.error = err.message;
-    }
+    result.error = classifyNetworkError(err);
     return result;
   }
 }

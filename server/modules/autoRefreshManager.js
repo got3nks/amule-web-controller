@@ -6,6 +6,7 @@
  */
 
 const config = require('./config');
+const logger = require('../lib/logger');
 const BaseModule = require('../lib/BaseModule');
 const { getDiskSpace } = require('../lib/diskSpace');
 const { getCpuUsage } = require('../lib/cpuUsage');
@@ -63,7 +64,7 @@ class AutoRefreshManager extends BaseModule {
         try {
           rtorrentStats = await rtorrentManager.getGlobalStats();
         } catch (err) {
-          this.log('⚠️  Error fetching rtorrent stats:', err.message);
+          this.log('⚠️  Error fetching rtorrent stats:', logger.errorDetail(err));
         }
       }
 
@@ -73,7 +74,7 @@ class AutoRefreshManager extends BaseModule {
         try {
           qbittorrentStats = await qbittorrentManager.getGlobalStats();
         } catch (err) {
-          this.log('⚠️  Error fetching qBittorrent stats:', err.message);
+          this.log('⚠️  Error fetching qBittorrent stats:', logger.errorDetail(err));
         }
       }
 
@@ -106,7 +107,7 @@ class AutoRefreshManager extends BaseModule {
 
           this.metricsDB.insertMetric(uploadSpeed, downloadSpeed, totalUploaded, totalDownloaded, rtMetrics, qbMetrics);
         } catch (err) {
-          this.log('⚠️  Error saving metrics:', err.message);
+          this.log('⚠️  Error saving metrics:', logger.errorDetail(err));
         }
       }
 
@@ -177,12 +178,12 @@ class AutoRefreshManager extends BaseModule {
           const dataDir = config.DATA_DIR || './server/data';
           combinedStats.diskSpace = await getDiskSpace(dataDir);
         } catch (err) {
-          this.log('⚠️  Error getting disk space:', err.message);
+          this.log('⚠️  Error getting disk space:', logger.errorDetail(err));
         }
         try {
           combinedStats.cpuUsage = await getCpuUsage();
         } catch (err) {
-          this.log('⚠️  Error getting CPU usage:', err.message);
+          this.log('⚠️  Error getting CPU usage:', logger.errorDetail(err));
         }
         batchUpdate.stats = combinedStats;
 
@@ -214,7 +215,7 @@ class AutoRefreshManager extends BaseModule {
 
     } catch (err) {
       // Client disconnected during stats fetch - will retry on next interval
-      this.log('⚠️  Could not fetch stats:', err.message);
+      this.log('⚠️  Could not fetch stats:', logger.errorDetail(err));
     } finally {
       this.refreshInterval = setTimeout(() => this.autoRefreshLoop(), config.AUTO_REFRESH_INTERVAL);
     }
@@ -405,7 +406,7 @@ class AutoRefreshManager extends BaseModule {
       // Batch update the database
       this.downloadHistoryDB.batchUpdateFromLiveData(activeHashes, completedHashes, metadataMap);
     } catch (err) {
-      this.log('⚠️  Error updating history status:', err.message);
+      this.log('⚠️  Error updating history status:', logger.errorDetail(err));
     }
   }
 
@@ -443,7 +444,7 @@ class AutoRefreshManager extends BaseModule {
         const deleted = this.metricsDB.cleanupOldData(config.CLEANUP_DAYS);
         this.log(`🧹 Cleaned up ${deleted} old metrics records (older than ${config.CLEANUP_DAYS} days)`);
       } catch (err) {
-        this.log('⚠️  Error cleaning up metrics:', err.message);
+        this.log('⚠️  Error cleaning up metrics:', logger.errorDetail(err));
       }
     }
 
@@ -458,7 +459,7 @@ class AutoRefreshManager extends BaseModule {
           }
         }
       } catch (err) {
-        this.log('⚠️  Error cleaning up history:', err.message);
+        this.log('⚠️  Error cleaning up history:', logger.errorDetail(err));
       }
     }
   }

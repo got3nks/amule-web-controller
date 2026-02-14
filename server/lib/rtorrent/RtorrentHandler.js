@@ -115,7 +115,7 @@ class RtorrentHandler {
       this.connected = false;
       return {
         success: false,
-        error: error.message || 'Connection failed'
+        error: error.cause ? `${error.message} (${error.cause.code || error.cause.message})` : (error.message || 'Connection failed')
       };
     }
   }

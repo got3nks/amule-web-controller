@@ -77,7 +77,7 @@ function rateLimited(res, message = 'Too many requests', retryAfter = null) {
   if (retryAfter) {
     res.setHeader('Retry-After', retryAfter);
   }
-  error(res, message, 429);
+  error(res, message, 429, { retryAfter });
 }
 
 /**

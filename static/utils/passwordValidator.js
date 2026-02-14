@@ -26,7 +26,7 @@ export function validatePassword(password) {
     errors.push('Contains at least one letter');
   }
 
-  if (!/[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/.test(password)) {
+  if (!/[^a-zA-Z0-9]/.test(password)) {
     errors.push('Contains at least one special character');
   }
 

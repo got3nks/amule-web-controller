@@ -8,7 +8,7 @@ import React from 'https://esm.sh/react@18.2.0';
 const { createElement: h, useState, useEffect } = React;
 
 import { useConfig } from '../../hooks/index.js';
-import { LoadingSpinner, Icon, AlertBox, Button } from '../common/index.js';
+import { LoadingSpinner, Icon, AlertBox, Button, Select } from '../common/index.js';
 import {
   ConfigField,
   TestButton,
@@ -34,6 +34,7 @@ const SetupWizardView = ({ onComplete }) => {
     error,
     fetchDefaults,
     fetchStatus,
+    fetchInterfaces,
     testConfig,
     saveConfig,
     clearTestResults
@@ -47,6 +48,7 @@ const SetupWizardView = ({ onComplete }) => {
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [securityValidationError, setSecurityValidationError] = useState(null);
   const [stepValidationError, setStepValidationError] = useState(null);
+  const [interfaces, setInterfaces] = useState([{ value: '0.0.0.0', label: 'All Interfaces (0.0.0.0)' }]);
 
   const steps = ['Welcome', 'Security', 'aMule', 'BitTorrent', 'Directories', 'Integrations', 'Review'];
 
@@ -54,6 +56,7 @@ const SetupWizardView = ({ onComplete }) => {
   useEffect(() => {
     fetchStatus();
     fetchDefaults();
+    fetchInterfaces().then(data => { if (data && data.length) setInterfaces(data); });
   }, []);
 
   // Initialize form data from defaults
@@ -394,9 +397,11 @@ const SetupWizardView = ({ onComplete }) => {
       });
 
       // Success! Reload page to initialize services
+      // Delay longer if bind address changed so user can see the restart warning
+      const needsRestart = formData.server.host && formData.server.host !== '0.0.0.0';
       setTimeout(() => {
         window.location.reload();
-      }, 1000);
+      }, needsRestart ? 4000 : 1000);
     } catch (err) {
       setSaveError(err.message);
       setIsSaving(false);
@@ -474,8 +479,25 @@ const SetupWizardView = ({ onComplete }) => {
     const passwordMismatch = formData.server.auth.enabled && formData.server.auth.password !== passwordConfirm;
 
     return h('div', {},
-      h('h2', { className: 'text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2' }, 'Web Interface Security'),
-      h('p', { className: 'text-gray-600 dark:text-gray-400 mb-6' }, 'Protect your aMuTorrent web interface with password authentication'),
+      h('h2', { className: 'text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2' }, 'Server & Security'),
+      h('p', { className: 'text-gray-600 dark:text-gray-400 mb-6' }, 'Configure server binding and protect your web interface with password authentication'),
+
+      h(ConfigField, {
+        label: 'Bind Address',
+        description: 'Network interface to listen on. Use 127.0.0.1 to restrict to localhost only.',
+        fromEnv: meta?.fromEnv.host
+      },
+        h(Select, {
+          value: formData.server.host || '0.0.0.0',
+          onChange: (e) => updateField('server', 'host', e.target.value),
+          options: interfaces.some(i => i.value === (formData.server.host || '0.0.0.0'))
+            ? interfaces
+            : [...interfaces, { value: formData.server.host, label: `Custom (${formData.server.host})` }],
+          disabled: meta?.fromEnv.host
+        })
+      ),
+
+      h('hr', { className: 'my-6 border-gray-200 dark:border-gray-700' }),
 
       h(EnableToggle, {
         label: 'Enable Authentication',
@@ -506,7 +528,7 @@ const SetupWizardView = ({ onComplete }) => {
                 h('li', {}, 'At least 8 characters'),
                 h('li', {}, 'Contains at least one digit'),
                 h('li', {}, 'Contains at least one letter'),
-                h('li', {}, 'Contains at least one special character (!@#$%^&*()_+-=[]{}|;:,.<>?)')
+                h('li', {}, 'Contains at least one special character')
               )
             )
           ),
@@ -1107,7 +1129,11 @@ const SetupWizardView = ({ onComplete }) => {
       // Server
       h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700' },
         h('h3', { className: 'font-semibold text-gray-900 dark:text-gray-100 mb-2' }, 'Server'),
-        h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Port: ${formData.server.port}`)
+        h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Bind Address: ${formData.server.host || '0.0.0.0'}`),
+        h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Port: ${formData.server.port}`),
+        (formData.server.host && formData.server.host !== '0.0.0.0') && h(AlertBox, { type: 'warning', className: 'mt-2' },
+          h('p', {}, 'The bind address has been changed from the default. A server restart is required after setup for the new bind address to take effect.')
+        )
       ),
 
       // Authentication
@@ -1203,9 +1229,14 @@ const SetupWizardView = ({ onComplete }) => {
     ),
 
     isSaving && h(AlertBox, { type: 'success', className: 'mt-4' },
-      h('p', { className: 'flex items-center gap-2' },
-        h(LoadingSpinner, { size: 20 }),
-        'Saving configuration and initializing services...'
+      h('div', {},
+        h('p', { className: 'flex items-center gap-2' },
+          h(LoadingSpinner, { size: 20 }),
+          'Saving configuration and initializing services...'
+        ),
+        (formData.server.host && formData.server.host !== '0.0.0.0') && h('p', { className: 'mt-2 font-medium' },
+          `Restart the server for the bind address (${formData.server.host}) to take effect.`
+        )
       )
     )
   );

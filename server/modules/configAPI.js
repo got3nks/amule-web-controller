@@ -4,6 +4,7 @@
  */
 
 const express = require('express');
+const os = require('os');
 const path = require('path');
 const BaseModule = require('../lib/BaseModule');
 const config = require('./config');
@@ -39,6 +40,7 @@ class ConfigAPI extends BaseModule {
     if (useConfigCheck) {
       // For getCurrent - check if values come from env and are not overridden
       return {
+        host: config.isFromEnv('server.host'),
         port: config.isFromEnv('server.port'),
         amuleEnabled: config.isFromEnv('amule.enabled'),
         amuleHost: config.isFromEnv('amule.host'),
@@ -71,6 +73,7 @@ class ConfigAPI extends BaseModule {
     } else {
       // For getDefaults - check environment variables directly
       return {
+        host: !!process.env.BIND_ADDRESS,
         port: !!process.env.PORT,
         amuleEnabled: process.env.AMULE_ENABLED !== undefined,
         amuleHost: !!process.env.AMULE_HOST,
@@ -143,6 +146,35 @@ class ConfigAPI extends BaseModule {
   // ==========================================================================
   // API ENDPOINTS
   // ==========================================================================
+
+  /**
+   * GET /api/config/interfaces
+   * Returns available network interfaces for bind address selection
+   */
+  async getInterfaces(req, res) {
+    try {
+      const interfaces = os.networkInterfaces();
+      const result = [
+        { value: '0.0.0.0', label: 'All Interfaces (0.0.0.0)' }
+      ];
+
+      for (const [name, addrs] of Object.entries(interfaces)) {
+        for (const addr of addrs) {
+          if (addr.family === 'IPv4' && !addr.internal) {
+            result.push({ value: addr.address, label: `${name} (${addr.address})` });
+          }
+        }
+      }
+
+      // Add loopback last
+      result.push({ value: '127.0.0.1', label: 'Loopback (127.0.0.1)' });
+
+      res.json(result);
+    } catch (err) {
+      this.log('❌ Error getting network interfaces:', err.message);
+      response.serverError(res, 'Failed to get network interfaces');
+    }
+  }
 
   /**
    * GET /api/config/status
@@ -510,6 +542,9 @@ class ConfigAPI extends BaseModule {
 
     // All routes use JSON
     router.use(express.json());
+
+    // GET /api/config/interfaces - Get available network interfaces
+    router.get('/interfaces', this.getInterfaces.bind(this));
 
     // GET /api/config/status - Check first-run status
     router.get('/status', this.getStatus.bind(this));

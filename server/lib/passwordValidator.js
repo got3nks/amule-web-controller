@@ -23,8 +23,8 @@ function validatePassword(password) {
     errors.push('Password must contain at least one letter');
   }
 
-  if (!/[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/.test(password)) {
-    errors.push('Password must contain at least one special character (!@#$%^&*()_+-=[]{}|;:,.<>?)');
+  if (!/[^a-zA-Z0-9]/.test(password)) {
+    errors.push('Password must contain at least one special character');
   }
 
   return {

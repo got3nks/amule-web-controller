@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.3] - Configurable Bind Address & Security Hardening
+
+### ✨ Added
+
+- **Configurable Bind Address** - New `BIND_ADDRESS` env var and `server.host` config field to control which network interface the server listens on (default: `0.0.0.0`). Select dropdown in Settings and Setup Wizard shows detected interfaces. Restart warning shown when changed.
+- **Network Interfaces API** - New `GET /api/config/interfaces` endpoint returns available IPv4 network interfaces for bind address selection
+- **Global Rate Limit** - Second layer of brute force protection: 50 failed login attempts across all IPs within 15 minutes triggers lockout, defending against IPv6 rotation attacks
+- **Login Delay Countdown** - Live countdown timer on login button during server-side delay; countdown also shown in error message when rate-limited (429)
+- **Exponential Login Delay** - Replace fixed delay tiers with exponential formula (`count * 1.5^(count-1) * 500ms`) starting from first failed attempt
+- **curl in Docker Image** - Added `curl` to the Docker image for custom scripting use
+
+### 🐛 Fixed
+
+- **Login Delay Rounding** - Round login delay to whole seconds for clean UI countdown alignment
+- **Error Logging** - Improved error logging with cause detail for all download clients
+- **Website Carousel** - Fixed slide counts after screenshot cleanup
+
+### 🔧 Changed
+
+- **Password Validator** - Broadened special character validation to accept any non-alphanumeric character
+- **Request Validation** - Removed `validateRequest` middleware, inlined validation into `authAPI` and `metricsAPI`
+
+---
+
 ## [3.1.2] - UI Polish & Fixes
 
 ### ✨ Added

@@ -10,7 +10,7 @@ const { createElement: h, useState, useEffect } = React;
 
 import { useConfig } from '../../hooks/index.js';
 import { useAppState } from '../../contexts/AppStateContext.js';
-import { LoadingSpinner, AlertBox, IconButton, Input } from '../common/index.js';
+import { LoadingSpinner, AlertBox, IconButton, Input, Select } from '../common/index.js';
 import DirectoryBrowserModal from '../modals/DirectoryBrowserModal.js';
 import {
   ConfigSection,
@@ -41,6 +41,7 @@ const SettingsView = () => {
     error,
     fetchCurrent,
     fetchStatus,
+    fetchInterfaces,
     testConfig,
     saveConfig,
     clearTestResults,
@@ -68,11 +69,13 @@ const SettingsView = () => {
     prowlarr: false
   });
   const [showScriptBrowser, setShowScriptBrowser] = useState(false);
+  const [interfaces, setInterfaces] = useState([{ value: '0.0.0.0', label: 'All Interfaces (0.0.0.0)' }]);
 
   // Load current configuration on mount
   useEffect(() => {
     fetchStatus();
     fetchCurrent();
+    fetchInterfaces().then(data => { if (data && data.length) setInterfaces(data); });
   }, []);
 
   // Initialize form data when config is loaded
@@ -514,6 +517,25 @@ const SettingsView = () => {
         h('p', {}, 'Changing the port requires updating the Docker port mapping and restarting the container.')
       ),
 
+      h(ConfigField, {
+        label: 'Bind Address',
+        description: 'Network interface to listen on. Use 127.0.0.1 to restrict to localhost only.',
+        fromEnv: meta?.fromEnv.host
+      },
+        h(Select, {
+          value: formData.server.host || '0.0.0.0',
+          onChange: (e) => updateField('server', 'host', e.target.value),
+          options: interfaces.some(i => i.value === (formData.server.host || '0.0.0.0'))
+            ? interfaces
+            : [...interfaces, { value: formData.server.host, label: `Custom (${formData.server.host})` }],
+          disabled: meta?.fromEnv.host
+        })
+      ),
+      (formData.server.host || '0.0.0.0') !== (currentConfig?.server?.host || '0.0.0.0') && h(AlertBox, { type: 'warning' },
+        h('p', {}, 'Changing the bind address requires a server restart to take effect.',
+          isDocker ? ' Update your Docker configuration and restart the container.' : '')
+      ),
+
       h('hr', { className: 'my-4 border-gray-200 dark:border-gray-700' }),
 
       h(EnableToggle, {
@@ -542,7 +564,7 @@ const SettingsView = () => {
                 h('li', {}, 'At least 8 characters'),
                 h('li', {}, 'Contains at least one digit'),
                 h('li', {}, 'Contains at least one letter'),
-                h('li', {}, 'Contains at least one special character (!@#$%^&*()_+-=[]{}|;:,.<>?)')
+                h('li', {}, 'Contains at least one special character')
               )
             )
           ),

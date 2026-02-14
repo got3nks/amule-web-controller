@@ -30,6 +30,7 @@ const CLEANUP_HOUR = 3;              // Run cleanup at 3 AM
  */
 const ENV_VAR_MAP = {
   PORT: { path: 'server.port', type: 'int' },
+  BIND_ADDRESS: { path: 'server.host', type: 'string' },
   WEB_AUTH_ENABLED: { path: 'server.auth.enabled', type: 'boolean' },
   WEB_AUTH_PASSWORD: { path: 'server.auth.password', type: 'string' },
   AMULE_ENABLED: { path: 'amule.enabled', type: 'boolean' },
@@ -237,6 +238,7 @@ class Config extends BaseModule {
       firstRunCompleted: false,
       lastSeenVersion: null,  // Tracks which version changelog the user has seen
       server: {
+        host: '0.0.0.0',
         port: 4000,
         auth: {
           enabled: false,       // Authentication disabled by default for backward compatibility
@@ -729,6 +731,10 @@ class Config extends BaseModule {
 
   get PORT() {
     return this.runtimeConfig?.server?.port || 4000;
+  }
+
+  get HOST() {
+    return this.runtimeConfig?.server?.host || '0.0.0.0';
   }
 
   get AMULE_ENABLED() {

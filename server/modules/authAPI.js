@@ -8,19 +8,9 @@ const config = require('./config');
 const { getClientIP } = require('../lib/authUtils');
 const response = require('../lib/responseFormatter');
 const { MS_PER_HOUR, MS_PER_DAY } = require('../lib/timeRange');
-const { validate } = require('../middleware/validateRequest');
 
 // Singleton managers - imported directly instead of injected
 const authManager = require('./authManager');
-
-// Validation middleware for login
-const validateLogin = validate({
-  password: {
-    required: true,
-    type: 'string',
-    minLength: 1
-  }
-}, 'body');
 
 class AuthAPI extends BaseModule {
   constructor() {
@@ -33,9 +23,13 @@ class AuthAPI extends BaseModule {
    */
   registerRoutes(app) {
     // POST /api/auth/login
-    app.post('/api/auth/login', validateLogin, async (req, res) => {
+    app.post('/api/auth/login', async (req, res) => {
       try {
         const { password, rememberMe } = req.body;
+
+        if (!password || typeof password !== 'string') {
+          return response.badRequest(res, 'password is required');
+        }
         const clientIp = getClientIP(req);
 
         // Check if authentication is enabled
@@ -52,9 +46,15 @@ class AuthAPI extends BaseModule {
           this.log(`🚫 Blocked login attempt from ${clientIp} (${minutesRemaining} minutes remaining)`);
 
           return response.rateLimited(res,
-            `Too many failed attempts. Please try again in ${minutesRemaining} minute${minutesRemaining !== 1 ? 's' : ''}.`,
+            'Too many failed attempts.',
             Math.ceil(timeRemaining / 1000)
           );
+        }
+
+        // Check global rate limit (only blocks IPs with prior failed attempts)
+        if (authManager.isGlobalLimitReached() && authManager.getAttemptCount(clientIp) > 0) {
+          this.log(`🚫 Global rate limit reached, blocking ${clientIp} (has prior failed attempts)`);
+          return response.rateLimited(res, 'Too many login attempts.', 900);
         }
 
         // Get configured password
@@ -80,7 +80,9 @@ class AuthAPI extends BaseModule {
         if (!isValid) {
           // Record failed attempt
           authManager.recordFailedAttempt(clientIp);
-          return response.unauthorized(res, 'Invalid password');
+          const newCount = authManager.getAttemptCount(clientIp);
+          const retryDelay = authManager.getDelayForAttempts(newCount) / 1000;
+          return response.error(res, 'Invalid password', 401, { retryDelay });
         }
 
         // Successful login

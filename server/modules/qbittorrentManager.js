@@ -190,7 +190,7 @@ class QbittorrentManager extends BaseModule {
         const prefs = await newClient.getPreferences();
         this.cachedListenPort = prefs?.listen_port || 0;
       } catch (err) {
-        this.log('⚠️  Could not fetch listen port from preferences:', err.message);
+        this.log('⚠️  Could not fetch listen port from preferences:', logger.errorDetail(err));
       }
 
       // Start tracker cache refresh
@@ -201,7 +201,7 @@ class QbittorrentManager extends BaseModule {
 
       return true;
     } catch (err) {
-      this.log('❌ Failed to connect to qBittorrent:', err.message);
+      this.log('❌ Failed to connect to qBittorrent:', logger.errorDetail(err));
       this.client = null;
       this.stopTrackerRefresh();
       return false;
@@ -300,9 +300,10 @@ class QbittorrentManager extends BaseModule {
       this.lastTorrents = torrents;
       return torrents;
     } catch (err) {
-      this.log('❌ Error fetching qBittorrent torrents:', err.message);
+      this.log('❌ Error fetching qBittorrent torrents:', logger.errorDetail(err));
       // Connection might be lost, mark as disconnected
-      if (err.message.includes('ECONNREFUSED') || err.message.includes('timeout') || err.message.includes('403')) {
+      const errDetail = logger.errorDetail(err);
+      if (errDetail.includes('ECONNREFUSED') || errDetail.includes('timeout') || errDetail.includes('403')) {
         if (this.client) {
           this.client.connected = false;
         }
@@ -422,7 +423,7 @@ class QbittorrentManager extends BaseModule {
         }
       }
     } catch (err) {
-      this.log('❌ Error refreshing tracker/peer cache:', err.message);
+      this.log('❌ Error refreshing tracker/peer cache:', logger.errorDetail(err));
     }
   }
 
@@ -451,7 +452,7 @@ class QbittorrentManager extends BaseModule {
         listenPort: this.cachedListenPort
       };
     } catch (err) {
-      this.log('❌ Error fetching qBittorrent stats:', err.message);
+      this.log('❌ Error fetching qBittorrent stats:', logger.errorDetail(err));
       const fallback = this.lastStats || {};
       return {
         uploadSpeed: fallback.up_info_speed || 0,
@@ -650,7 +651,7 @@ class QbittorrentManager extends BaseModule {
       const prefs = await this.client.getPreferences();
       return prefs?.save_path || null;
     } catch (err) {
-      this.log('Failed to get qBittorrent default directory:', err.message);
+      this.log('Failed to get qBittorrent default directory:', logger.errorDetail(err));
       return null;
     }
   }
@@ -679,7 +680,7 @@ class QbittorrentManager extends BaseModule {
         return `[${ts}] [${level}] ${entry.message}`;
       }).join('\n');
     } catch (err) {
-      this.log('❌ Error fetching qBittorrent log:', err.message);
+      this.log('❌ Error fetching qBittorrent log:', logger.errorDetail(err));
       return '';
     }
   }
@@ -739,7 +740,7 @@ class QbittorrentManager extends BaseModule {
       try {
         await this.client.disconnect();
       } catch (err) {
-        this.log('⚠️  Error during qBittorrent client shutdown:', err.message);
+        this.log('⚠️  Error during qBittorrent client shutdown:', logger.errorDetail(err));
       }
       this.client = null;
     }

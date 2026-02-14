@@ -47,7 +47,7 @@ When authentication is enabled, the password must meet these requirements:
 - At least 8 characters
 - Contains at least one digit
 - Contains at least one letter
-- Contains at least one special character (`!@#$%^&*()_+-=[]{}|;:,.<>?`)
+- Contains at least one special character (any non-alphanumeric character)
 
 > **Note:** If you're running in Docker, the setup wizard will warn you that changing directory paths requires updating your `docker-compose.yml` volume mounts.
 
@@ -68,7 +68,7 @@ After initial setup, access the Settings page anytime via the sidebar (desktop) 
 - **Sensitive fields** (passwords, API keys): When set via environment variable, the input field is hidden and replaced with a warning message. To change these values, update the environment variable and restart the server.
 
 **Important:**
-- Some changes (like PORT) may require a server restart to take effect
+- Some changes (like PORT and BIND_ADDRESS) require a server restart to take effect
 - Passwords are masked in the UI for security
 - Changes take effect immediately after saving (except server port)
 
@@ -139,6 +139,7 @@ services:
     environment:
       # Server Configuration
       - PORT=4000
+      - BIND_ADDRESS=0.0.0.0  # Network interface (0.0.0.0 = all, 127.0.0.1 = localhost)
 
       # Web UI Authentication (optional)
       - WEB_AUTH_ENABLED=true
@@ -192,6 +193,7 @@ services:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `4000` | Web server listening port |
+| `BIND_ADDRESS` | `0.0.0.0` | Network interface to listen on (`0.0.0.0` = all, `127.0.0.1` = localhost only) |
 
 #### Web UI Authentication
 

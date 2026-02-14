@@ -94,7 +94,7 @@ class AmuleManager extends BaseModule {
           }
         } catch (err) {
           // Ignore disconnect errors
-          this.log('⚠️  Error disconnecting old client:', err.message);
+          this.log('⚠️  Error disconnecting old client:', logger.errorDetail(err));
         }
         this.client = null;
       }
@@ -104,7 +104,7 @@ class AmuleManager extends BaseModule {
 
       // Set up error handler for the client
       newClient.onError((err) => {
-        this.log('❌ aMule client error:', err.message);
+        this.log('❌ aMule client error:', logger.errorDetail(err));
         // Only set client to null if this is still the active client
         if (this.client === newClient) {
           this.client = null;
@@ -149,7 +149,7 @@ class AmuleManager extends BaseModule {
 
       return true;
     } catch (err) {
-      this.log('❌ Failed to connect to aMule:', err.message);
+      this.log('❌ Failed to connect to aMule:', logger.errorDetail(err));
       this.client = null;
       return false;
     } finally {
@@ -279,7 +279,7 @@ class AmuleManager extends BaseModule {
       await this.client.refreshSharedFiles();
       this.log('✅ Shared files auto-reload completed');
     } catch (err) {
-      this.log('❌ Shared files auto-reload failed:', err.message);
+      this.log('❌ Shared files auto-reload failed:', logger.errorDetail(err));
     }
   }
 
@@ -320,7 +320,7 @@ class AmuleManager extends BaseModule {
           await this.client.disconnect();
         }
       } catch (err) {
-        this.log('⚠️  Error during aMule client shutdown:', err.message);
+        this.log('⚠️  Error during aMule client shutdown:', logger.errorDetail(err));
       }
       this.client = null;
     }

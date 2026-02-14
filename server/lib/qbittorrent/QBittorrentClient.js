@@ -555,7 +555,7 @@ class QBittorrentClient {
       this.connected = false;
       return {
         success: false,
-        error: err.message || 'Connection failed'
+        error: err.cause ? `${err.message} (${err.cause.code || err.cause.message})` : (err.message || 'Connection failed')
       };
     }
   }

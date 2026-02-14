@@ -382,9 +382,23 @@ class QbittorrentManager extends BaseModule {
           });
 
           // Convert peers object to normalized array (matching rTorrent peer format)
-          const peersArray = Object.entries(peers).map(([ip, data]) => ({
-            address: ip.split(':')[0] || ip,
-            port: parseInt(ip.split(':')[1]) || 0,
+          // Keys are "ip:port" for IPv4 or "[ipv6]:port" for IPv6
+          const peersArray = Object.entries(peers).map(([ip, data]) => {
+            let address, port;
+            if (ip.startsWith('[')) {
+              // IPv6: [2a00:1450:4001::200e]:51413
+              const closeBracket = ip.lastIndexOf(']');
+              address = ip.substring(1, closeBracket);
+              port = parseInt(ip.substring(closeBracket + 2)) || 0;
+            } else {
+              // IPv4: 192.168.1.5:51413
+              const lastColon = ip.lastIndexOf(':');
+              address = lastColon > 0 ? ip.substring(0, lastColon) : ip;
+              port = lastColon > 0 ? parseInt(ip.substring(lastColon + 1)) || 0 : 0;
+            }
+            return {
+            address,
+            port,
             client: data.client || 'Unknown',
             flags: data.flags || '',
             completedPercent: Math.round((data.progress || 0) * 100),
@@ -396,7 +410,8 @@ class QbittorrentManager extends BaseModule {
             isIncoming: !!(data.flags && data.flags.includes('I')),
             country: data.country || '',
             countryCode: data.country_code || '',
-          }));
+          };
+          });
 
           // Update peer cache
           this.peerCache.set(hash, {

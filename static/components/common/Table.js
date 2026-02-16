@@ -258,7 +258,7 @@ const Table = ({
                         ) : col.label
               )
             ),
-            actions && h('th', { className: `${actionsHeader ? 'text-center' : 'text-right'} p-2 font-semibold text-xs sm:text-sm text-gray-700 dark:text-gray-300` }, actionsHeader)
+            actions && h('th', { className: 'text-center p-2 font-semibold text-xs sm:text-sm text-gray-700 dark:text-gray-300', style: { width: '3rem' } }, actionsHeader)
           )
         ),
         h('tbody', null,
@@ -314,7 +314,7 @@ const Table = ({
                 hoverActions && h('div', { className: 'absolute inset-0 flex items-center justify-center opacity-100 group-hover:opacity-0 transition-opacity duration-150 pointer-events-none' },
                   h(Icon, { name: 'moreHorizontal', size: 16, className: 'text-gray-500 dark:text-gray-400' })
                 ),
-                h('div', { className: `flex gap-2${hoverActions ? ' justify-center opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-150' : ''}` }, actions(item))
+                h('div', { className: `flex gap-2 justify-center${hoverActions ? ' opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-150' : ''}` }, actions(item))
               )
             );
           })

@@ -351,6 +351,7 @@ export const buildCategoryColumn = ({
   label: 'Category',
   key: 'category',
   sortable: true,
+  width: '120px',
   headerRender: filterOptions ? makeFilterHeaderRender(
     unifiedFilter,
     (val) => { setUnifiedFilter(val); resetLoaded && resetLoaded(); },

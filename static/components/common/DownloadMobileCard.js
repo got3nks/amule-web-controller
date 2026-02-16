@@ -94,7 +94,7 @@ function renderInfoLine(item, statusInfo) {
   const ulSpeed = item.uploadSpeed || 0;
   const speedParts = [];
 
-  if (isActive) {
+  if (dlSpeed > 0 || ulSpeed > 0) {
     if (dlSpeed > 0) speedParts.push(h('span', { key: 'dl', className: 'text-blue-600 dark:text-blue-400 flex items-center' }, h('span', { className: 'arrow-animated' }, h(Icon, { name: 'arrowDown', size: 12 })), ' ', formatSpeed(dlSpeed)));
     if (ulSpeed > 0) speedParts.push(h('span', { key: 'ul', className: 'text-green-600 dark:text-green-400 flex items-center' }, h('span', { className: 'arrow-animated arrow-up' }, h(Icon, { name: 'arrowUp', size: 12 })), ' ', formatSpeed(ulSpeed)));
   }

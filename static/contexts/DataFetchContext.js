@@ -76,22 +76,22 @@ export const DataFetchProvider = ({ children }) => {
     };
   }, []);
 
-  const fetchPreviousSearchResults = useCallback(async () => {
-    sendMessage({ action: 'getPreviousSearchResults' });
+  const fetchPreviousSearchResults = useCallback(async (instanceId) => {
+    sendMessage({ action: 'getPreviousSearchResults', ...(instanceId && { instanceId }) });
   }, [sendMessage]);
 
   const refreshSharedFiles = useCallback(async () => {
     sendMessage({ action: 'refreshSharedFiles' });
   }, [sendMessage]);
 
-  const fetchLogs = useCallback(() => {
+  const fetchLogs = useCallback((instanceId) => {
     resetStaticDataLoaded('logs');
-    sendMessage({ action: 'getLog' });
+    sendMessage({ action: 'getLog', ...(instanceId && { instanceId }) });
   }, [sendMessage, resetStaticDataLoaded]);
 
-  const fetchServerInfo = useCallback(() => {
+  const fetchServerInfo = useCallback((instanceId) => {
     resetStaticDataLoaded('serverInfo');
-    sendMessage({ action: 'getServerInfo' });
+    sendMessage({ action: 'getServerInfo', ...(instanceId && { instanceId }) });
   }, [sendMessage, resetStaticDataLoaded]);
 
   const fetchAppLogs = useCallback(() => {
@@ -99,18 +99,18 @@ export const DataFetchProvider = ({ children }) => {
     sendMessage({ action: 'getAppLog' });
   }, [sendMessage, resetStaticDataLoaded]);
 
-  const fetchQbittorrentLogs = useCallback(() => {
+  const fetchQbittorrentLogs = useCallback((instanceId) => {
     resetStaticDataLoaded('qbittorrentLogs');
-    sendMessage({ action: 'getQbittorrentLog' });
+    sendMessage({ action: 'getQbittorrentLog', ...(instanceId && { instanceId }) });
   }, [sendMessage, resetStaticDataLoaded]);
 
-  const fetchStatsTree = useCallback(() => {
-    sendMessage({ action: 'getStatsTree' });
+  const fetchStatsTree = useCallback((instanceId) => {
+    sendMessage({ action: 'getStatsTree', ...(instanceId && { instanceId }) });
   }, [sendMessage]);
 
-  const fetchServers = useCallback(() => {
+  const fetchServers = useCallback((instanceId) => {
     resetStaticDataLoaded('servers');
-    sendMessage({ action: 'getServersList' });
+    sendMessage({ action: 'getServersList', ...(instanceId && { instanceId }) });
   }, [sendMessage, resetStaticDataLoaded]);
 
   const fetchCategories = useCallback(() => {

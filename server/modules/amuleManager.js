@@ -5,18 +5,20 @@
 
 const QueuedAmuleClient = require('./queuedAmuleClient');
 const config = require('./config');
-const BaseModule = require('../lib/BaseModule');
+const BaseClientManager = require('../lib/BaseClientManager');
 const logger = require('../lib/logger');
+const { parseEd2kLink } = require('../lib/torrentUtils');
+const {
+  normalizeAmuleDownload,
+  normalizeAmuleSharedFile,
+  normalizeAmuleUpload
+} = require('../lib/downloadNormalizer');
 
-class AmuleManager extends BaseModule {
+class AmuleManager extends BaseClientManager {
   constructor() {
     super();
-    this.client = null;
-    this.reconnectInterval = null;
     this.sharedFilesReloadInterval = null;  // Timer for automatic shared files reload
     this.searchInProgress = false;
-    this.connectionInProgress = false; // Prevent concurrent connection attempts
-    this._onConnectCallbacks = [];
     this.setupGlobalErrorHandlers();
   }
 
@@ -34,17 +36,12 @@ class AmuleManager extends BaseModule {
 
         // Mark client as disconnected
         if (this.client) {
+          this._setConnectionError(err);
           this.client = null;
         }
 
         // Trigger reconnection if not already scheduled
-        if (!this.reconnectInterval) {
-          logger.log('🔄 Will retry connection every 10 seconds...');
-          this.reconnectInterval = setInterval(async () => {
-            logger.log('🔄 Attempting to reconnect to aMule...');
-            await this.initClient();
-          }, 10000);
-        }
+        this.scheduleReconnect(10000);
 
         // Return true to indicate we handled this error
         return true;
@@ -66,11 +63,14 @@ class AmuleManager extends BaseModule {
     });
   }
 
-  // Initialize aMule client
+  /**
+   * Initialize aMule client connection.
+   * Creates a QueuedAmuleClient, connects, and sets up error/reconnection handlers.
+   * @returns {Promise<boolean>} True if connection succeeded
+   */
   async initClient() {
     // Check if aMule is enabled
-    const amuleConfig = config.getAmuleConfig();
-    if (!amuleConfig || amuleConfig.enabled === false) {
+    if (!this._clientConfig || !this._clientConfig.enabled) {
       this.log('ℹ️  aMule integration is disabled, skipping connection');
       return false;
     }
@@ -99,23 +99,17 @@ class AmuleManager extends BaseModule {
         this.client = null;
       }
 
-      this.log(`🔌 Creating new aMule client (${config.AMULE_HOST}:${config.AMULE_PORT})...`);
-      const newClient = new QueuedAmuleClient(config.AMULE_HOST, config.AMULE_PORT, config.AMULE_PASSWORD);
+      this.log(`🔌 Creating new aMule client (${this._clientConfig.host}:${this._clientConfig.port})...`);
+      const newClient = new QueuedAmuleClient(this._clientConfig.host, this._clientConfig.port, this._clientConfig.password);
 
       // Set up error handler for the client
       newClient.onError((err) => {
         this.log('❌ aMule client error:', logger.errorDetail(err));
         // Only set client to null if this is still the active client
         if (this.client === newClient) {
+          this._setConnectionError(err);
           this.client = null;
-          // Trigger reconnection if not already scheduled
-          if (!this.reconnectInterval) {
-            this.log('🔄 Will retry connection every 10 seconds...');
-            this.reconnectInterval = setInterval(async () => {
-              this.log('🔄 Attempting to reconnect to aMule...');
-              await this.initClient();
-            }, 10000);
-          }
+          this.scheduleReconnect(10000);
         }
       });
 
@@ -123,15 +117,7 @@ class AmuleManager extends BaseModule {
 
       // Only set as active client if connection succeeded
       this.client = newClient;
-
-      // Setup download history tracking on the new client
-      if (this.downloadHistoryDB) {
-        this.client.setDownloadHistoryDB(this.downloadHistoryDB);
-        // Lazy require to avoid circular dependency (CategoryManager requires amuleManager)
-        this.client.setCategoryNameResolver((amuleId) => require('../lib/CategoryManager').getCategoryNameByAmuleId(amuleId));
-        const historyEnabled = config.getConfig()?.history?.enabled !== false;
-        this.log(`📜 Download history tracking ${historyEnabled ? 'enabled' : 'disabled'} on new client`);
-      }
+      this._clearConnectionError();
 
       this.log('✅ Connected to aMule successfully');
 
@@ -142,14 +128,12 @@ class AmuleManager extends BaseModule {
       this.startSharedFilesReloadScheduler();
 
       // Stop reconnection attempts
-      if (this.reconnectInterval) {
-        clearInterval(this.reconnectInterval);
-        this.reconnectInterval = null;
-      }
+      this.clearReconnect();
 
       return true;
     } catch (err) {
       this.log('❌ Failed to connect to aMule:', logger.errorDetail(err));
+      this._setConnectionError(err);
       this.client = null;
       return false;
     } finally {
@@ -160,51 +144,20 @@ class AmuleManager extends BaseModule {
   // Start connection and auto-reconnect
   async startConnection() {
     // Don't start if not enabled
-    const amuleConfig = config.getAmuleConfig();
-    if (!amuleConfig || amuleConfig.enabled === false) {
+    if (!this._clientConfig || !this._clientConfig.enabled) {
       this.log('ℹ️  aMule integration is disabled, skipping connection');
       return;
     }
 
     const connected = await this.initClient();
-    if (!connected && !this.reconnectInterval) {
-      this.log('🔄 Will retry connection every 10 seconds...');
-      this.reconnectInterval = setInterval(async () => {
-        // Check if still enabled before retrying
-        const currentConfig = config.getAmuleConfig();
-        if (!currentConfig || currentConfig.enabled === false) {
-          this.log('ℹ️  aMule disabled, stopping reconnection attempts');
-          if (this.reconnectInterval) {
-            clearInterval(this.reconnectInterval);
-            this.reconnectInterval = null;
-          }
-          return;
-        }
-        this.log('🔄 Attempting to reconnect to aMule...');
-        await this.initClient();
-      }, 10000);
+    if (!connected) {
+      this.scheduleReconnect(10000);
     }
-  }
-
-  // Get current client
-  getClient() {
-    return this.client;
-  }
-
-  // Check if aMule integration is enabled in config
-  isEnabled() {
-    const amuleConfig = config.getAmuleConfig();
-    return amuleConfig && amuleConfig.enabled !== false;
   }
 
   // Check if client is connected
   isConnected() {
     return !!this.client;
-  }
-
-  // Register a callback to be called when aMule connects
-  onConnect(callback) {
-    this._onConnectCallbacks.push(callback);
   }
 
   // Search lock management
@@ -236,7 +189,7 @@ class AmuleManager extends BaseModule {
     // Stop any existing scheduler first
     this.stopSharedFilesReloadScheduler();
 
-    const intervalHours = config.AMULE_SHARED_FILES_RELOAD_INTERVAL_HOURS;
+    const intervalHours = this._clientConfig?.sharedFilesReloadIntervalHours ?? 0;
 
     // 0 means disabled
     if (!intervalHours || intervalHours <= 0) {
@@ -293,6 +246,829 @@ class AmuleManager extends BaseModule {
     }
   }
 
+  /**
+   * Refresh the shared files list in aMule
+   */
+  async refreshSharedFiles() {
+    if (!this.client) {
+      throw new Error('aMule not connected');
+    }
+    await this.client.refreshSharedFiles();
+  }
+
+  // ============================================================================
+  // UNIFIED DATA FETCHING (same interface as all managers)
+  // ============================================================================
+
+  /**
+   * Fetch and normalize all data from aMule.
+   * Handles 3 API calls (downloads, uploads, shared) with individual error handling.
+   * @param {Array} categories - Categories for normalizer (path-based derivation)
+   * @returns {Promise<Object>} { downloads, sharedFiles, uploads }
+   */
+  async fetchData(categories = []) {
+    if (!this.client) {
+      return { downloads: [], sharedFiles: [], uploads: [] };
+    }
+
+    let rawDownloads = [], rawUploads = null, rawSharedFiles = [];
+
+    try {
+      rawDownloads = await this.client.getDownloadQueue();
+    } catch (err) {
+      this.log('Error fetching downloads:', err.message);
+    }
+
+    try {
+      rawUploads = await this.client.getUploadingQueue();
+    } catch (err) {
+      this.log('Error fetching uploads:', err.message);
+    }
+
+    try {
+      rawSharedFiles = await this.client.getSharedFiles();
+    } catch (err) {
+      this.log('Error fetching shared files:', err.message);
+    }
+
+    // ── Normalize downloads ──────────────────────────────────────────────
+    const categoryManager = require('../lib/CategoryManager');
+    const resolveCategoryName = (catId) => categoryManager.getCategoryNameByAmuleId(this.instanceId, catId);
+    const downloads = (rawDownloads || []).map(d => normalizeAmuleDownload(d, resolveCategoryName));
+
+    // ── Normalize uploads (unwrap EC protocol quirks) ────────────────────
+    let uploads = this._normalizeUploads(rawUploads);
+
+    // ── Aggregate upload speed by file name (for shared file assembly) ───
+    const speedByFile = new Map();
+    for (const upload of uploads) {
+      const fileName = upload.fileName || '';
+      if (!fileName) continue;
+      const speed = upload.uploadRate || 0;
+      if (speed > 0) {
+        speedByFile.set(fileName, (speedByFile.get(fileName) || 0) + speed);
+      }
+    }
+
+    // ── Normalize shared files (attach aggregated upload speed) ──────────
+    const sharedFiles = (rawSharedFiles || []).map(f => {
+      const normalized = normalizeAmuleSharedFile(f, categories);
+      return {
+        ...normalized,
+        uploadSpeed: speedByFile.get(normalized.name) || 0
+      };
+    });
+
+    // ── Enrich uploads with category/size/hash from shared files ─────────
+    if (sharedFiles.length > 0 && uploads.length > 0) {
+      const sharedByName = new Map();
+      for (const sf of sharedFiles) {
+        if (sf.name) sharedByName.set(sf.name, sf);
+      }
+
+      if (sharedByName.size > 0) {
+        uploads = uploads.map(upload => {
+          const sf = sharedByName.get(upload.fileName);
+          if (sf) {
+            return { ...upload, category: sf.category, fileSize: sf.size, sharedFileHash: sf.hash };
+          }
+          return upload;
+        });
+      }
+    }
+
+    // Stamp instanceId on all normalized items
+    const instanceId = this.instanceId;
+    downloads.forEach(d => { d.instanceId = instanceId; });
+    sharedFiles.forEach(f => { f.instanceId = instanceId; });
+    uploads.forEach(u => { u.instanceId = instanceId; });
+
+    return { downloads, sharedFiles, uploads };
+  }
+
+  /**
+   * Normalize raw aMule uploads data structure.
+   * Handles EC protocol quirks: EC_TAG_CLIENT wrapper, single-object responses.
+   * @param {*} uploadsData - Raw uploads data from aMule
+   * @returns {Array} Normalized uploads array
+   * @private
+   */
+  _normalizeUploads(uploadsData) {
+    if (!uploadsData) return [];
+
+    // Extract EC_TAG_CLIENT if present (aMule specific)
+    let uploads = uploadsData.EC_TAG_CLIENT || uploadsData;
+
+    // Normalize to array (aMule can return single object)
+    if (!Array.isArray(uploads)) {
+      uploads = uploads && typeof uploads === 'object' ? [uploads] : [];
+    }
+
+    return uploads.length > 0 ? uploads.map(normalizeAmuleUpload) : [];
+  }
+
+  // ============================================================================
+  // UNIFIED STATS & NETWORK STATUS (same interface as all managers)
+  // ============================================================================
+
+  /**
+   * Get raw stats from aMule
+   * @returns {Promise<Object>} Raw EC protocol stats
+   */
+  async getStats() {
+    if (!this.client) {
+      return {};
+    }
+    try {
+      return await this.client.getStats();
+    } catch (err) {
+      this.log('❌ Error fetching aMule stats:', logger.errorDetail(err));
+      return {};
+    }
+  }
+
+  /**
+   * Extract normalized metrics from raw aMule stats
+   * @param {Object} rawStats - Raw EC protocol stats
+   * @returns {Object} { uploadSpeed, downloadSpeed, uploadTotal, downloadTotal }
+   */
+  extractMetrics(rawStats) {
+    return {
+      uploadSpeed: rawStats.EC_TAG_STATS_UL_SPEED || 0,
+      downloadSpeed: rawStats.EC_TAG_STATS_DL_SPEED || 0,
+      uploadTotal: rawStats.EC_TAG_STATS_TOTAL_SENT_BYTES || 0,
+      downloadTotal: rawStats.EC_TAG_STATS_TOTAL_RECEIVED_BYTES || 0
+    };
+  }
+
+  /**
+   * Compute network status from raw aMule stats
+   * @param {Object} rawStats - Raw EC protocol stats
+   * @returns {Object} { ed2k: { status, text, connected, serverName, serverPing }, kad: { status, text, connected } }
+   */
+  getNetworkStatus(rawStats) {
+    // ED2K status
+    const connState = rawStats.EC_TAG_CONNSTATE || {};
+    const server = connState.EC_TAG_SERVER || {};
+    const ed2kConnected = server?.EC_TAG_SERVER_PING > 0;
+    const clientId = connState.EC_TAG_CLIENT_ID;
+    const isHighId = clientId && clientId > 16777216;
+
+    const ed2k = ed2kConnected
+      ? { status: isHighId ? 'green' : 'yellow', text: isHighId ? 'High ID' : 'Low ID',
+          connected: true, serverName: server.EC_TAG_SERVER_NAME || null, serverPing: server.EC_TAG_SERVER_PING || null, serverAddress: server._value || null }
+      : { status: 'red', text: 'Disconnected', connected: false, serverName: null, serverPing: null, serverAddress: null };
+
+    // KAD status
+    const kadFirewalledValue = rawStats.EC_TAG_STATS_KAD_FIREWALLED_UDP;
+    const kadConnected = kadFirewalledValue !== undefined && kadFirewalledValue !== null;
+    const kadFirewalled = kadFirewalledValue === 1;
+
+    const kad = kadConnected
+      ? { status: kadFirewalled ? 'yellow' : 'green', text: kadFirewalled ? 'Firewalled' : 'OK', connected: true }
+      : { status: 'red', text: 'Disconnected', connected: false };
+
+    return { ed2k, kad };
+  }
+
+  /**
+   * Extract normalized history metadata from a raw aMule download or shared file item
+   * @param {Object} item - Raw aMule download/shared file data
+   * @returns {Object} Normalized metadata for history DB
+   */
+  extractHistoryMetadata(item) {
+    const downloaded = item.downloaded || 0;
+    const uploaded = item.transferredTotal || item.transferred || 0;
+    const size = item.size || 0;
+    // For shared files (no progress field), downloaded = size
+    const isSharedFile = item.progress === undefined;
+    const effectiveDownloaded = isSharedFile ? size : downloaded;
+    const ratio = effectiveDownloaded > 0 ? uploaded / effectiveDownloaded : 0;
+    // aMule's path is the directory containing the file — only useful if absolute
+    const directory = item.path && item.path.startsWith('/') ? item.path : null;
+
+    return {
+      hash: item.hash?.toLowerCase(),
+      instanceId: item.instanceId,
+      size,
+      name: item.name,
+      downloaded: effectiveDownloaded,
+      uploaded,
+      ratio,
+      trackerDomain: null,
+      directory,
+      multiFile: false,
+      category: null // filled from unified items categoryByKey lookup
+    };
+  }
+
+  // ============================================================================
+  // UNIFIED DOWNLOAD CONTROL (same interface as all managers)
+  // ============================================================================
+
+  /**
+   * Pause a download
+   * @param {string} hash - File hash
+   */
+  async pause(hash) {
+    if (!this.client) {
+      throw new Error('aMule not connected');
+    }
+    return await this.client.pauseDownload(hash);
+  }
+
+  /**
+   * Resume a download
+   * @param {string} hash - File hash
+   */
+  async resume(hash) {
+    if (!this.client) {
+      throw new Error('aMule not connected');
+    }
+    return await this.client.resumeDownload(hash);
+  }
+
+  /**
+   * Hard stop a download (aMule: same as pause, no separate hard-stop concept)
+   * @param {string} hash - File hash
+   */
+  async stop(hash) {
+    return await this.pause(hash);
+  }
+
+  /**
+   * Update download directory (no-op for aMule — directory managed via categories)
+   * @param {string} _hash - File hash (unused)
+   * @param {string} _path - New directory path (unused)
+   */
+  async updateDirectory(_hash, _path) {
+    // aMule manages directories automatically via categories
+  }
+
+  // ============================================================================
+  // DOWNLOAD OPERATIONS
+  // ============================================================================
+
+  /**
+   * Download a search result by hash
+   * @param {string} fileHash - File hash
+   * @param {number} categoryId - aMule category ID (0 = default)
+   * @param {string|null} username - Username for history tracking
+   * @param {Function|null} fileInfoCallback - async (hash) => { filename, size } for history
+   * @returns {Promise<boolean>} Success
+   */
+  async addSearchResult(fileHash, categoryId = 0, username = null, fileInfoCallback = null) {
+    if (!this.client) {
+      throw new Error('aMule not connected');
+    }
+
+    const success = await this.client.downloadSearchResult(fileHash, categoryId);
+
+    // Track in history
+    if (success) {
+      let filename = 'Unknown';
+      let size = null;
+      if (fileInfoCallback) {
+        try {
+          const info = await fileInfoCallback(fileHash);
+          filename = info?.filename || 'Unknown';
+          size = info?.size || null;
+        } catch { /* use defaults */ }
+      }
+      const categoryName = this._resolveCategoryName(categoryId);
+      this.trackDownload(fileHash, filename, size, username, categoryName);
+    }
+
+    return success;
+  }
+
+  /**
+   * Add an ED2K link
+   * @param {string} link - ED2K link
+   * @param {number} categoryId - aMule category ID (0 = default)
+   * @param {string|null} username - Username for history tracking
+   * @returns {Promise<boolean>} Success
+   */
+  async addEd2kLink(link, categoryId = 0, username = null) {
+    if (!this.client) {
+      throw new Error('aMule not connected');
+    }
+
+    const success = await this.client.addEd2kLink(link, categoryId);
+
+    // Track in history
+    if (success) {
+      const parsed = parseEd2kLink(link);
+      const categoryName = this._resolveCategoryName(categoryId);
+      this.trackDownload(
+        parsed.hash, parsed.filename || 'Unknown', parsed.size, username, categoryName
+      );
+    }
+
+    return success;
+  }
+
+  /**
+   * Cancel/remove an active download
+   * @param {string} fileHash - File hash
+   * @returns {Promise<boolean>} Success
+   */
+  async cancelDownload(fileHash) {
+    if (!this.client) {
+      throw new Error('aMule not connected');
+    }
+
+    const success = await this.client.cancelDownload(fileHash);
+    this.trackDeletion(fileHash);
+    return success;
+  }
+
+  /**
+   * Delete an item (active download or shared file)
+   * For active downloads: cancels via EC protocol (aMule cleans up .part temp file)
+   * For shared files: returns path for caller to delete from disk (no client interaction needed)
+   * @param {string} hash - File hash
+   * @param {Object} options - { deleteFiles, isShared, filePath }
+   * @returns {Promise<Object>} { success, pathsToDelete?, error? }
+   */
+  async deleteItem(hash, { deleteFiles, isShared, filePath } = {}) {
+    if (isShared) {
+      // Shared file deletion — filesystem operation only, no client connection needed
+      if (!deleteFiles) {
+        return { success: false, error: 'Shared files can only be removed by deleting the file' };
+      }
+      if (!filePath) {
+        return { success: false, error: 'File path required for shared file deletion' };
+      }
+      this.trackDeletion(hash);
+      return { success: true, pathsToDelete: [filePath] };
+    }
+
+    // Active download — cancelDownload handles .part cleanup + history tracking
+    const result = await this.cancelDownload(hash);
+    return result
+      ? { success: true, pathsToDelete: [] }
+      : { success: false, error: 'aMule rejected the cancel request' };
+  }
+
+  /**
+   * Set category for a download (unified interface)
+   * Resolves category name to aMule's internal amuleId, creating if needed.
+   * @param {string} hash - File hash
+   * @param {Object} options - { categoryName }
+   * @returns {Promise<Object>} { success, error? }
+   */
+  async setCategoryOrLabel(hash, { categoryName } = {}) {
+    if (!this.client) {
+      throw new Error('aMule not connected');
+    }
+    const amuleId = await this.ensureAmuleCategoryId(categoryName);
+    if (amuleId === null) {
+      return { success: false, error: 'Could not resolve aMule category ID' };
+    }
+    const success = await this.client.setFileCategory(hash, amuleId);
+    return success
+      ? { success: true }
+      : { success: false, error: 'aMule rejected the category change' };
+  }
+
+  /**
+   * Resolve category name to aMule category ID, creating in aMule if needed.
+   * Uses this manager's own client connection (no registry lookup).
+   * @param {string} categoryName - Category name
+   * @returns {Promise<number|null>} amuleId or null on failure
+   */
+  async ensureAmuleCategoryId(categoryName) {
+    const categoryManager = require('../lib/CategoryManager');
+    const { hexColorToAmule } = require('../lib/CategoryManager');
+    const category = categoryManager.getByName(categoryName);
+    if (!category) {
+      throw new Error(`Category "${categoryName}" not found`);
+    }
+
+    // Already has amuleId for this instance
+    const existingId = category.amuleIds?.[this.instanceId];
+    if (existingId != null) {
+      return existingId;
+    }
+
+    if (!this.client) return null;
+
+    try {
+      const result = await this.ensureCategoryExists({
+        name: category.name, path: category.path || '',
+        comment: category.comment || '',
+        color: hexColorToAmule(category.color), priority: category.priority || 0
+      });
+      if (result?.amuleId != null) {
+        categoryManager.linkAmuleId(category.name, this.instanceId, result.amuleId);
+        await categoryManager.save();
+        return result.amuleId;
+      }
+    } catch (err) {
+      this.log(`⚠️ Failed to ensure aMule category "${categoryName}": ${err.message}`);
+    }
+    return null;
+  }
+
+  // ============================================================================
+  // CATEGORY CRUD (options-object pattern)
+  // ============================================================================
+
+  /**
+   * Get categories from aMule
+   * @returns {Promise<Array|null>} Array of { id, title, path, comment, color, priority }, or null if not connected
+   */
+  async getCategories() {
+    if (!this.client) return null;
+    return await this.client.getCategories();
+  }
+
+  /**
+   * Create a category in aMule
+   * @param {Object} opts - { name, path, comment, color, priority }
+   * @returns {Promise<Object>} { success, categoryId }
+   */
+  async createCategory({ name, path = '', comment = '', color = 0xCCCCCC, priority = 0 } = {}) {
+    if (!this.client) throw new Error('aMule not connected');
+    return await this.client.createCategory(name, path, comment, color, priority);
+  }
+
+  /**
+   * Edit/update a category in aMule with read-back verification.
+   * @param {Object} opts - { id, name, path, defaultPath, comment, color, priority }
+   * @returns {Promise<Object>} { success, verified, mismatches }
+   */
+  async editCategory({ id, name, path = '', defaultPath = '', comment = '', color = 0xCCCCCC, priority = 0 } = {}) {
+    if (!this.client) throw new Error('aMule not connected');
+    if (id == null) return { success: false, verified: false, mismatches: ['No aMule category ID'] };
+
+    // aMule doesn't accept empty path — use default directory
+    const effectivePath = path || defaultPath || '';
+
+    try {
+      await this.client.updateCategory(id, name, effectivePath, comment, color, priority);
+      this.log(`📤 Updated category "${name}" in aMule (ID: ${id}, path: "${effectivePath}")`);
+
+      // Verify by reading back
+      const amuleCategories = await this.getCategories();
+      const savedCat = amuleCategories?.find(c => c.id === id);
+
+      if (!savedCat) {
+        this.log(`⚠️ Verify: Category with ID ${id} not found after update`);
+        return { success: true, verified: false, mismatches: ['Category not found after update'] };
+      }
+
+      const mismatches = [];
+      if (savedCat.title !== name) mismatches.push(`title: expected "${name}", got "${savedCat.title}"`);
+      if ((savedCat.path || '') !== effectivePath) mismatches.push(`path: expected "${effectivePath}", got "${savedCat.path || ''}"`);
+      if ((savedCat.comment || '') !== comment) mismatches.push(`comment: expected "${comment}", got "${savedCat.comment || ''}"`);
+      if ((savedCat.color ?? 0xCCCCCC) !== color) mismatches.push(`color: expected ${color.toString(16)}, got ${(savedCat.color ?? 0xCCCCCC).toString(16)}`);
+      if ((savedCat.priority ?? 0) !== priority) mismatches.push(`priority: expected ${priority}, got ${savedCat.priority ?? 0}`);
+
+      if (mismatches.length > 0) {
+        this.log(`⚠️ Verify: Category "${name}" mismatches: ${mismatches.join(', ')}`);
+        return { success: true, verified: false, mismatches };
+      }
+
+      this.log(`✅ Verify: Category "${name}" saved correctly in aMule`);
+      return { success: true, verified: true, mismatches: [] };
+    } catch (err) {
+      this.log(`⚠️ Failed to update category in aMule: ${err.message}`);
+      return { success: false, verified: false, mismatches: [err.message] };
+    }
+  }
+
+  /**
+   * Delete a category from aMule
+   * @param {Object} opts - { id }
+   */
+  async deleteCategory({ id } = {}) {
+    if (!this.client) throw new Error('aMule not connected');
+    if (id == null) return;
+    await this.client.deleteCategory(id);
+  }
+
+  /**
+   * Rename a category in aMule — delegates to editCategory with new title.
+   * @param {Object} opts - { id, newName, path, defaultPath, comment, color, priority }
+   * @returns {Promise<Object>} { success, verified, mismatches }
+   */
+  async renameCategory({ id, newName, path = '', defaultPath = '', comment = '', color = 0xCCCCCC, priority = 0 } = {}) {
+    return await this.editCategory({ id, name: newName, path, defaultPath, comment, color, priority });
+  }
+
+  /**
+   * Ensure a category exists in aMule (find existing by name or create).
+   * @param {Object} opts - { name, path, color, comment, priority }
+   * @returns {Promise<Object>} { amuleId } or { amuleId: null } on failure
+   */
+  async ensureCategoryExists({ name, path = '', color = 0xCCCCCC, comment = '', priority = 0 } = {}) {
+    if (!this.client) throw new Error('aMule not connected');
+
+    try {
+      const amuleCategories = await this.getCategories();
+      const existing = amuleCategories?.find(c => c.title === name);
+
+      if (existing && existing.id != null) {
+        this.log(`🔗 Linked to existing aMule category "${name}" (ID: ${existing.id})`);
+        return { amuleId: existing.id };
+      }
+
+      const result = await this.createCategory({ name, path, comment, color, priority });
+      if (result.success && result.categoryId != null) {
+        this.log(`📤 Created category "${name}" in aMule (ID: ${result.categoryId})`);
+        return { amuleId: result.categoryId };
+      }
+      if (result.success) {
+        this.log(`⚠️ Category "${name}" created in aMule but no ID returned`);
+      }
+    } catch (err) {
+      this.log(`⚠️ Failed to ensure category in aMule: ${err.message}`);
+    }
+    return { amuleId: null };
+  }
+
+  /**
+   * Ensure multiple categories exist in aMule (batch-aware: fetches existing list once).
+   * @param {Array<Object>} categories - Array of { name, path, color, comment, priority }
+   * @returns {Promise<Array<Object>>} Results per created/linked category: [{ name, amuleId }]
+   */
+  async ensureCategoriesBatch(categories) {
+    if (!this.client || !categories?.length) return [];
+
+    const results = [];
+    try {
+      const amuleCategories = await this.getCategories();
+      const existingByName = new Map((amuleCategories || []).map(c => [c.title, c]));
+
+      for (const cat of categories) {
+        const existing = existingByName.get(cat.name);
+        if (existing && existing.id != null) {
+          results.push({ name: cat.name, amuleId: existing.id });
+          continue;
+        }
+
+        try {
+          const result = await this.createCategory(cat);
+          if (result.success && result.categoryId != null) {
+            results.push({ name: cat.name, amuleId: result.categoryId });
+            this.log(`📤 Propagated category "${cat.name}" to aMule (ID: ${result.categoryId})`);
+          }
+        } catch (err) {
+          this.log(`⚠️ Failed to propagate "${cat.name}" to aMule: ${err.message}`);
+        }
+      }
+    } catch (err) {
+      this.log(`⚠️ Failed to fetch aMule categories for batch propagation: ${err.message}`);
+    }
+    return results;
+  }
+
+  // ============================================================================
+  // EC PROTOCOL WRAPPERS (thin pass-through to this.client)
+  // ============================================================================
+
+  /**
+   * Run a search and wait for results
+   * @param {string} query - Search query
+   * @param {string} type - Search type (e.g. 'global')
+   * @param {string} extension - File extension filter
+   * @returns {Promise<Object>} { results, resultsLength }
+   */
+  async search(query, type, extension) {
+    if (!this.client) throw new Error('aMule not connected');
+    return await this.client.searchAndWaitResults(query, type, extension);
+  }
+
+  /**
+   * Get cached search results
+   * @returns {Promise<Object>} { results }
+   */
+  async getSearchResults() {
+    if (!this.client) throw new Error('aMule not connected');
+    return await this.client.getSearchResults();
+  }
+
+  /**
+   * Get the ED2K server list
+   * @returns {Promise<Array>} Array of server objects
+   */
+  async getServerList() {
+    if (!this.client) throw new Error('aMule not connected');
+    return await this.client.getServerList();
+  }
+
+  /**
+   * Connect to an ED2K server
+   * @param {string} ip - Server IP
+   * @param {number} port - Server port
+   * @returns {Promise<boolean>} Success
+   */
+  async connectServer(ip, port) {
+    if (!this.client) throw new Error('aMule not connected');
+    return await this.client.connectServer(ip, port);
+  }
+
+  /**
+   * Disconnect from an ED2K server
+   * @param {string} ip - Server IP
+   * @param {number} port - Server port
+   * @returns {Promise<boolean>} Success
+   */
+  async disconnectServer(ip, port) {
+    if (!this.client) throw new Error('aMule not connected');
+    return await this.client.disconnectServer(ip, port);
+  }
+
+  /**
+   * Remove an ED2K server
+   * @param {string} ip - Server IP
+   * @param {number} port - Server port
+   * @returns {Promise<boolean>} Success
+   */
+  async removeServer(ip, port) {
+    if (!this.client) throw new Error('aMule not connected');
+    return await this.client.removeServer(ip, port);
+  }
+
+  /**
+   * Get the aMule statistics tree
+   * @returns {Promise<Object>} Stats tree data
+   */
+  async getStatsTree() {
+    if (!this.client) throw new Error('aMule not connected');
+    return await this.client.getStatsTree();
+  }
+
+  /**
+   * Get ED2K server info text
+   * @returns {Promise<string>} Server info
+   */
+  async getServerInfo() {
+    if (!this.client) throw new Error('aMule not connected');
+    return await this.client.getServerInfo();
+  }
+
+  /**
+   * Get aMule log
+   * @returns {Promise<string>} Log text
+   */
+  async getLog() {
+    if (!this.client) throw new Error('aMule not connected');
+    return await this.client.getLog();
+  }
+
+  /**
+   * Resolve aMule category ID to category name for history tracking
+   * @param {number} categoryId - aMule category ID
+   * @returns {string|null} Category name or null
+   * @private
+   */
+  _resolveCategoryName(categoryId) {
+    if (categoryId <= 0) return null;
+    try {
+      // Lazy require to avoid circular dependency (CategoryManager requires amuleManager)
+      return require('../lib/CategoryManager').getCategoryNameByAmuleId(this.instanceId, categoryId);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Perform category sync when this aMule instance connects.
+   * Imports aMule categories into app, pushes app categories to aMule,
+   * and pushes app-wins updates back to aMule.
+   * @param {Object} categoryManager - CategoryManager instance
+   * @param {Object} deps - { qbittorrentAPI }
+   */
+  async onConnectSync(categoryManager, { qbittorrentAPI } = {}) {
+    // Sync qBittorrent categories first (so aMule import sees them)
+    if (qbittorrentAPI?.handler?.syncCategories) {
+      try {
+        await qbittorrentAPI.handler.syncCategories();
+      } catch (err) {
+        this.log(`⚠️ Failed to sync qBittorrent categories on connect: ${err.message}`);
+      }
+    }
+
+    const amuleCategories = await this.getCategories();
+    if (!amuleCategories) return;
+
+    const { amuleColorToHex, hexColorToAmule } = require('../lib/CategoryManager');
+
+    // Set default path from aMule's Default category (id 0)
+    const defaultCat = amuleCategories.find(c => c.id === 0);
+    if (defaultCat?.path) {
+      categoryManager.setClientDefaultPath(this.instanceId, defaultCat.path);
+    }
+
+    const snapshot = categoryManager.getCategoriesSnapshot();
+    let imported = 0, updated = 0, linked = 0;
+    const toUpdateInAmule = [];
+
+    // Phase 1: Compare aMule categories against app state
+    for (const amuleCat of amuleCategories) {
+      const amuleId = amuleCat.id;
+      const amuleTitle = amuleCat.title || 'Untitled';
+
+      // aMule ID 0 is always the built-in default — map to our "Default" regardless of aMule's name
+      if (amuleId === 0) {
+        const existingLink = snapshot.getByAmuleId(this.instanceId, 0);
+        if (!existingLink || existingLink.name === 'Default') {
+          // Not linked yet, or already correct
+          if (!existingLink) {
+            categoryManager.linkAmuleId('Default', this.instanceId, 0);
+            linked++;
+          }
+        } else {
+          // Linked to wrong category (e.g., "all" from old sync) — migrate to "Default"
+          this.log(`🔄 Migrating aMule default category link from "${existingLink.name}" to "Default"`);
+          delete existingLink.amuleIds[this.instanceId];
+          categoryManager.linkAmuleId('Default', this.instanceId, 0);
+          linked++;
+        }
+        continue;
+      }
+
+      let appCat = snapshot.getByAmuleId(this.instanceId, amuleId);
+      if (appCat) {
+        // Category exists — check if params differ (app wins)
+        const appColor = hexColorToAmule(appCat.color);
+        const amuleColor = amuleCat.color ?? 0xCCCCCC;
+        const amuleDefaultPath = categoryManager.getClientDefaultPath(this.instanceId) || '';
+        const appEffectivePath = appCat.path || amuleDefaultPath;
+        const amulePath = amuleCat.path || '';
+
+        const diffs = [];
+        if (appCat.name !== amuleTitle) diffs.push(`title: "${amuleTitle}" → "${appCat.name}"`);
+        if (appColor !== amuleColor) diffs.push(`color: ${amuleColor.toString(16)} → ${appColor.toString(16)}`);
+        if (appEffectivePath !== amulePath) diffs.push(`path: "${amulePath}" → "${appEffectivePath}"`);
+        if ((appCat.comment || '') !== (amuleCat.comment || '')) diffs.push(`comment`);
+        if ((appCat.priority ?? 0) !== (amuleCat.priority ?? 0)) diffs.push(`priority`);
+
+        if (diffs.length > 0) {
+          toUpdateInAmule.push({
+            id: amuleId, name: appCat.name, path: appEffectivePath,
+            comment: appCat.comment || '', color: appColor, priority: appCat.priority ?? 0
+          });
+          updated++;
+          this.log(`🔄 Category "${appCat.name}" differs from aMule: ${diffs.join(', ')}`);
+        }
+      } else {
+        appCat = snapshot.getByName(amuleTitle);
+        if (appCat) {
+          // Only link if this instance doesn't already have a link for this category
+          // (e.g., "Default" is already linked to ID 0 — don't overwrite with a duplicate)
+          if (appCat.amuleIds?.[this.instanceId] == null) {
+            categoryManager.linkAmuleId(amuleTitle, this.instanceId, amuleId);
+            linked++;
+          }
+        } else {
+          categoryManager.importCategory({
+            name: amuleTitle, color: amuleColorToHex(amuleCat.color),
+            path: amuleCat.path || null, comment: amuleCat.comment || 'Imported from aMule',
+            priority: amuleCat.priority ?? 0, amuleIds: { [this.instanceId]: amuleId }
+          });
+          imported++;
+        }
+      }
+    }
+
+    if (imported > 0 || linked > 0) await categoryManager.save();
+
+    // Phase 2: Push app-only categories (no amuleId for this instance) to this aMule instance
+    let pushed = 0;
+    for (const unlinkedCat of categoryManager.getCategoriesSnapshot().getUnlinkedFor(this.instanceId)) {
+      try {
+        const result = await this.createCategory({
+          name: unlinkedCat.name, path: unlinkedCat.path || '',
+          comment: unlinkedCat.comment || '',
+          color: hexColorToAmule(unlinkedCat.color), priority: unlinkedCat.priority || 0
+        });
+        if (result.success && result.categoryId != null) {
+          categoryManager.linkAmuleId(unlinkedCat.name, this.instanceId, result.categoryId);
+          pushed++;
+          this.log(`📤 Pushed category "${unlinkedCat.name}" to aMule (ID: ${result.categoryId})`);
+        }
+      } catch (err) {
+        this.log(`⚠️ Failed to push category "${unlinkedCat.name}" to aMule: ${err.message}`);
+      }
+    }
+    if (pushed > 0) await categoryManager.save();
+
+    // Phase 3: Push app-wins updates back to aMule
+    for (const catUpdate of toUpdateInAmule) {
+      await this.editCategory(catUpdate);
+    }
+
+    this.log(`📊 aMule sync complete: ${imported} imported, ${updated} to update, ${linked} linked, ${pushed} pushed`);
+
+    // Propagate all app categories to other connected clients that may not have them
+    await categoryManager.propagateToOtherClients(this.instanceId);
+    await categoryManager.validateAllPaths();
+  }
+
   // Graceful shutdown
   async shutdown() {
     this.log('🛑 Shutting down aMule connection...');
@@ -301,10 +1077,7 @@ class AmuleManager extends BaseModule {
     this.stopSharedFilesReloadScheduler();
 
     // Stop reconnection attempts
-    if (this.reconnectInterval) {
-      clearInterval(this.reconnectInterval);
-      this.reconnectInterval = null;
-    }
+    this.clearReconnect();
 
     // Wait for any ongoing connection attempts to finish
     let waitAttempts = 0;
@@ -330,4 +1103,4 @@ class AmuleManager extends BaseModule {
   }
 }
 
-module.exports = new AmuleManager();
+module.exports = { AmuleManager };

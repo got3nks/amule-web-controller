@@ -15,7 +15,7 @@ This guide covers building, developing, and contributing to aMuTorrent.
 
 ## Prerequisites
 
-- **Node.js:** v18 or higher
+- **Node.js:** v20 or higher
 - **npm:** v9 or higher
 - **aMule:** Running instance with EC enabled (for testing)
 

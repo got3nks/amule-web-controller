@@ -2,7 +2,7 @@
 
 aMuTorrent connects to qBittorrent via its WebUI API, allowing you to manage BitTorrent downloads alongside aMule and rTorrent.
 
-> **Alternative:** If you prefer rTorrent, see [rTorrent Integration](./RTORRENT.md). You can also use both BitTorrent clients simultaneously.
+> **Alternative:** aMuTorrent also supports [rTorrent](./RTORRENT.md), [Deluge](./DELUGE.md), and [Transmission](./TRANSMISSION.md). You can use multiple BitTorrent clients simultaneously.
 
 ## Requirements
 
@@ -97,9 +97,6 @@ services:
       - QBITTORRENT_PORT=8080
       - QBITTORRENT_USERNAME=admin
       - QBITTORRENT_PASSWORD=your_password
-    volumes:
-      # Download directories (optional): Required for moving/deleting files
-      - ./data/qBittorrent/downloads:/downloads/qBittorrent
     ports:
       - "4000:4000"
     restart: unless-stopped
@@ -121,20 +118,20 @@ Unlike rTorrent, qBittorrent handles file moves and deletions natively via its A
 
 - **File moves** use qBittorrent's `setLocation()` - no shared volume mount needed for moves
 - **File deletion** uses qBittorrent's API - no shared volume mount needed for deletes
-- Volume mounts are only needed if you want aMuTorrent to verify file permissions before operations
 
 ### Application Logs
 
 View qBittorrent application logs directly in aMuTorrent's Logs page (requires qBittorrent to be connected).
 
-## Using Both BitTorrent Clients
+## Using Multiple BitTorrent Clients
 
-You can run rTorrent and qBittorrent simultaneously. When both are connected:
+You can run multiple BitTorrent clients simultaneously (rTorrent, qBittorrent, Deluge, Transmission), including multiple instances of the same client type. When multiple clients are connected:
 
 - A **client selector** appears when adding downloads, letting you choose the target client
-- The **ED2K/BT filter** in the header groups both BitTorrent clients together
+- The **ED2K/BT filter** in the header groups all BitTorrent clients together
 - **Statistics** combine speeds and totals from all connected clients
-- **Prowlarr** search results can be sent to either client
+- **Prowlarr** search results can be sent to any connected BitTorrent client
+- Additional instances can be added through the **Settings** page
 
 ## Troubleshooting
 

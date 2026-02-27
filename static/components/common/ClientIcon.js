@@ -42,9 +42,22 @@ const ClientIcon = ({ client, clientType, size = 16, float = false, className = 
     defaultTitle = 'BitTorrent (qBittorrent)';
     alt = 'qB';
     src = '/static/logo-qbittorrent.svg';
-  } else {
+  } else if (clientValue === 'deluge') {
+    defaultTitle = 'BitTorrent (Deluge)';
+    alt = 'De';
+    src = '/static/logo-deluge.svg';
+  } else if (clientValue === 'transmission') {
+    defaultTitle = 'BitTorrent (Transmission)';
+    alt = 'Tr';
+    src = '/static/logo-transmission.svg';
+  } else if (clientValue === 'amule' || clientValue === 'ed2k') {
     defaultTitle = 'ED2K (aMule)';
     alt = 'ED2K';
+    src = '/static/logo-brax.png';
+  } else {
+    // Unknown client type — use ED2K icon as fallback
+    defaultTitle = clientValue || 'Unknown';
+    alt = '?';
     src = '/static/logo-brax.png';
   }
 

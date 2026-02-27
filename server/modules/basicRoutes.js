@@ -9,9 +9,8 @@ const config = require('./config');
 const BaseModule = require('../lib/BaseModule');
 const { getClientIP } = require('../lib/authUtils');
 
-// Singleton managers - imported directly instead of injected
-const amuleManager = require('./amuleManager');
-const rtorrentManager = require('./rtorrentManager');
+// Client registry - replaces direct singleton manager imports
+const registry = require('../lib/ClientRegistry');
 const geoIPManager = require('./geoIPManager');
 
 class BasicRoutes extends BaseModule {
@@ -19,12 +18,26 @@ class BasicRoutes extends BaseModule {
     super();
   }
 
-  // Health check endpoint
+  /**
+   * Health check endpoint.
+   * Returns server status and per-instance client connection status.
+   * @param {import('express').Request} req
+   * @param {import('express').Response} res
+   * @returns {void} JSON response: { status: 'ok', clients: { [instanceId]: { type, connected } }, connections, geoip }
+   */
   healthCheck(req, res) {
+    // Build per-instance connection status
+    const clients = {};
+    registry.forEach((manager, instanceId) => {
+      clients[instanceId] = {
+        type: manager.clientType,
+        connected: !!manager.isConnected()
+      };
+    });
+
     res.json({
       status: 'ok',
-      amuleConnected: !!amuleManager?.isConnected(),
-      rtorrentConnected: !!rtorrentManager?.isConnected(),
+      clients,
       connections: this.wss.clients.size,
       geoip: {
         cityLoaded: !!geoIPManager.cityReader,

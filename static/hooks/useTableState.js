@@ -17,8 +17,9 @@ import { sortFiles, calculatePagination, calculateLoadMore } from '../utils/inde
  * @param {string} options.viewKey - Unique key for this view (e.g., 'uploads', 'downloads')
  * @param {string|null} options.filterField - Field to filter by (null to disable text filtering)
  * @param {object|null} options.secondarySort - Secondary sort config {sortBy, sortDirection}
- * @param {Array|null} options.frozenOrder - Array of file hashes to maintain stable order (used during selection mode)
+ * @param {Array|null} options.frozenOrder - Array of compound keys to maintain stable order (used during selection mode)
  * @param {string} options.hashKey - Key to use for getting item hash (default: 'hash')
+ * @param {function|null} options.getItemKey - Function to derive compound key from item (default: item => item[hashKey])
  * @param {object} options.sortOptions - Extra options passed to sortFiles (e.g., { keepDefaultFirst: true })
  * @returns {Object} Table state and handlers
  */
@@ -29,6 +30,7 @@ export const useTableState = ({
   secondarySort = null,
   frozenOrder = null,
   hashKey = 'hash',
+  getItemKey = null,
   sortOptions = {}
 }) => {
   // Get shared state from context
@@ -64,12 +66,15 @@ export const useTableState = ({
     setAppPage(0);
   }, [viewKey, setAppSortConfig, setAppPage]);
 
+  // Derive item key function (compound key when available, plain hash as fallback)
+  const deriveKey = getItemKey || ((item) => item[hashKey]);
+
   // Memoized sorted data
   // When frozenOrder is provided, maintain stable order instead of dynamic sorting
   const sortedData = useMemo(() => {
     if (frozenOrder && frozenOrder.length > 0) {
-      // Create a position map for O(1) lookups
-      const positionMap = new Map(frozenOrder.map((hash, idx) => [hash, idx]));
+      // Create a position map for O(1) lookups (keys are compound keys)
+      const positionMap = new Map(frozenOrder.map((key, idx) => [key, idx]));
 
       // Sort items according to frozen order
       // Items not in frozen order go at the end, sorted by the normal sort config
@@ -77,9 +82,9 @@ export const useTableState = ({
       const notInFrozenOrder = [];
 
       filteredItems.forEach(item => {
-        const hash = item[hashKey];
-        if (positionMap.has(hash)) {
-          inFrozenOrder.push({ item, position: positionMap.get(hash) });
+        const key = deriveKey(item);
+        if (positionMap.has(key)) {
+          inFrozenOrder.push({ item, position: positionMap.get(key) });
         } else {
           notInFrozenOrder.push(item);
         }
@@ -100,7 +105,7 @@ export const useTableState = ({
 
     // Normal dynamic sorting
     return sortFiles(filteredItems, sortConfig.sortBy, sortConfig.sortDirection, secondarySort, sortOptions);
-  }, [filteredItems, sortConfig.sortBy, sortConfig.sortDirection, secondarySort, frozenOrder, hashKey, sortOptions]);
+  }, [filteredItems, sortConfig.sortBy, sortConfig.sortDirection, secondarySort, frozenOrder, deriveKey, sortOptions]);
 
   // Load-more pagination (cumulative)
   // appPage represents "pages loaded - 1", so appPage=0 means 1 page loaded

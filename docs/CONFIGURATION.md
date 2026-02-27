@@ -10,7 +10,7 @@ This guide covers all configuration options for aMuTorrent.
 - [Environment Variables](#environment-variables)
 - [Docker Network Configuration](#docker-network-configuration)
 
-> **Download Clients:** See [aMule](./AMULE.md), [rTorrent](./RTORRENT.md), and [qBittorrent](./QBITTORRENT.md) for client-specific setup.
+> **Download Clients:** See [aMule](./AMULE.md), [rTorrent](./RTORRENT.md), [qBittorrent](./QBITTORRENT.md), [Deluge](./DELUGE.md), and [Transmission](./TRANSMISSION.md) for client-specific setup.
 >
 > **Prowlarr:** Search torrents directly from the web UI. See [Prowlarr Setup](./PROWLARR.md).
 >
@@ -21,6 +21,8 @@ This guide covers all configuration options for aMuTorrent.
 > **Scripting:** Run custom scripts on download events for advanced automation. See [Scripting](../scripts/README.md).
 >
 > **GeoIP:** Display peer locations on a map. See [GeoIP Setup](./GEOIP.md).
+>
+> **User Management:** Multi-user authentication, capabilities, and SSO. See [User Management](./USERS.md).
 
 ---
 
@@ -30,7 +32,7 @@ When you first access the web interface (or if no configuration exists), an inte
 
 1. **Welcome** - Introduction to the setup process
 2. **Security** - Configure web interface authentication (password protection)
-3. **Download Clients** - Configure aMule, rTorrent, and/or qBittorrent connections (with testing)
+3. **Download Clients** - Configure aMule, rTorrent, qBittorrent, Deluge, and/or Transmission connections (with testing)
 4. **Directories** - Set data, logs, and GeoIP directories
 5. **Integrations** - Optionally enable Prowlarr, Sonarr, and Radarr
 6. **Review & Save** - Test all settings and save configuration
@@ -58,7 +60,7 @@ When authentication is enabled, the password must meet these requirements:
 After initial setup, access the Settings page anytime via the sidebar (desktop) or bottom navigation bar (mobile). The Settings page allows you to:
 
 - View and edit all configuration options
-- Test individual configuration sections (aMule, rTorrent, qBittorrent, Directories, Prowlarr, Sonarr, Radarr)
+- Test individual configuration sections (aMule, rTorrent, qBittorrent, Deluge, Transmission, Directories, Prowlarr, Sonarr, Radarr)
 - Test all configuration at once before saving
 - Enable/disable integrations with toggle switches
 
@@ -87,6 +89,8 @@ Sensitive fields include:
 - `AMULE_PASSWORD` - aMule EC connection password
 - `RTORRENT_PASSWORD` - rTorrent HTTP auth password
 - `QBITTORRENT_PASSWORD` - qBittorrent WebUI password
+- `DELUGE_PASSWORD` - Deluge WebUI password
+- `TRANSMISSION_PASSWORD` - Transmission RPC password
 - `PROWLARR_API_KEY` - Prowlarr API key
 - `SONARR_API_KEY` - Sonarr API key
 - `RADARR_API_KEY` - Radarr API key
@@ -145,6 +149,11 @@ services:
       - WEB_AUTH_ENABLED=true
       - WEB_AUTH_PASSWORD=your_secure_password  # Locks UI editing
 
+      # Trusted Proxy SSO (optional - requires WEB_AUTH_ENABLED=true)
+      - TRUSTED_PROXY_ENABLED=true
+      - TRUSTED_PROXY_USERNAME_HEADER=X-Remote-User
+      - TRUSTED_PROXY_AUTO_PROVISION=true
+
       # aMule Connection (optional)
       - AMULE_ENABLED=true
       - AMULE_HOST=host.docker.internal
@@ -167,7 +176,23 @@ services:
       - QBITTORRENT_PASSWORD=pass  # Locks UI editing
       - QBITTORRENT_USE_SSL=false
 
-      # Prowlarr Integration (optional - requires rTorrent or qBittorrent)
+      # Deluge Connection (optional)
+      - DELUGE_ENABLED=true
+      - DELUGE_HOST=deluge
+      - DELUGE_PORT=8112
+      - DELUGE_PASSWORD=deluge  # Locks UI editing
+      - DELUGE_USE_SSL=false
+
+      # Transmission Connection (optional)
+      - TRANSMISSION_ENABLED=true
+      - TRANSMISSION_HOST=transmission
+      - TRANSMISSION_PORT=9091
+      - TRANSMISSION_PATH=/transmission/rpc
+      - TRANSMISSION_USERNAME=user
+      - TRANSMISSION_PASSWORD=pass  # Locks UI editing
+      - TRANSMISSION_USE_SSL=false
+
+      # Prowlarr Integration (optional - requires a BitTorrent client)
       - PROWLARR_ENABLED=true
       - PROWLARR_URL=http://prowlarr:9696
       - PROWLARR_API_KEY=your_api_key  # Locks UI editing
@@ -202,6 +227,17 @@ services:
 | `WEB_AUTH_ENABLED` | `false` | Enable password protection for the web UI |
 | `WEB_AUTH_PASSWORD` | - | Password for web UI access (locks UI editing) |
 
+#### Trusted Proxy SSO
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRUSTED_PROXY_ENABLED` | `false` | Enable trusted proxy SSO (requires `WEB_AUTH_ENABLED`) |
+| `TRUSTED_PROXY_USERNAME_HEADER` | - | HTTP header containing the authenticated username |
+| `TRUSTED_PROXY_AUTO_PROVISION` | `false` | Automatically create users from proxy header |
+| `TRUSTED_PROXY_IPS` | - | Comma-separated CIDR ranges (empty = default private ranges) |
+
+> **Note:** See [User Management](./USERS.md) for full details on authentication modes, capabilities, and SSO configuration.
+
 #### aMule Connection
 
 | Variable | Default | Description |
@@ -234,6 +270,28 @@ services:
 | `QBITTORRENT_PASSWORD` | - | WebUI password (locks UI editing) |
 | `QBITTORRENT_USE_SSL` | `false` | Use HTTPS for WebUI connection |
 
+#### Deluge Connection
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DELUGE_ENABLED` | `false` | Enable Deluge integration |
+| `DELUGE_HOST` | `localhost` | Deluge WebUI hostname |
+| `DELUGE_PORT` | `8112` | Deluge WebUI port |
+| `DELUGE_PASSWORD` | - | WebUI password (locks UI editing) |
+| `DELUGE_USE_SSL` | `false` | Use HTTPS for WebUI connection |
+
+#### Transmission Connection
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRANSMISSION_ENABLED` | `false` | Enable Transmission integration |
+| `TRANSMISSION_HOST` | `localhost` | Transmission RPC hostname |
+| `TRANSMISSION_PORT` | `9091` | Transmission RPC port |
+| `TRANSMISSION_PATH` | `/transmission/rpc` | RPC endpoint path |
+| `TRANSMISSION_USERNAME` | - | RPC auth username (if required) |
+| `TRANSMISSION_PASSWORD` | - | RPC auth password (locks UI editing) |
+| `TRANSMISSION_USE_SSL` | `false` | Use HTTPS for RPC connection |
+
 #### Prowlarr Integration
 
 | Variable | Default | Description |
@@ -263,7 +321,7 @@ services:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `HISTORY_ENABLED` | `false` | Enable download history tracking |
-| `HISTORY_USERNAME_HEADER` | - | HTTP header for username (e.g., `remote-user` for Authelia) |
+| `HISTORY_USERNAME_HEADER` | - | *Deprecated* — use Trusted Proxy SSO instead. See [User Management](./USERS.md) |
 
 #### Event Scripting
 
@@ -294,7 +352,7 @@ services:
 
 ### Default Setup - Services on Host Machine
 
-This is the most common scenario when aMule, rTorrent, or qBittorrent run on your host:
+This is the most common scenario when your download clients run on your host:
 
 ```yaml
 extra_hosts:
@@ -308,7 +366,7 @@ extra_hosts:
 ### Services in Other Containers
 
 If using the all-in-one setup or services are in separate containers:
-- Use the **service name** as hostname (e.g., `amule`, `rtorrent`, `qbittorrent`, `prowlarr`)
+- Use the **service name** as hostname (e.g., `amule`, `rtorrent`, `qbittorrent`, `deluge`, `transmission`, `prowlarr`)
 - Ensure all containers are on the same Docker network
 - The `extra_hosts` line is not needed
 

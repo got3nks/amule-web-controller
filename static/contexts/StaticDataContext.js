@@ -23,18 +23,21 @@ export const StaticDataProvider = ({ children }) => {
   // Static data state (changes less frequently)
   const [dataServers, setDataServers] = useState([]);
   const [dataCategories, setDataCategories] = useState([]);  // Unified categories (aMule + rtorrent)
-  const [clientDefaultPaths, setClientDefaultPaths] = useState({ amule: null, rtorrent: null, qbittorrent: null });  // Default paths from clients
-  const [clientsEnabled, setClientsEnabled] = useState({ amule: false, rtorrent: false, qbittorrent: false, prowlarr: false });  // Which clients are enabled in config (populated from backend)
-  const [clientsConnected, setClientsConnected] = useState({ amule: false, rtorrent: false, qbittorrent: false });  // Which clients are currently connected
+  const [clientDefaultPaths, setClientDefaultPaths] = useState({});  // Default paths from clients (keyed by instanceId)
+  const [prowlarrEnabled, setProwlarrEnabled] = useState(false);  // Whether prowlarr integration is enabled
   const [knownTrackers, setKnownTrackers] = useState([]);  // Known trackers from rtorrent items
   const [historyTrackUsername, setHistoryTrackUsername] = useState(false);  // Whether to track username in history
   const [hasCategoryPathWarnings, setHasCategoryPathWarnings] = useState(false);  // Whether any category has path issues
+  const [instances, setInstances] = useState({});  // Per-instance metadata from backend (keyed by instanceId)
   const [dataLogs, setDataLogs] = useState('');
   const [dataServerInfo, setDataServerInfo] = useState('');
   const [dataAppLogs, setDataAppLogs] = useState('');
   const [dataQbittorrentLogs, setDataQbittorrentLogs] = useState('');
   const [dataStatsTree, setDataStatsTree] = useState(null);
   const [dataDownloadedFiles, setDataDownloadedFiles] = useState(new Set());
+  // Alias map: realHash → displayHash (e.g. torrent info hash → Prowlarr GUID)
+  // Used by delete handler to remove both keys from dataDownloadedFiles
+  const downloadedAliasRef = useRef(new Map());
 
   // Loaded flags for static data
   const [dataLoaded, setDataLoaded] = useState({
@@ -68,16 +71,63 @@ export const StaticDataProvider = ({ children }) => {
   // lastEd2kWasServerList - just a ref, no state needed (not used for rendering)
   const lastEd2kWasServerListRef = useRef(false);
 
-  // Derived: check if multiple clients are connected (for showing ED2K/BT badges)
-  // Show badges when aMule + any BitTorrent client, or when multiple BitTorrent clients
-  const bothClientsConnected = useMemo(() => {
-    const amule = clientsConnected.amule === true;
-    const rtorrent = clientsConnected.rtorrent === true;
-    const qbittorrent = clientsConnected.qbittorrent === true;
-    const btCount = (rtorrent ? 1 : 0) + (qbittorrent ? 1 : 0);
-    // Show badges if aMule + any BT client, or if multiple BT clients
-    return (amule && btCount > 0) || btCount > 1;
-  }, [clientsConnected.amule, clientsConnected.rtorrent, clientsConnected.qbittorrent]);
+  // Set of client types that have >1 connected instance (e.g. two qBittorrent servers)
+  const multiInstanceTypes = useMemo(() => {
+    const typeCounts = {};
+    for (const inst of Object.values(instances)) {
+      if (inst.connected) {
+        typeCounts[inst.type] = (typeCounts[inst.type] || 0) + 1;
+      }
+    }
+    return new Set(
+      Object.entries(typeCounts).filter(([, c]) => c > 1).map(([t]) => t)
+    );
+  }, [instances]);
+
+  const hasMultiInstance = multiInstanceTypes.size > 0;
+
+  // Derived: is any instance of this type connected?
+  const isTypeConnected = useCallback((type) =>
+    Object.values(instances).some(i => i.type === type && i.connected),
+    [instances]
+  );
+
+  // Derived: is any instance of this network type connected?
+  const isNetworkTypeConnected = useCallback((networkType) =>
+    Object.values(instances).some(i => i.networkType === networkType && i.connected),
+    [instances]
+  );
+
+  // Derived: is any instance of this type registered (enabled in config)?
+  const hasType = useCallback((type) =>
+    Object.values(instances).some(i => i.type === type),
+    [instances]
+  );
+
+  // Derived: get capabilities object for a given instanceId
+  const getCapabilities = useCallback((instanceId) =>
+    instances[instanceId]?.capabilities || {},
+    [instances]
+  );
+
+  // Derived: any disconnected instance with an error message?
+  const hasClientConnectionWarnings = useMemo(() =>
+    Object.values(instances).some(i => !i.connected && i.error),
+    [instances]
+  );
+
+  // Derived: true when multiple clients are connected (different network types OR multi-instance)
+  const multipleClientsConnected = useMemo(() => {
+    const connectedNetworkTypes = new Set();
+    for (const inst of Object.values(instances)) {
+      if (inst.connected) {
+        connectedNetworkTypes.add(inst.networkType);
+      }
+    }
+    // Show badges when: multiple network types connected, OR multi-instance of same type
+    if (connectedNetworkTypes.size > 1) return true;
+    return multiInstanceTypes.size > 0;
+  }, [instances, multiInstanceTypes]);
 
   // Memoize context value to prevent unnecessary re-renders
   const value = useMemo(() => ({
@@ -85,20 +135,30 @@ export const StaticDataProvider = ({ children }) => {
     dataServers,
     dataCategories,
     clientDefaultPaths,
-    clientsEnabled,
-    clientsConnected,
+    prowlarrEnabled,
     knownTrackers,
     historyTrackUsername,
     hasCategoryPathWarnings,
 
-    // Derived
-    bothClientsConnected,
+    instances,
+    multiInstanceTypes,
+    hasMultiInstance,
+
+    // Derived helpers
+    isTypeConnected,
+    isNetworkTypeConnected,
+    hasType,
+    getCapabilities,
+    hasClientConnectionWarnings,
+    multipleClientsConnected,
+
     dataLogs,
     dataServerInfo,
     dataAppLogs,
     dataQbittorrentLogs,
     dataStatsTree,
     dataDownloadedFiles,
+    downloadedAliasRef,
     dataServersEd2kLinks,
     dataLoaded,
     lastEd2kWasServerListRef,
@@ -107,11 +167,11 @@ export const StaticDataProvider = ({ children }) => {
     setDataServers,
     setDataCategories,
     setClientDefaultPaths,
-    setClientsEnabled,
-    setClientsConnected,
+    setProwlarrEnabled,
     setKnownTrackers,
     setHistoryTrackUsername,
     setHasCategoryPathWarnings,
+    setInstances,
     setDataLogs,
     setDataServerInfo,
     setDataAppLogs,
@@ -122,8 +182,9 @@ export const StaticDataProvider = ({ children }) => {
     markDataLoaded,
     resetDataLoaded
   }), [
-    dataServers, dataCategories, clientDefaultPaths, clientsEnabled, clientsConnected, knownTrackers,
-    historyTrackUsername, hasCategoryPathWarnings, bothClientsConnected,
+    dataServers, dataCategories, clientDefaultPaths, prowlarrEnabled, knownTrackers,
+    historyTrackUsername, hasCategoryPathWarnings, instances, multiInstanceTypes, hasMultiInstance,
+    isTypeConnected, isNetworkTypeConnected, hasType, getCapabilities, hasClientConnectionWarnings, multipleClientsConnected,
     dataLogs, dataServerInfo, dataAppLogs, dataQbittorrentLogs, dataStatsTree, dataDownloadedFiles, dataServersEd2kLinks,
     dataLoaded, markDataLoaded, resetDataLoaded
   ]);

@@ -9,12 +9,14 @@
 import React from 'https://esm.sh/react@18.2.0';
 import { Table, ContextMenu, MoreButton, Button, Select, IconButton, SelectionModeSection, EmptyState, DownloadMobileCard, MobileStatusTabs, MobileFilterPills, MobileFilterSheet, MobileFilterButton, MobileSortButton, ExpandableSearch, FilterInput, SelectionCheckbox, Tooltip, Icon } from '../common/index.js';
 import { getRowHighlightClass, DEFAULT_SORT_CONFIG, DEFAULT_SECONDARY_SORT_CONFIG, formatTitleCount, buildSpeedColumn, buildSizeColumn, buildFileNameColumn, buildStatusColumn, buildCategoryColumn, buildProgressColumn, buildSourcesColumn, buildAddedAtColumn, buildETAColumn, VIEW_TITLE_STYLES, createCategoryLabelFilter, createTrackerFilter } from '../../utils/index.js';
+import { itemKey } from '../../utils/itemKey.js';
 import { useModal, useViewDeleteModal, useBatchExport, useViewFilters, usePageSelection, useItemActions, useCategoryFilterOptions, useItemContextMenu, useColumnConfig, getSecondarySortConfig, useFileInfoModal, useFileCategoryModal } from '../../hooks/index.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useActions } from '../../contexts/ActionsContext.js';
 import { useTheme } from '../../contexts/ThemeContext.js';
 import { useStickyToolbar } from '../../contexts/StickyHeaderContext.js';
+import { useCapabilities } from '../../hooks/useCapabilities.js';
 import AddDownloadModal from '../modals/AddDownloadModal.js';
 
 const { createElement: h, useMemo, useCallback } = React;
@@ -30,6 +32,11 @@ const DownloadsView = () => {
   const { dataCategories } = useStaticData();
   const actions = useActions();
   const { theme } = useTheme();
+  const { hasCap } = useCapabilities();
+  const hasAnyMutationCap = hasCap('pause_resume') || hasCap('remove_downloads') || hasCap('assign_categories');
+
+  // Ownership check: user can mutate item if they have edit_all_downloads or own it
+  const canMutateItem = useCallback((item) => hasCap('edit_all_downloads') || item.ownedByMe !== false, [hasCap]);
 
   const dataLoaded = { downloads: liveDataLoaded.items };
 
@@ -122,7 +129,8 @@ const DownloadsView = () => {
     selectShown,
     selectAll,
     isShownFullySelected,
-    hashKey: 'hash'
+    hashKey: 'hash',
+    selectableFilter: canMutateItem
   });
 
   // ============================================================================
@@ -143,6 +151,7 @@ const DownloadsView = () => {
     handleDeleteClick,
     handleBatchDeleteClick,
     selectedClientTypes,
+    selectedNetworkTypes,
     DeleteModalElement
   } = useViewDeleteModal({
     dataArray: downloads,
@@ -175,7 +184,7 @@ const DownloadsView = () => {
   });
 
   const handleShowInfo = useCallback((download) => {
-    openFileInfo(download.hash);
+    openFileInfo(download.hash, download.instanceId);
   }, [openFileInfo]);
 
   // ============================================================================
@@ -194,8 +203,8 @@ const DownloadsView = () => {
     selectionMode,
     openContextMenu,
     onShowInfo: handleShowInfo,
-    onDelete: (item) => handleDeleteClick(item.hash, item.name, item.client || 'amule'),
-    onCategoryChange: (item) => openCategoryModal(item.hash, item.name, item.category || 'Default'),
+    onDelete: hasCap('remove_downloads') ? (item) => handleDeleteClick(item.hash, item.name, item.client || 'amule', item.instanceId) : null,
+    onCategoryChange: (item) => openCategoryModal(item.hash, item.name, item.category || 'Default', item.instanceId),
     onPause: handlePause,
     onResume: handleResume,
     onStop: handleStop,
@@ -231,10 +240,10 @@ const DownloadsView = () => {
       resetLoaded,
       filterOptions: categoryFilterOptions,
       categories: dataCategories,
-      onCategoryClick: openCategoryModal,
-      disabled: selectionMode
+      onCategoryClick: hasCap('assign_categories') ? openCategoryModal : null,
+      disabled: (item) => selectionMode || !canMutateItem(item)
     })
-  ], [handleShowInfo, statusFilter, setStatusFilter, resetLoaded, statusOptions, theme, unifiedFilter, setUnifiedFilter, categoryFilterOptions, dataCategories, openCategoryModal, selectionMode]);
+  ], [handleShowInfo, statusFilter, setStatusFilter, resetLoaded, statusOptions, theme, unifiedFilter, setUnifiedFilter, categoryFilterOptions, dataCategories, openCategoryModal, selectionMode, hasCap, canMutateItem]);
 
   // ============================================================================
   // COLUMN CONFIG (visibility and order)
@@ -273,7 +282,7 @@ const DownloadsView = () => {
           defaultSortDirection: DEFAULT_SORT_CONFIG.downloads.sortDirection
         }),
         hiddenWhenExpanded: [
-          h(IconButton, {
+          hasAnyMutationCap && h(IconButton, {
             key: 'select',
             variant: selectionMode ? 'danger' : 'secondary',
             icon: selectionMode ? 'x' : 'fileCheck',
@@ -281,7 +290,7 @@ const DownloadsView = () => {
             onClick: toggleSelectionMode,
             title: selectionMode ? 'Exit Selection Mode' : 'Select Files'
           }),
-          h(IconButton, {
+          hasCap('add_downloads') && h(IconButton, {
             key: 'add',
             variant: 'success',
             icon: 'plus',
@@ -289,7 +298,7 @@ const DownloadsView = () => {
             onClick: openAddDownloadModal,
             title: 'Add Download'
           })
-        ]
+        ].filter(Boolean)
       })
     ),
   [filteredDownloads.length, downloads.length, filterText, setFilterText, clearFilter, columns, sortConfig, onSortChange, selectionMode, toggleSelectionMode, openAddDownloadModal]);
@@ -344,13 +353,13 @@ const DownloadsView = () => {
           options: trackerOptions,
           title: 'Filter by tracker'
         }),
-        h(Button, {
+        hasAnyMutationCap && h(Button, {
           key: 'select',
           variant: selectionMode ? 'danger' : 'purple',
           onClick: toggleSelectionMode,
           icon: selectionMode ? 'x' : 'fileCheck'
         }, selectionMode ? 'Exit Selection Mode' : 'Select Files'),
-        h(Button, {
+        hasCap('add_downloads') && h(Button, {
           key: 'add',
           variant: 'success',
           onClick: openAddDownloadModal,
@@ -382,9 +391,12 @@ const DownloadsView = () => {
       }, h(Icon, { name: 'tableConfig', size: 16, className: 'text-gray-500 dark:text-gray-400' })),
       actions: (item) => {
         if (selectionMode) {
+          const key = itemKey(item.instanceId, item.hash);
+          const canSelect = canMutateItem(item);
           return h(SelectionCheckbox, {
-            checked: selectedFiles.has(item.hash),
-            onChange: () => toggleFileSelection(item.hash)
+            checked: selectedFiles.has(key),
+            onChange: canSelect ? () => toggleFileSelection(key) : undefined,
+            disabled: !canSelect
           });
         }
         return h(MoreButton, {
@@ -405,27 +417,27 @@ const DownloadsView = () => {
       pageSize,
       onPageSizeChange,
       skipSort: selectionMode || contextMenu.show,
-      getRowKey: (item) => item.hash,
+      getRowKey: (item) => itemKey(item.instanceId, item.hash),
       getRowClassName: (item) => getRowHighlightClass(
-        selectionMode && selectedFiles.has(item.hash),
-        contextMenu.show && contextMenu.item?.hash === item.hash
+        selectionMode && selectedFiles.has(itemKey(item.instanceId, item.hash)),
+        contextMenu.show && contextMenu.item?.hash === item.hash && contextMenu.item?.instanceId === item.instanceId
       ),
       onRowContextMenu: handleRowContextMenu,
-      onRowClick: selectionMode ? (item) => toggleFileSelection(item.hash) : null,
+      onRowClick: selectionMode ? (item) => { if (canMutateItem(item)) toggleFileSelection(itemKey(item.instanceId, item.hash)); } : null,
       breakpoint: 'xl',
       mobileCardStyle: 'card',
       mobileCardRender: (item, idx, showBadge, categoryStyle) => {
         return h(DownloadMobileCard, {
-          key: item.hash,
+          key: itemKey(item.instanceId, item.hash),
           item,
           theme,
           showBadge,
           categoryStyle,
           idx,
           selectionMode,
-          isSelected: selectionMode && selectedFiles.has(item.hash),
-          isContextTarget: contextMenu.show && contextMenu.item?.hash === item.hash,
-          onSelectionToggle: () => toggleFileSelection(item.hash),
+          isSelected: selectionMode && selectedFiles.has(itemKey(item.instanceId, item.hash)),
+          isContextTarget: contextMenu.show && contextMenu.item?.hash === item.hash && contextMenu.item?.instanceId === item.instanceId,
+          onSelectionToggle: canMutateItem(item) ? () => toggleFileSelection(itemKey(item.instanceId, item.hash)) : undefined,
           onNameClick: (e, anchorEl) => openContextMenu(e, item, anchorEl),
           onMoreClick: (e) => openContextMenu(e, item, e.currentTarget)
         });
@@ -447,14 +459,17 @@ const DownloadsView = () => {
       onClearAll: clearAllSelections,
       onExit: toggleSelectionMode
     },
-      h(Button, { variant: 'warning', onClick: handleBatchPause, icon: 'pause', iconSize: 14 }, 'Pause'),
-      h(Button, { variant: 'success', onClick: handleBatchResume, icon: 'play', iconSize: 14 }, 'Resume'),
-      h(Tooltip, { content: !selectedClientTypes.has('rtorrent') && !selectedClientTypes.has('qbittorrent') ? 'Stop is only available for BitTorrent downloads' : 'Stop selected torrents', position: 'top' },
-        h(Button, { variant: 'secondary', onClick: handleBatchStop, icon: 'stop', iconSize: 14, disabled: !selectedClientTypes.has('rtorrent') && !selectedClientTypes.has('qbittorrent') }, 'Stop')
+      hasCap('pause_resume') && h(Button, { variant: 'warning', onClick: handleBatchPause, icon: 'pause', iconSize: 14 }, 'Pause'),
+      hasCap('pause_resume') && h(Button, { variant: 'success', onClick: handleBatchResume, icon: 'play', iconSize: 14 }, 'Resume'),
+      hasCap('pause_resume') && (!selectedNetworkTypes.has('bittorrent')
+        ? h(Tooltip, { content: 'Stop is only available for BitTorrent downloads', position: 'top' },
+            h(Button, { variant: 'secondary', onClick: handleBatchStop, icon: 'stop', iconSize: 14, disabled: true }, 'Stop')
+          )
+        : h(Button, { variant: 'secondary', onClick: handleBatchStop, icon: 'stop', iconSize: 14 }, 'Stop')
       ),
-      h(Button, { variant: 'orange', onClick: handleBatchSetCategory, icon: 'folder', iconSize: 14 }, 'Edit Category'),
+      hasCap('assign_categories') && h(Button, { variant: 'orange', onClick: handleBatchSetCategory, icon: 'folder', iconSize: 14 }, 'Edit Category'),
       h(Button, { variant: batchCopyStatus === 'success' ? 'success' : 'purple', onClick: handleBatchExport, disabled: batchCopyStatus === 'success', icon: batchCopyStatus === 'success' ? 'check' : 'share', iconSize: 14 }, batchCopyStatus === 'success' ? 'Copied!' : 'Export Links'),
-      h(Button, { variant: 'danger', onClick: handleBatchDeleteClick, icon: 'trash', iconSize: 14 }, 'Delete')
+      hasCap('remove_downloads') && h(Button, { variant: 'danger', onClick: handleBatchDeleteClick, icon: 'trash', iconSize: 14 }, 'Delete')
     ),
 
     // ========================================================================
@@ -466,9 +481,9 @@ const DownloadsView = () => {
 
     DeleteModalElement,
 
-    h(AddDownloadModal, {
+    hasCap('add_downloads') && h(AddDownloadModal, {
       show: addDownloadModal.show,
-      onAddEd2kLinks: (links, categoryId) => actions.search.addEd2kLinks(links.join('\n'), categoryId, false),
+      onAddEd2kLinks: (links, categoryName) => actions.search.addEd2kLinks(links.join('\n'), categoryName, false),
       onAddMagnetLinks: actions.search.addMagnetLinks,
       onAddTorrentFile: actions.search.addTorrentFile,
       onClose: closeAddDownloadModal

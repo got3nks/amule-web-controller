@@ -57,6 +57,7 @@ const DownloadMobileCard = ({
     h(MobileCardHeader, {
       showBadge,
       clientType: item.client,
+      instanceId: item.instanceId,
       fileName: item.name,
       fileSize: item.size,
       selectionMode,

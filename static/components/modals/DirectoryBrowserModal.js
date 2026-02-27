@@ -106,7 +106,7 @@ const DirectoryBrowserModal = ({
       onClick: onClose
     },
       h('div', {
-        className: 'bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md flex flex-col max-h-[80vh]',
+        className: 'modal-full bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md flex flex-col max-h-[80vh]',
         onClick: (e) => e.stopPropagation()
       },
         // Header

@@ -3,6 +3,9 @@
  *
  * Provides common dependency injection setters to reduce boilerplate across modules.
  * All modules can extend this class to automatically get standard setters.
+ *
+ * Download client managers should extend BaseClientManager instead, which adds
+ * client lifecycle, history tracking, reconnection, and tracker cache.
  */
 const logger = require('./logger');
 
@@ -14,6 +17,7 @@ class BaseModule {
     this.metricsDB = null;
     this.downloadHistoryDB = null;
     this.wss = null;
+    this.userManager = null;
   }
 
   /**
@@ -57,6 +61,14 @@ class BaseModule {
   }
 
   /**
+   * Set user manager instance
+   * @param {Object} userManager - UserManager instance
+   */
+  setUserManager(userManager) {
+    this.userManager = userManager;
+  }
+
+  /**
    * Inject multiple dependencies at once
    * Only sets dependencies that exist in the provided object and have a matching setter
    * @param {Object} deps - Object containing dependencies to inject
@@ -69,7 +81,8 @@ class BaseModule {
       metricsDB: 'setMetricsDB',
       downloadHistoryDB: 'setDownloadHistoryDB',
       wss: 'setWebSocketServer',
-      hashStore: 'setHashStore'
+      hashStore: 'setHashStore',
+      userManager: 'setUserManager'
     };
 
     for (const [key, setter] of Object.entries(setterMap)) {

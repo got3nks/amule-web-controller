@@ -22,11 +22,12 @@ const { createElement: h, useState, useEffect } = React;
  * @param {number} itemCount - Number of items (for batch delete)
  * @param {boolean} isBatch - Whether this is a batch operation
  * @param {string} confirmLabel - Label for confirm button (default: 'Delete')
- * @param {function} onConfirm - Confirm handler (receives deleteFiles boolean for rtorrent)
+ * @param {function} onConfirm - Confirm handler (receives deleteFiles boolean)
  * @param {function} onCancel - Cancel handler
  * @param {string} itemType - Type of item ('File' or 'Server', default: 'File')
- * @param {string} clientType - Client type ('amule', 'rtorrent', or 'qbittorrent') - shows delete files option for rtorrent/qbittorrent
- * @param {boolean} forceShowDeleteOption - Force show delete files checkbox (for aMule shared files)
+ * @param {boolean} hasSharedFiles - Whether any items are shared files (will always be deleted from disk)
+ * @param {boolean} hasAutoDeleteItems - Whether any items auto-delete temp files on cancel (cancelDeletesFiles capability)
+ * @param {boolean} hasNonAutoDeleteItems - Whether any items need explicit "delete files" option
  * @param {Object} permissionCheck - Permission check results { loading, canDeleteFiles, warnings }
  * @param {boolean} skipFileMessages - Skip file-related info messages (e.g., for history deletion)
  * @param {function} onEditMappings - Optional handler to open category mappings editor
@@ -42,8 +43,9 @@ const DeleteModal = ({
   onConfirm,
   onCancel,
   itemType = 'File',
-  clientType = 'amule',
-  forceShowDeleteOption = false,
+  hasSharedFiles = false,
+  hasAutoDeleteItems = false,
+  hasNonAutoDeleteItems = false,
   permissionCheck = null,
   skipFileMessages = false,
   onEditMappings
@@ -59,15 +61,14 @@ const DeleteModal = ({
 
   if (!show) return null;
 
-  // For aMule shared files: always delete (no checkbox needed, aMule can't just "unshare")
-  // For mixed shared: show checkbox for rTorrent, but aMule files will always be deleted
-  // For rTorrent: show checkbox
-  const isAmuleSharedOnly = clientType === 'amule' && forceShowDeleteOption;
-  const isMixedShared = clientType === 'mixed' && forceShowDeleteOption;
-
-  // Show checkbox for rTorrent/qBittorrent files (pure torrent clients or any mixed batches)
-  // For mixed: checkbox controls torrent file deletion (aMule files handled separately)
-  const showDeleteFilesOption = clientType === 'rtorrent' || clientType === 'qbittorrent' || clientType === 'mixed';
+  // Capability-driven delete UI flags:
+  // isSharedOnly: all items are shared files from auto-delete clients (will always be deleted, no checkbox)
+  // isMixedShared: shared files + non-auto-delete items (show shared info + checkbox for others)
+  // showDeleteFilesOption: any items that need explicit "delete files" checkbox
+  const isSharedOnly = hasSharedFiles && !hasNonAutoDeleteItems;
+  const isMixedShared = hasSharedFiles && hasNonAutoDeleteItems;
+  const showDeleteFilesOption = hasNonAutoDeleteItems;
+  const isMixed = hasAutoDeleteItems && hasNonAutoDeleteItems;
 
   // Permission check state
   const isCheckingPermissions = permissionCheck?.loading || false;
@@ -87,18 +88,24 @@ const DeleteModal = ({
       onClick: onCancel
     },
       h('div', {
-        className: 'bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6 transform transition-all',
+        className: 'bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full flex flex-col overflow-hidden',
         onClick: (e) => e.stopPropagation()
       },
-      h('div', { className: 'flex items-center gap-3 mb-4' },
-        h('div', { className: 'flex-shrink-0 w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center' },
-          h(Icon, { name: 'trash', size: 24, className: 'text-red-600 dark:text-red-400' })
-        ),
-        h('div', null,
-          h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100' }, displayTitle),
-          h('p', { className: 'text-sm text-gray-500 dark:text-gray-400' }, 'This action cannot be undone')
+      // Header
+      h('div', { className: 'px-6 py-4 border-b border-gray-200 dark:border-gray-700' },
+        h('div', { className: 'flex items-center gap-3' },
+          h('div', { className: 'flex-shrink-0 w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center' },
+            h(Icon, { name: 'trash', size: 24, className: 'text-red-600 dark:text-red-400' })
+          ),
+          h('div', null,
+            h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100' }, displayTitle),
+            h('p', { className: 'text-sm text-gray-500 dark:text-gray-400' }, 'This action cannot be undone')
+          )
         )
       ),
+
+      // Body
+      h('div', { className: 'flex-1 overflow-y-auto px-6 py-4' },
       h('p', { className: 'text-gray-700 dark:text-gray-300 mb-4' },
         displayMessage,
         isBatchOperation
@@ -106,31 +113,21 @@ const DeleteModal = ({
           : (itemName && h('span', { className: 'font-semibold break-all' }, `"${itemName}"`)),
         !isBatchOperation && itemName && '?'
       ),
-      // For aMule shared files: info that files will be deleted (no choice)
-      // Always show this when there are aMule shared files being removed
-      isAmuleSharedOnly && !skipFileMessages && h('div', { className: 'mb-4' },
+      // Shared files info: files will be deleted from disk (no choice — cannot be unshared)
+      hasSharedFiles && !skipFileMessages && h('div', { className: 'mb-4' },
         h(AlertBox, {
           type: 'info',
           className: 'text-xs py-2 !mb-0'
-        }, 'aMule shared files will be deleted from disk (cannot be unshared)')
+        }, 'Shared files will be deleted from disk (cannot be unshared)')
       ),
-      // For mixed shared: info that ED2K files will be deleted regardless of checkbox
-      // Always show this when there are mixed shared files being removed
-      isMixedShared && !skipFileMessages && h('div', { className: 'mb-4' },
-        h(AlertBox, {
-          type: 'info',
-          className: 'text-xs py-2 !mb-0'
-        }, 'aMule shared files will be deleted from disk (cannot be unshared)')
-      ),
-      // For aMule downloads (not shared): info that temp files are always deleted
-      // Always show this when there are aMule downloads being removed (even if there are warnings)
-      (clientType === 'amule' || clientType === 'mixed') && !forceShowDeleteOption && !skipFileMessages && h('div', { className: 'mb-4' },
+      // Auto-delete info: temp files are always deleted on cancel (only when no shared files shown)
+      hasAutoDeleteItems && !hasSharedFiles && !skipFileMessages && h('div', { className: 'mb-4' },
         h(AlertBox, {
           type: 'info',
           className: 'text-xs py-2 !mb-0'
         },
-          clientType === 'mixed'
-            ? 'aMule downloads will have their temporary files deleted automatically'
+          isMixed
+            ? 'Some downloads will have their temporary files deleted automatically'
             : 'Temporary download files will be deleted automatically'
         )
       ),
@@ -149,7 +146,7 @@ const DeleteModal = ({
           }),
           h('span', { className: 'text-sm text-gray-700 dark:text-gray-300' },
             isCheckingPermissions ? 'Checking file permissions...' :
-            clientType === 'mixed' ? 'Also delete torrent files from disk' :
+            isMixed ? 'Also delete torrent files from disk' :
             'Also delete files from disk'
           )
         )
@@ -167,24 +164,25 @@ const DeleteModal = ({
           }, warning.message)
         )
       ),
-      // Add margin when no info/warning/checkbox is shown
-      !showDeleteFilesOption && !isAmuleSharedOnly && clientType !== 'amule' && clientType !== 'mixed' && h('div', { className: 'mb-2' }),
-      h('div', { className: 'flex gap-3 justify-end' },
+      ), // Close body
+
+      // Footer
+      h('div', { className: 'px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex gap-3 justify-end' },
         h(Button, {
           variant: 'secondary',
           onClick: onCancel
         }, 'Cancel'),
         h(Button, {
           variant: 'danger',
-          // Disable when checking permissions, when aMule shared files can't be deleted,
+          // Disable when checking permissions, when shared-only files can't be deleted,
           // or when mixed shared has file not found warnings (can't proceed without all files)
-          disabled: isCheckingPermissions || (isAmuleSharedOnly && !canDeleteFiles) || (isMixedShared && permissionWarnings.length > 0),
-          // For aMule shared files, always pass deleteFiles=true (they can only be deleted, not unshared)
-          onClick: () => onConfirm(isAmuleSharedOnly || isMixedShared ? true : deleteFiles)
+          disabled: isCheckingPermissions || (isSharedOnly && !canDeleteFiles) || (isMixedShared && permissionWarnings.length > 0),
+          // For shared files, always pass deleteFiles=true (they can only be deleted, not unshared)
+          onClick: () => onConfirm(hasSharedFiles ? true : deleteFiles)
         },
           // Button label reflects what will happen
           isCheckingPermissions ? [h('span', { key: 's', className: 'w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin' }), 'Checking\u2026'] :
-          isAmuleSharedOnly ? 'Delete Files' :
+          isSharedOnly ? 'Delete Files' :
           deleteFiles ? 'Delete with Files' : confirmLabel
         )
       )

@@ -9,6 +9,7 @@ import React from 'https://esm.sh/react@18.2.0';
 import { SearchResultsSection, Button } from '../common/index.js';
 import { useSearch } from '../../contexts/SearchContext.js';
 import { useAppState } from '../../contexts/AppStateContext.js';
+import { useStaticData } from '../../contexts/StaticDataContext.js';
 
 const { createElement: h } = React;
 
@@ -17,8 +18,14 @@ const { createElement: h } = React;
  */
 const SearchResultsView = () => {
   // Get data from contexts
-  const { searchResults } = useSearch();
+  const { searchResults, searchInstanceId, searchType } = useSearch();
   const { setAppCurrentView } = useAppState();
+  const { instances, hasMultiInstance } = useStaticData();
+
+  // Instance badge for multi-instance ED2K/Kad searches
+  const isAmuleSearch = searchType === 'global' || searchType === 'kad';
+  const instanceInfo = isAmuleSearch && hasMultiInstance && searchInstanceId && instances?.[searchInstanceId];
+  const instanceName = instanceInfo ? (instanceInfo.name || searchInstanceId) : null;
 
   // Handler for new search button
   const handleNewSearch = () => {
@@ -32,7 +39,7 @@ const SearchResultsView = () => {
   }, 'New Search');
 
   // Desktop New Search button
-  const desktopNewSearchButton = h(Button, {
+  const desktopButtons = h(Button, {
     variant: 'primary',
     icon: 'search',
     onClick: handleNewSearch
@@ -40,11 +47,11 @@ const SearchResultsView = () => {
 
   return h('div', { className: 'px-2 sm:px-0' },
     h(SearchResultsSection, {
-      title: 'Search Results',
-      mobileTitle: 'Search Results',
+      title: instanceName ? `Search Results \u2014 ${instanceName}` : 'Search Results',
+      mobileTitle: instanceName ? `Results \u2014 ${instanceName}` : 'Search Results',
       results: searchResults,
       extraMobileButtons: mobileNewSearchButton,
-      extraDesktopButtons: desktopNewSearchButton,
+      extraDesktopButtons: desktopButtons,
       emptyMessage: 'No results found',
       filterEmptyMessage: 'No results match the filter',
       scrollHeight: 'calc(100vh - 220px)'

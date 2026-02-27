@@ -15,6 +15,7 @@ import { useSearch } from '../../contexts/SearchContext.js';
 import { useActions } from '../../contexts/ActionsContext.js';
 import { useTextFilter, useSelectionMode, usePageSelection, useBitTorrentClientSelector } from '../../hooks/index.js';
 import { useStickyToolbar } from '../../contexts/StickyHeaderContext.js';
+import { useCapabilities } from '../../hooks/useCapabilities.js';
 import BitTorrentClientSelector from './BitTorrentClientSelector.js';
 
 const { createElement: h, useCallback, useMemo, useEffect, useState } = React;
@@ -44,16 +45,18 @@ const SearchResultsSection = ({
 }) => {
   // Get data from contexts
   const { appPage, appPageSize, appSortConfig, setAppPage, setAppPageSize, setAppSortConfig, addAppSuccess } = useAppState();
-  const { dataDownloadedFiles, dataCategories } = useStaticData();
+  const { dataDownloadedFiles, setDataDownloadedFiles, downloadedAliasRef, dataCategories } = useStaticData();
   const { searchDownloadCategory, setSearchDownloadCategory } = useSearch();
   const actions = useActions();
+  const { hasCap } = useCapabilities();
+  const canAddDownloads = hasCap('add_downloads');
 
   // Detect if results are from Prowlarr
   const isProwlarr = useMemo(() => results.length > 0 && results[0].isProwlarr, [results]);
   const sortableColumns = isProwlarr ? PROWLARR_RESULTS_COLUMNS : SEARCH_RESULTS_COLUMNS;
 
   // BitTorrent client selector for Prowlarr results
-  const { connectedClients, showClientSelector, selectedClientId, selectClient, hasBitTorrentClient } = useBitTorrentClientSelector();
+  const { connectedClients, showClientSelector, selectedClientId, selectedClient, selectClient, hasBitTorrentClient } = useBitTorrentClientSelector();
 
   // Indexer filter (for Prowlarr results only)
   const [indexerFilter, setIndexerFilter] = useState('all');
@@ -253,14 +256,27 @@ const SearchResultsSection = ({
       }
 
       // Download Prowlarr items via REST API
+      // API returns the real info hash — store GUID for UI checkmark and
+      // record realHash → GUID alias so delete handler can remove both
       let prowlarrSuccessCount = 0;
+      const prowlarrGuids = [];
       for (const item of prowlarrItems) {
-        const success = await actions.search.addProwlarrTorrent(item, searchDownloadCategory, selectedClientId);
-        if (success) prowlarrSuccessCount++;
+        const result = await actions.search.addProwlarrTorrent(item, searchDownloadCategory, selectedClientId, selectedClient?.type);
+        if (result) {
+          prowlarrSuccessCount++;
+          prowlarrGuids.push(item.fileHash);
+          if (typeof result === 'string') {
+            downloadedAliasRef.current.set(result, item.fileHash);
+          }
+        }
       }
 
-      // Show success message for Prowlarr downloads (aMule shows via WebSocket)
       if (prowlarrSuccessCount > 0) {
+        setDataDownloadedFiles(prev => {
+          const next = new Set(prev);
+          prowlarrGuids.forEach(h => next.add(h));
+          return next;
+        });
         addAppSuccess(`Downloading ${prowlarrSuccessCount} torrent${prowlarrSuccessCount > 1 ? 's' : ''}`);
       }
 
@@ -268,7 +284,7 @@ const SearchResultsSection = ({
     } finally {
       setDownloading(false);
     }
-  }, [selectedFiles, dataDownloadedFiles, results, actions, searchDownloadCategory, selectedClientId, clearAllSelections, addAppSuccess]);
+  }, [selectedFiles, dataDownloadedFiles, setDataDownloadedFiles, results, actions, searchDownloadCategory, selectedClientId, clearAllSelections, addAppSuccess]);
 
   // Clear selection when results change (navigating between cached/live results)
   useEffect(() => { clearAllSelections(); }, [results]);
@@ -389,19 +405,21 @@ const SearchResultsSection = ({
       onClearAll: clearAllSelections
     },
       // Show BitTorrent client selector for Prowlarr results when 2+ clients are connected
-      isProwlarr && h(BitTorrentClientSelector, {
+      isProwlarr && canAddDownloads && h(BitTorrentClientSelector, {
         connectedClients,
         selectedClientId,
         onSelectClient: selectClient,
-        showSelector: showClientSelector
+        showSelector: showClientSelector,
+        label: null,
+        variant: connectedClients.length >= 4 ? 'dropdown' : 'buttons'
       }),
-      h(Select, {
+      canAddDownloads && h(Select, {
         value: searchDownloadCategory,
         onChange: (e) => setSearchDownloadCategory(e.target.value),
         options: dataCategories.map(cat => ({ value: cat.name, label: cat.title || cat.name })),
         title: 'Select category for downloads'
       }),
-      h(Button, {
+      canAddDownloads && h(Button, {
         variant: 'success',
         icon: downloading ? null : 'download',
         iconSize: 14,

@@ -78,7 +78,8 @@ export {
   getRowHighlightClass,
   VIEW_TITLE_STYLES,
   PROGRESS_STRIPES_STYLE,
-  CLIENT_NAMES
+  CLIENT_NAMES,
+  NETWORK_TYPE_LABELS
 } from './constants.js';
 
 // Pagination
@@ -108,8 +109,6 @@ export {
 
 // Network Status
 export {
-  getED2KStatus,
-  getKADStatus,
   getStatusDotClass,
   getStatusBadgeClass,
   getStatusIcon
@@ -144,7 +143,6 @@ export {
   buildCategoryColumnFilterOptions,
   formatTitleCount,
   getSeederColorClass,
-  getSelectedClientTypes,
   getClientSoftware,
   getIpString,
   getExportLink,

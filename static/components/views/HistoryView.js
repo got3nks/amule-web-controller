@@ -9,11 +9,13 @@
 import React from 'https://esm.sh/react@18.2.0';
 import { Icon, Table, DeleteModal, Button, Select, Tooltip, TrackerLabel, MobileCardHeader, IconButton, SelectionModeSection, ContextMenu, MoreButton, EmptyState, MobileSortButton, ExpandableSearch, FilterInput, MobileFilterPills, MobileFilterSheet, MobileFilterButton, ItemMobileCard, MobileStatusTabs, SelectionCheckbox } from '../common/index.js';
 import { formatBytes, formatDateTime, formatTimeAgo, formatSpeed, formatRatio, getRowHighlightClass, HISTORY_STATUS_CONFIG, DEFAULT_SORT_CONFIG, DEFAULT_SECONDARY_SORT_CONFIG, buildSpeedColumn, buildTransferColumn, buildSizeColumn, buildRatioColumn, buildFileNameColumn, buildStatusColumn, buildCategoryColumn, buildAddedAtColumn, VIEW_TITLE_STYLES, createCategoryLabelFilter, createTrackerFilter } from '../../utils/index.js';
+import { itemKey, parseItemKey } from '../../utils/itemKey.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useDataFetch } from '../../contexts/DataFetchContext.js';
 import { useViewFilters, useColumnConfig, getSecondarySortConfig, useFileInfoModal, usePageSelection, useCategoryFilterOptions, useItemContextMenu } from '../../hooks/index.js';
 import { useStickyToolbar } from '../../contexts/StickyHeaderContext.js';
+import { useCapabilities } from '../../hooks/useCapabilities.js';
 
 const { createElement: h, useState, useEffect, useMemo, useCallback } = React;
 
@@ -48,6 +50,8 @@ const HistoryView = () => {
   const { dataHistory, historyLoading, dataItems, dataLoaded } = useLiveData();
   const { dataCategories: categories, historyTrackUsername } = useStaticData();
   const { startHistoryRefresh, stopHistoryRefresh, fetchHistory } = useDataFetch();
+  const { hasCap } = useCapabilities();
+  const canClearHistory = hasCap('clear_history');
 
   // Start/stop history refresh on mount/unmount
   useEffect(() => {
@@ -165,7 +169,7 @@ const HistoryView = () => {
   }, [dataItems]);
 
   const handleShowInfo = useCallback((item) => {
-    openFileInfo(item.hash);
+    openFileInfo(item.hash, item.instanceId);
   }, [openFileInfo]);
 
   // Context menu using shared hook
@@ -175,7 +179,7 @@ const HistoryView = () => {
     closeContextMenu,
     onShowInfo: handleShowInfo,
     canShowInfo: findFileInLiveData,
-    onDelete: (item) => setItemToDelete(item),
+    onDelete: canClearHistory ? (item) => setItemToDelete(item) : null,
     deleteLabel: 'Delete from History',
     onSelect: enterSelectionWithItem
   });
@@ -184,10 +188,10 @@ const HistoryView = () => {
   // DELETE OPERATIONS
   // ============================================================================
   const handleBatchDelete = useCallback(() => {
-    const hashes = getSelectedHashes();
-    if (hashes.length === 0) return;
-    setBatchDeleteCount(hashes.length);
-    setItemToDelete({ hash: hashes, name: `${hashes.length} entries`, isBatch: true });
+    const compoundKeys = getSelectedHashes(); // compound keys
+    if (compoundKeys.length === 0) return;
+    setBatchDeleteCount(compoundKeys.length);
+    setItemToDelete({ hash: compoundKeys, name: `${compoundKeys.length} entries`, isBatch: true });
   }, [getSelectedHashes]);
 
   const handleConfirmDelete = useCallback(async () => {
@@ -196,18 +200,21 @@ const HistoryView = () => {
     setDeleting(true);
     try {
       if (itemToDelete.isBatch) {
-        const hashes = itemToDelete.hash;
+        const compoundKeys = itemToDelete.hash;
         await Promise.all(
-          hashes.map(hash =>
-            fetch(`/api/history/${hash}`, { method: 'DELETE' })
+          compoundKeys.map(key => {
+            const { instanceId, hash } = parseItemKey(key);
+            const qs = instanceId ? `?instanceId=${encodeURIComponent(instanceId)}` : '';
+            return fetch(`/api/history/${hash}${qs}`, { method: 'DELETE' })
               .then(res => res.ok)
-              .catch(() => false)
-          )
+              .catch(() => false);
+          })
         );
         clearAllSelections();
         toggleSelectionMode();
       } else {
-        await fetch(`/api/history/${itemToDelete.hash}`, { method: 'DELETE' });
+        const qs = itemToDelete.instanceId ? `?instanceId=${encodeURIComponent(itemToDelete.instanceId)}` : '';
+        await fetch(`/api/history/${itemToDelete.hash}${qs}`, { method: 'DELETE' });
       }
       // Refresh history data
       fetchHistory(false);
@@ -289,8 +296,8 @@ const HistoryView = () => {
   // ============================================================================
   const renderMobileCard = useCallback((item, idx, showBadge, categoryStyle) => {
     const hasLiveData = (item.downloadSpeed || 0) > 0 || (item.uploadSpeed || 0) > 0;
-    const isSelected = selectionMode && selectedFiles.has(item.hash);
-    const isContextTarget = contextMenu.show && contextMenu.item?.hash === item.hash;
+    const isSelected = selectionMode && selectedFiles.has(itemKey(item.instanceId, item.hash));
+    const isContextTarget = contextMenu.show && contextMenu.item?.hash === item.hash && contextMenu.item?.instanceId === item.instanceId;
 
     const renderStatusBadge = () => {
       const badge = h(StatusBadge, {
@@ -318,16 +325,17 @@ const HistoryView = () => {
       idx,
       categoryStyle,
       selectionMode,
-      onSelectionToggle: () => toggleFileSelection(item.hash)
+      onSelectionToggle: () => toggleFileSelection(itemKey(item.instanceId, item.hash))
     },
       h(MobileCardHeader, {
         showBadge,
         clientType: item.client,
+        instanceId: item.instanceId,
         fileName: item.name,
         fileSize: item.size,
         selectionMode,
         isSelected,
-        onSelectionToggle: () => toggleFileSelection(item.hash),
+        onSelectionToggle: () => toggleFileSelection(itemKey(item.instanceId, item.hash)),
         onNameClick: (e, anchorEl) => openContextMenu(e, item, anchorEl),
         actions: h(MoreButton, {
           onClick: (e) => openContextMenu(e, item, e.currentTarget)
@@ -416,13 +424,13 @@ const HistoryView = () => {
           defaultSortBy: DEFAULT_SORT_CONFIG.history.sortBy,
           defaultSortDirection: DEFAULT_SORT_CONFIG.history.sortDirection
         }),
-        hiddenWhenExpanded: h(IconButton, {
+        hiddenWhenExpanded: canClearHistory ? h(IconButton, {
           variant: selectionMode ? 'danger' : 'secondary',
           icon: selectionMode ? 'x' : 'fileCheck',
           iconSize: 18,
           onClick: toggleSelectionMode,
           title: selectionMode ? 'Exit Selection Mode' : 'Select Items'
-        })
+        }) : null
       })
     ),
   [totalCount, filterText, setFilterText, columns, sortBy, sortDirection, onSortChange, selectionMode, toggleSelectionMode]);
@@ -465,6 +473,7 @@ const HistoryView = () => {
         h(FilterInput, {
           value: filterText,
           onChange: setFilterText,
+          onClear: clearFilter || undefined,
           placeholder: 'Filter...'
         }),
         showTrackerFilter && h(Select, {
@@ -475,7 +484,7 @@ const HistoryView = () => {
           },
           options: trackerOptions
         }),
-        h(Button, {
+        canClearHistory && h(Button, {
           variant: selectionMode ? 'danger' : 'purple',
           onClick: toggleSelectionMode,
           icon: selectionMode ? 'x' : 'fileCheck'
@@ -509,8 +518,8 @@ const HistoryView = () => {
           actions: (item) => {
             if (selectionMode) {
               return h(SelectionCheckbox, {
-                checked: selectedFiles.has(item.hash),
-                onChange: () => toggleFileSelection(item.hash)
+                checked: selectedFiles.has(itemKey(item.instanceId, item.hash)),
+                onChange: () => toggleFileSelection(itemKey(item.instanceId, item.hash))
               });
             }
             const hasLiveFile = !!findFileInLiveData(item);
@@ -520,7 +529,7 @@ const HistoryView = () => {
                 className: 'p-1.5 rounded bg-blue-100 dark:bg-blue-900/30 hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors',
                 title: 'View file details'
               }, h(Icon, { name: 'info', size: 14, className: 'text-blue-600 dark:text-blue-400' })),
-              h('button', {
+              canClearHistory && h('button', {
                 onClick: (e) => { e.stopPropagation(); setItemToDelete(item); },
                 className: 'p-1.5 rounded bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors',
                 title: 'Delete from history'
@@ -541,13 +550,13 @@ const HistoryView = () => {
           pageSize,
           onPageSizeChange,
           skipSort: selectionMode || contextMenu.show,
-          getRowKey: (item) => item.hash,
+          getRowKey: (item) => itemKey(item.instanceId, item.hash),
           getRowClassName: (item) => getRowHighlightClass(
-            selectionMode && selectedFiles.has(item.hash),
-            contextMenu.show && contextMenu.item?.hash === item.hash
+            selectionMode && selectedFiles.has(itemKey(item.instanceId, item.hash)),
+            contextMenu.show && contextMenu.item?.hash === item.hash && contextMenu.item?.instanceId === item.instanceId
           ),
           onRowContextMenu: handleRowContextMenu,
-          onRowClick: selectionMode ? (item) => toggleFileSelection(item.hash) : null,
+          onRowClick: selectionMode ? (item) => toggleFileSelection(itemKey(item.instanceId, item.hash)) : null,
           breakpoint: 'xl',
           mobileCardRender: renderMobileCard,
           mobileCardStyle: 'card',
@@ -568,7 +577,7 @@ const HistoryView = () => {
       onClearAll: clearAllSelections,
       onExit: toggleSelectionMode
     },
-      h(Button, { variant: 'danger', onClick: handleBatchDelete, icon: 'trash', iconSize: 14, disabled: selectedCount === 0 }, 'Delete')
+      canClearHistory && h(Button, { variant: 'danger', onClick: handleBatchDelete, icon: 'trash', iconSize: 14, disabled: selectedCount === 0 }, 'Delete')
     ),
 
     // ========================================================================

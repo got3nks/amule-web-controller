@@ -4,7 +4,7 @@
 
 <h1 align="center">aMuTorrent</h1>
 
-A unified download manager for aMule, rTorrent, and qBittorrent. Manage ED2K and BitTorrent downloads from a single modern web interface. Features Prowlarr integration for torrent search, Torznab indexer and qBittorrent-compatible API for aMule (Sonarr/Radarr integration), push notifications via Apprise, and GeoIP peer location display. Built with Node.js, WebSockets, and React.
+A unified download manager for aMule, rTorrent, qBittorrent, Deluge, and Transmission. Manage ED2K and BitTorrent downloads from a single modern web interface. Features multi-instance support, user management with SSO, Prowlarr integration for torrent search, Torznab indexer and qBittorrent-compatible API for aMule (Sonarr/Radarr integration), push notifications via Apprise, and GeoIP peer location display. Built with Node.js, WebSockets, and React.
 
 ![aMuTorrent](./docs/screenshots/home-desktop.png)
 
@@ -14,6 +14,9 @@ A unified download manager for aMule, rTorrent, and qBittorrent. Manage ED2K and
 - **aMule Integration** - Control aMule via the EC (External Connection) protocol
 - **rTorrent Integration** - Connect to rTorrent via XML-RPC over HTTP
 - **qBittorrent Integration** - Connect to qBittorrent via WebUI API
+- **Deluge Integration** - Connect to Deluge via WebUI JSON-RPC
+- **Transmission Integration** - Connect to Transmission via HTTP RPC
+- **Multi-Instance** - Run multiple instances of the same client type
 - **Unified Interface** - Manage all clients from a single dashboard
 
 ### Download Management
@@ -22,9 +25,10 @@ A unified download manager for aMule, rTorrent, and qBittorrent. Manage ED2K and
 - **Category Management** - Organize downloads with color-coded categories and path mapping
 - **Batch Operations** - Select multiple items for bulk actions
 - **File Operations** - Move downloads to category paths
+- **User Management** - Multi-user authentication, capabilities, and trusted proxy SSO
 
 ### Integrations
-- **Prowlarr Search** - Search torrents across multiple indexers (results go to rTorrent or qBittorrent)
+- **Prowlarr Search** - Search torrents across multiple indexers (results go to any connected BitTorrent client)
 - **Sonarr/Radarr** - Torznab indexer and qBittorrent-compatible API for aMule
 - **Push Notifications** - Apprise integration for 80+ notification services
 - **Custom Event Scripts** - Run your own scripts on download events
@@ -45,7 +49,7 @@ A unified download manager for aMule, rTorrent, and qBittorrent. Manage ED2K and
 
 ## Quick Start (Docker)
 
-**Prerequisites:** At least one of: aMule with External Connections enabled, rTorrent with XML-RPC over HTTP, or qBittorrent with WebUI enabled.
+**Prerequisites:** At least one of: aMule with External Connections enabled, rTorrent with XML-RPC over HTTP, qBittorrent with WebUI enabled, Deluge with WebUI enabled, or Transmission with RPC enabled.
 
 ### 1. Pull the image
 
@@ -122,11 +126,14 @@ Open `http://localhost:4000` and complete the setup wizard.
 | [aMule Integration](./docs/AMULE.md) | Connect to aMule via EC protocol |
 | [rTorrent Integration](./docs/RTORRENT.md) | Connect to rTorrent via XML-RPC |
 | [qBittorrent Integration](./docs/QBITTORRENT.md) | Connect to qBittorrent via WebUI API |
+| [Deluge Integration](./docs/DELUGE.md) | Connect to Deluge via WebUI JSON-RPC |
+| [Transmission Integration](./docs/TRANSMISSION.md) | Connect to Transmission via HTTP RPC |
 | [Prowlarr Integration](./docs/PROWLARR.md) | Search torrents via Prowlarr indexers |
 | [Notifications](./docs/NOTIFICATIONS.md) | Push notifications via Apprise (80+ services) |
 | [Custom Scripting](./scripts/README.md) | Run custom scripts on download events |
 | [GeoIP Setup](./docs/GEOIP.md) | Display peer locations with MaxMind databases |
 | [Sonarr/Radarr Integration](./docs/INTEGRATIONS.md) | Complete guide for *arr applications setup |
+| [User Management](./docs/USERS.md) | Authentication, capabilities, SSO, and API keys |
 | [API Reference](./docs/API.md) | REST API and WebSocket protocol |
 | [Development Guide](./docs/DEVELOPMENT.md) | Building, project structure, contributing |
 
@@ -172,6 +179,16 @@ Open `http://localhost:4000` and complete the setup wizard.
 - Verify WebUI is accessible: `curl http://host:8080/api/v2/app/version`
 - New installs generate a random password - check container logs: `docker logs qbittorrent`
 - See [qBittorrent Integration](./docs/QBITTORRENT.md) for setup details
+
+**Can't connect to Deluge?**
+- Verify WebUI is accessible: `curl -X POST http://host:8112/json`
+- Default password is `deluge` — check if it was changed
+- See [Deluge Integration](./docs/DELUGE.md) for setup details
+
+**Can't connect to Transmission?**
+- Verify RPC is accessible: `curl http://host:9091/transmission/rpc` (a 409 response means RPC is working)
+- Check username/password if RPC authentication is enabled
+- See [Transmission Integration](./docs/TRANSMISSION.md) for setup details
 
 **Docker: Can't reach services on host?**
 - Ensure `extra_hosts` is set in docker-compose.yml

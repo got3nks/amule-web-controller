@@ -10,6 +10,7 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
+import { itemKey } from '../utils/itemKey.js';
 
 const { useRef } = React;
 
@@ -17,13 +18,13 @@ const { useRef } = React;
  * @param {Object} contextMenu - Context menu state from useContextMenu ({ show, ... })
  * @param {{ current: Array }} sortedDataRef - Ref to the current sorted data array
  * @param {string} hashKey - Key to extract from each item for the order array (default: 'hash')
- * @returns {Array|null} Frozen order array when context menu is open, null otherwise
+ * @returns {Array|null} Frozen order array (compound keys) when context menu is open, null otherwise
  */
 export const useContextMenuFrozenOrder = (contextMenu, sortedDataRef, hashKey = 'hash') => {
   const frozenOrderRef = useRef(null);
 
   if (contextMenu.show && !frozenOrderRef.current) {
-    frozenOrderRef.current = sortedDataRef.current.map(item => item[hashKey]);
+    frozenOrderRef.current = sortedDataRef.current.map(item => itemKey(item.instanceId, item[hashKey]));
   }
   if (!contextMenu.show) {
     frozenOrderRef.current = null;

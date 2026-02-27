@@ -4,6 +4,8 @@
  * Common network-related helper functions
  */
 
+const clientMeta = require('./clientMeta');
+
 /**
  * Convert IP from number to string (aMule sends IPs as little-endian integers)
  * @param {number|string} ip - IP as number or string
@@ -68,7 +70,7 @@ const CLIENT_SOFTWARE_LABELS = {
  */
 function getClientSoftwareName(item) {
   // For rtorrent, use the client string directly
-  if (item.clientType === 'rtorrent' || item.EC_TAG_CLIENT_SOFTWARE === -1) {
+  if (clientMeta.isBittorrent(item.clientType) || item.EC_TAG_CLIENT_SOFTWARE === -1) {
     return item.EC_TAG_CLIENT_SOFT_VER_STR || 'Unknown';
   }
   const baseName = CLIENT_SOFTWARE_LABELS[item.EC_TAG_CLIENT_SOFTWARE] || 'Unknown';

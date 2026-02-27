@@ -9,6 +9,7 @@ import Icon from '../common/Icon.js';
 import Portal from '../common/Portal.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
+import { useCapabilities } from '../../hooks/useCapabilities.js';
 
 const { createElement: h, useState, useRef, useEffect, useMemo } = React;
 
@@ -61,8 +62,9 @@ const MoreMenuItem = ({ icon, label, active, warning, onClick }) => {
  */
 const MobileNavFooter = ({ currentView, onNavigate }) => {
   const { dataItems } = useLiveData();
-  const { clientsEnabled, hasCategoryPathWarnings } = useStaticData();
-  const amuleEnabled = clientsEnabled?.amule !== false;
+  const { hasType, hasCategoryPathWarnings, hasClientConnectionWarnings } = useStaticData();
+  const { hasCap, isAdmin } = useCapabilities();
+  const amuleEnabled = hasType('amule');
 
   // Count active downloads for badge
   const activeDownloadCount = useMemo(() => {
@@ -110,25 +112,25 @@ const MobileNavFooter = ({ currentView, onNavigate }) => {
     onNavigate(view);
   };
 
-  // Main nav items
+  // Main nav items (capability-filtered)
   const mainNavItems = [
     { icon: 'home', label: 'Home', view: 'home' },
-    { icon: 'search', label: 'Search', view: 'search', activeViews: ['search', 'search-results'] },
+    hasCap('search') && { icon: 'search', label: 'Search', view: 'search', activeViews: ['search', 'search-results'] },
     { icon: 'download', label: 'Downloads', view: 'downloads', badge: activeDownloadCount },
-    { icon: 'upload', label: 'Uploads', view: 'uploads', badge: activeUploadCount }
-  ];
+    hasCap('view_uploads') && { icon: 'upload', label: 'Uploads', view: 'uploads', badge: activeUploadCount }
+  ].filter(Boolean);
 
-  // More menu items (filter ED2K Servers when aMule is disabled)
+  // More menu items (capability + client-type filtered)
   const moreMenuItems = [
-    { icon: 'history', label: 'History', view: 'history' },
-    { icon: 'share', label: 'Shared Files', view: 'shared' },
-    { icon: 'folder', label: 'Categories', view: 'categories', warning: hasCategoryPathWarnings },
-    ...(amuleEnabled ? [{ icon: 'server', label: 'ED2K Servers', view: 'servers' }] : []),
-    { icon: 'fileText', label: 'Logs', view: 'logs' },
-    { icon: 'chartBar', label: 'Statistics', view: 'statistics' },
-    { icon: 'bell', label: 'Notifications', view: 'notifications' },
-    { icon: 'settings', label: 'Settings', view: 'settings' }
-  ];
+    { icon: 'history', label: 'History', view: 'history', cap: 'view_history' },
+    { icon: 'share', label: 'Shared Files', view: 'shared', cap: 'view_shared' },
+    { icon: 'folder', label: 'Categories', view: 'categories', warning: hasCategoryPathWarnings, cap: 'manage_categories' },
+    ...(amuleEnabled ? [{ icon: 'server', label: 'ED2K Servers', view: 'servers', cap: 'view_servers' }] : []),
+    { icon: 'fileText', label: 'Logs', view: 'logs', cap: 'view_logs' },
+    { icon: 'chartBar', label: 'Statistics', view: 'statistics', cap: 'view_statistics' },
+    { icon: 'bell', label: 'Notifications', view: 'notifications', adminOnly: true },
+    { icon: 'settings', label: 'Settings', view: 'settings', warning: hasClientConnectionWarnings, adminOnly: true }
+  ].filter(item => item.adminOnly ? isAdmin : (!item.cap || hasCap(item.cap)));
 
   // Check if current view is in the "More" menu
   const isMoreActive = moreMenuItems.some(item => item.view === currentView);

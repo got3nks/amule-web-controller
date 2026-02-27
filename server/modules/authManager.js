@@ -14,6 +14,7 @@ class AuthManager extends BaseModule {
   constructor() {
     super();
     this.sessionDB = null;
+    this._disconnectCallback = null;
   }
 
   /**
@@ -282,6 +283,37 @@ class AuthManager extends BaseModule {
   }
 
   /**
+   * Extract user info from a session by session ID (for WebSocket auth)
+   * @param {string} sessionId - Session ID
+   * @returns {Object|null} User info or null
+   */
+  getSessionUser(sessionId) {
+    if (!sessionId) return null;
+
+    const db = this.getSessionDB();
+
+    try {
+      const row = db.prepare('SELECT sess, expire FROM sessions WHERE sid = ?').get(sessionId);
+      if (!row) return null;
+
+      if (row.expire < Date.now()) return null;
+
+      const sess = JSON.parse(row.sess);
+      if (!sess.authenticated) return null;
+
+      return {
+        userId: sess.userId || null,
+        username: sess.username || null,
+        isAdmin: sess.isAdmin || false,
+        capabilities: Array.isArray(sess.capabilities) ? sess.capabilities : []
+      };
+    } catch (err) {
+      this.log('Error reading session user:', err.message);
+      return null;
+    }
+  }
+
+  /**
    * Check if global rate limit is reached (total failed attempts across all IPs)
    * @returns {boolean} True if global limit is reached
    */
@@ -320,6 +352,55 @@ class AuthManager extends BaseModule {
     } catch (err) {
       this.log('⚠️  Error getting block time:', err.message);
       return null;
+    }
+  }
+
+  /**
+   * Set callback for force-disconnecting WebSocket clients.
+   * Called by server.js after wss is available.
+   * @param {Function} fn - Callback(userId) that disconnects WS clients for the given user
+   */
+  setDisconnectCallback(fn) {
+    this._disconnectCallback = fn;
+  }
+
+  /**
+   * Invalidate all sessions for a user and optionally force-disconnect their WebSocket connections.
+   * Scans the sessions table (JSON-embedded userId) since there's no user_id column.
+   * @param {number} userId - User ID whose sessions to invalidate
+   * @param {string|null} excludeSid - Session ID to keep (e.g. the admin's own session). Null to invalidate all.
+   * @returns {number} Number of sessions invalidated
+   */
+  invalidateUserSessions(userId, excludeSid = null) {
+    const db = this.getSessionDB();
+
+    try {
+      const rows = db.prepare('SELECT sid, sess FROM sessions').all();
+      const sidsToDelete = [];
+
+      for (const row of rows) {
+        if (excludeSid && row.sid === excludeSid) continue;
+        try {
+          const sess = JSON.parse(row.sess);
+          if (sess.userId === userId) sidsToDelete.push(row.sid);
+        } catch { /* skip malformed session data */ }
+      }
+
+      if (sidsToDelete.length > 0) {
+        const placeholders = sidsToDelete.map(() => '?').join(',');
+        db.prepare(`DELETE FROM sessions WHERE sid IN (${placeholders})`).run(...sidsToDelete);
+        this.log(`🔐 Invalidated ${sidsToDelete.length} session(s) for userId ${userId}`);
+      }
+
+      // Force-disconnect WebSocket clients (only when invalidating ALL sessions, not on self password change)
+      if (!excludeSid && this._disconnectCallback) {
+        this._disconnectCallback(userId);
+      }
+
+      return sidsToDelete.length;
+    } catch (err) {
+      this.log('⚠️  Error invalidating user sessions:', err.message);
+      return 0;
     }
   }
 }

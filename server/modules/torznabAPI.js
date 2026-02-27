@@ -6,52 +6,61 @@
 const BaseModule = require('../lib/BaseModule');
 const TorznabHandler = require('../lib/torznab/TorznabHandler');
 const config = require('./config');
-const { verifyPassword } = require('../lib/authUtils');
 const response = require('../lib/responseFormatter');
 
-// Singleton managers - imported directly instead of injected
-const amuleManager = require('./amuleManager');
+// Client registry - replaces direct singleton manager imports
+const registry = require('../lib/ClientRegistry');
 
 class TorznabAPI extends BaseModule {
   constructor() {
     super();
     this.handler = new TorznabHandler();
-    // Initialize handler dependencies
+    // Initialize handler dependencies (uses configured or first aMule instance)
     this.handler.setDependencies({
-      getAmuleClient: () => amuleManager.getClient()
+      getAmuleClient: () => {
+        const configuredId = config.getConfig()?.integrations?.amuleInstanceId;
+        let amuleMgr;
+        if (configuredId) {
+          amuleMgr = registry.get(configuredId);
+          if (!amuleMgr) {
+            amuleMgr = registry.getByType('amule').find(m => m.isConnected());
+            if (amuleMgr) this.log(`⚠️ [TorznabAPI.getAmuleClient] Configured amuleInstanceId "${configuredId}" not found, falling back to "${amuleMgr.instanceId}"`);
+          }
+        } else {
+          amuleMgr = registry.getByType('amule').find(m => m.isConnected());
+        }
+        return amuleMgr?.getClient() || null;
+      }
     });
   }
 
   /**
-   * Middleware to check Torznab API key authentication
+   * Middleware to check Torznab API key authentication (admin-only)
    */
-  async checkApiKey(req, res, next) {
-    const authEnabled = config.getAuthEnabled();
-
-    if (!authEnabled) {
-      return next();
-    }
+  checkApiKey(req, res, next) {
+    if (!config.getAuthEnabled()) return next();
 
     const apiKey = req.query.apikey || req.query.t;
-
     if (!apiKey) {
       return response.unauthorized(res, 'API key required');
     }
 
     try {
-      const hashedPassword = config.getAuthPassword();
-
-      if (!hashedPassword) {
-        return next();
+      if (!this.userManager) {
+        return response.serverError(res, 'User management not available');
       }
 
-      const isValid = await verifyPassword(apiKey, hashedPassword);
+      const user = this.userManager.getUserByApiKey(apiKey);
 
-      if (isValid) {
-        next();
-      } else {
-        response.unauthorized(res, 'Invalid API key');
+      if (!user || user.disabled) {
+        return response.unauthorized(res, 'Invalid API key');
       }
+
+      if (!user.is_admin) {
+        return response.forbidden(res, 'Admin access required');
+      }
+
+      next();
     } catch (err) {
       this.log('Torznab API key verification error:', err);
       response.serverError(res, 'Internal server error');

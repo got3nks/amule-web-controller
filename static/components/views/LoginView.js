@@ -18,6 +18,7 @@ function formatCountdown(seconds) {
 }
 
 export default function LoginView() {
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -28,7 +29,7 @@ export default function LoginView() {
   const countdownRef = useRef(null);
   const retryRef = useRef(null);
 
-  const { login, error, clearError, loginDelay } = useAuth();
+  const { login, error, clearError, loginDelay, hasUsers } = useAuth();
 
   // Countdown during submission (progressive delay)
   useEffect(() => {
@@ -83,7 +84,7 @@ export default function LoginView() {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (!password) {
+    if (!password || (hasUsers && !username)) {
       return;
     }
 
@@ -95,7 +96,7 @@ export default function LoginView() {
       setCountdown(pendingDelay);
     }
 
-    const result = await login(password, rememberMe);
+    const result = await login(hasUsers ? username : null, password, rememberMe);
 
     if (result.success) {
       // Redirect to home
@@ -113,7 +114,10 @@ export default function LoginView() {
 
   const isFormDisabled = isSubmitting || retryCountdown > 0;
 
-  return h('div', { className: 'min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4' },
+  return h('div', {
+    className: 'min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4',
+    style: { minHeight: '100dvh' }
+  },
     h('div', { className: 'max-w-md w-full space-y-8' },
       // Header
       h('div', { className: 'text-center' },
@@ -123,7 +127,9 @@ export default function LoginView() {
           )
         ),
         h('h2', { className: 'text-3xl font-bold text-gray-900 dark:text-white' }, 'aMuTorrent'),
-        h('p', { className: 'mt-2 text-sm text-gray-600 dark:text-gray-400' }, 'Enter your password to continue')
+        h('p', { className: 'mt-2 text-sm text-gray-600 dark:text-gray-400' },
+          hasUsers ? 'Sign in with your credentials' : 'Enter your password to continue'
+        )
       ),
 
       // Login Form
@@ -151,6 +157,26 @@ export default function LoginView() {
             )
           ),
 
+          // Username Field (only when multi-user mode is active)
+          hasUsers && h('div', {},
+            h('label', {
+              htmlFor: 'username',
+              className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'
+            }, 'Username'),
+            h('input', {
+              id: 'username',
+              type: 'text',
+              value: username,
+              onChange: (e) => setUsername(e.target.value),
+              className: 'appearance-none block w-full px-3 sm:px-4 py-2 sm:py-3 text-base sm:text-sm border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white transition-colors',
+              placeholder: 'Enter your username',
+              required: true,
+              autoFocus: true,
+              autoComplete: 'username',
+              disabled: isFormDisabled
+            })
+          ),
+
           // Password Field
           h('div', {},
             h('label', {
@@ -166,7 +192,8 @@ export default function LoginView() {
                 className: 'appearance-none block w-full px-3 sm:px-4 py-2 sm:py-3 pr-12 text-base sm:text-sm border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white transition-colors',
                 placeholder: 'Enter your password',
                 required: true,
-                autoFocus: true,
+                autoFocus: !hasUsers,
+                autoComplete: 'current-password',
                 disabled: isFormDisabled
               }),
               h('button', {
@@ -203,7 +230,7 @@ export default function LoginView() {
           h(Button, {
             type: 'submit',
             variant: 'primary',
-            disabled: isFormDisabled || !password,
+            disabled: isFormDisabled || !password || (hasUsers && !username),
             className: 'w-full justify-center py-3'
           },
             isSubmitting

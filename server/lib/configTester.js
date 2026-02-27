@@ -8,6 +8,8 @@ const path = require('path');
 const QueuedAmuleClient = require('../modules/queuedAmuleClient');
 const RtorrentHandler = require('./rtorrent/RtorrentHandler');
 const QBittorrentClient = require('./qbittorrent/QBittorrentClient');
+const DelugeClient = require('./deluge/DelugeClient');
+const TransmissionClient = require('./transmission/TransmissionClient');
 const ProwlarrHandler = require('./prowlarr/ProwlarrHandler');
 const { checkDirectoryAccess } = require('./pathUtils');
 const logger = require('./logger');
@@ -305,6 +307,71 @@ async function testQbittorrentConnection(host, port, username, password, useSsl)
 }
 
 /**
+ * Test Deluge connection via WebUI JSON-RPC
+ * @param {string} host - Deluge Web UI host
+ * @param {number} port - Deluge Web UI port
+ * @param {string} password - Deluge Web UI password
+ * @param {boolean} useSsl - Whether to use HTTPS
+ * @returns {Promise<{success: boolean, connected: boolean, version: string|null, error: string|null}>}
+ */
+async function testDelugeConnection(host, port, password, useSsl) {
+  const result = {
+    success: false,
+    connected: false,
+    version: null,
+    error: null
+  };
+
+  if (!host) {
+    result.error = 'Host is required';
+    return result;
+  }
+
+  let client = null;
+
+  try {
+    client = new DelugeClient({
+      host,
+      port: port || 8112,
+      password: password || '',
+      useSsl: useSsl || false
+    });
+
+    const testPromise = client.testConnection();
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Connection timeout after 10 seconds')), 10000);
+    });
+
+    const testResult = await Promise.race([testPromise, timeoutPromise]);
+
+    if (testResult.success) {
+      result.connected = true;
+      result.version = testResult.version;
+      result.success = true;
+      result.message = `Connected to Deluge ${testResult.version}`;
+    } else {
+      result.error = testResult.error || 'Connection failed';
+    }
+
+    await client.disconnect();
+
+    return result;
+  } catch (err) {
+    result.error = classifyNetworkError(err);
+
+    if (client) {
+      try {
+        await client.disconnect();
+      } catch (cleanupErr) {
+        // Ignore cleanup errors
+      }
+    }
+
+    return result;
+  }
+}
+
+/**
  * Generic function to test *arr API connection (Sonarr, Radarr, etc.)
  * @param {string} serviceName - Name of the service (for error messages)
  * @param {string} url - Service URL
@@ -522,12 +589,83 @@ async function testGeoIPDatabase(dirPath) {
   }
 }
 
+/**
+ * Test Transmission connection via HTTP RPC
+ * @param {string} host - Transmission RPC host
+ * @param {number} port - Transmission RPC port
+ * @param {string} username - Username for HTTP Basic Auth
+ * @param {string} password - Password for HTTP Basic Auth
+ * @param {boolean} useSsl - Whether to use HTTPS
+ * @param {string} rpcPath - RPC endpoint path (default: /transmission/rpc)
+ * @returns {Promise<{success: boolean, connected: boolean, version: string|null, error: string|null}>}
+ */
+async function testTransmissionConnection(host, port, username, password, useSsl, rpcPath) {
+  const result = {
+    success: false,
+    connected: false,
+    version: null,
+    error: null
+  };
+
+  if (!host) {
+    result.error = 'Host is required';
+    return result;
+  }
+
+  let client = null;
+
+  try {
+    client = new TransmissionClient({
+      host,
+      port: port || 9091,
+      username: username || '',
+      password: password || '',
+      useSsl: useSsl || false,
+      path: rpcPath || '/transmission/rpc'
+    });
+
+    const testPromise = client.testConnection();
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Connection timeout after 10 seconds')), 10000);
+    });
+
+    const testResult = await Promise.race([testPromise, timeoutPromise]);
+
+    if (testResult.success) {
+      result.connected = true;
+      result.version = testResult.version;
+      result.success = true;
+      result.message = `Connected to Transmission ${testResult.version}`;
+    } else {
+      result.error = testResult.error || 'Connection failed';
+    }
+
+    await client.disconnect();
+
+    return result;
+  } catch (err) {
+    result.error = classifyNetworkError(err);
+
+    if (client) {
+      try {
+        await client.disconnect();
+      } catch (cleanupErr) {
+        // Ignore cleanup errors
+      }
+    }
+
+    return result;
+  }
+}
+
 module.exports = {
   testDirectoryAccess,
   testGeoIPDatabase,
   testAmuleConnection,
   testRtorrentConnection,
   testQbittorrentConnection,
+  testDelugeConnection,
+  testTransmissionConnection,
   testSonarrAPI,
   testRadarrAPI,
   testProwlarrAPI

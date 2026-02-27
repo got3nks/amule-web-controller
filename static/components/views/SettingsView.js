@@ -1,17 +1,22 @@
 /**
  * SettingsView Component
  *
- * Full-page settings view for viewing and editing configuration
- * Uses contexts directly for all data and actions
+ * Full-page settings view for viewing and editing configuration.
+ * Uses a `clients` array in formData for multi-instance support.
+ * Client instances displayed as compact cards with add/edit modal.
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-const { createElement: h, useState, useEffect } = React;
+const { createElement: h, useState, useEffect, useCallback } = React;
 
 import { useConfig } from '../../hooks/index.js';
+import { useSettingsFormData } from '../../hooks/useSettingsFormData.js';
+import { useClientManagement } from '../../hooks/useClientManagement.js';
 import { useAppState } from '../../contexts/AppStateContext.js';
-import { LoadingSpinner, AlertBox, IconButton, Input, Select } from '../common/index.js';
+import { useStaticData } from '../../contexts/StaticDataContext.js';
+import { LoadingSpinner, AlertBox, IconButton, Input, Select, Button, Icon, Portal } from '../common/index.js';
 import DirectoryBrowserModal from '../modals/DirectoryBrowserModal.js';
+import { TYPE_LABELS } from '../settings/ClientInstanceModal.js';
 import {
   ConfigSection,
   ConfigField,
@@ -20,17 +25,23 @@ import {
   PasswordField,
   EnableToggle,
   TestSummary,
-  IntegrationConfigInfo
+  IntegrationConfigInfo,
+  ClientInstanceCard,
+  ClientInstanceModal,
+  UserManagement
 } from '../settings/index.js';
-import { validatePassword } from '../../utils/passwordValidator.js';
-import { hasTestErrors as checkTestErrors, checkResultsForErrors, buildTestPayload } from '../../utils/testHelpers.js';
+import { useAuth } from '../../contexts/AuthContext.js';
+import { CAPABILITY_LABELS, CAPABILITY_GROUPS, PRESETS, SSO_DEFAULT_CAPABILITIES, detectPreset } from '../../utils/capabilities.js';
+import { hasTestErrors as checkTestErrors, checkResultsForErrors } from '../../utils/testHelpers.js';
+import { VIEW_TITLE_STYLES } from '../../utils/index.js';
 
 /**
- * SettingsView component - now uses contexts directly
+ * SettingsView component
  */
 const SettingsView = () => {
-  // Get navigation from context
   const { setAppCurrentView } = useAppState();
+  const { instances } = useStaticData();
+  const { authEnabled: authIsActive, username: currentUsername } = useAuth();
   const onClose = () => setAppCurrentView('home');
 
   const {
@@ -48,28 +59,62 @@ const SettingsView = () => {
     clearError
   } = useConfig();
 
-  const [formData, setFormData] = useState(null);
-  const [originalPasswords, setOriginalPasswords] = useState(null);
-  const [passwordConfirm, setPasswordConfirm] = useState('');
-  const [saveError, setSaveError] = useState(null);
-  const [saveSuccess, setSaveSuccess] = useState(false);
+  // Form state management
+  const {
+    formData, setFormData,
+    hasChanges, setHasChanges,
+    saveError, setSaveError,
+    saveSuccess, setSaveSuccess,
+    buildFormData, getUnmaskedConfig,
+    updateField, updateNestedField, updateTrustedProxy
+  } = useSettingsFormData({ currentConfig, clearTestResults });
+
+  // View-local state
   const [isTesting, setIsTesting] = useState(false);
-  const [hasChanges, setHasChanges] = useState(false);
   const [scriptTestResult, setScriptTestResult] = useState(null);
   const [openSections, setOpenSections] = useState({
-    server: false,
-    amule: false,
-    integrations: false,
-    bittorrent: false,
-    directories: false,
-    history: false,
-    eventScripting: false,
-    sonarr: false,
-    radarr: false,
-    prowlarr: false
+    server: false, users: false, clients: false,
+    integrations: false, directories: false, history: false, eventScripting: false
   });
+  const closeAllSections = () => setOpenSections({
+    server: false, users: false, clients: false,
+    integrations: false, directories: false, history: false, eventScripting: false
+  });
+  // Accordion toggle: opening one section closes all others
+  const toggleSection = (key, value) => {
+    if (value) {
+      setOpenSections(prev => {
+        const next = {};
+        for (const k of Object.keys(prev)) next[k] = false;
+        next[key] = true;
+        return next;
+      });
+    } else {
+      setOpenSections(prev => ({ ...prev, [key]: false }));
+    }
+  };
   const [showScriptBrowser, setShowScriptBrowser] = useState(false);
   const [interfaces, setInterfaces] = useState([{ value: '0.0.0.0', label: 'All Interfaces (0.0.0.0)' }]);
+
+  // Admin API key for *arr integration info (fetched separately)
+  const [adminApiKey, setAdminApiKey] = useState(null);
+  // User count for badge display
+  const [userCount, setUserCount] = useState(null);
+
+  // Client management (CRUD, testing, modal state)
+  const {
+    clientModal, setClientModal,
+    removeConfirm, setRemoveConfirm,
+    clientTestResults,
+    removeInstance, confirmRemoveInstance,
+    handleMoveClient, handleToggleClient, handleEditClient, handleAddClient,
+    handleModalTest, handleClientModalSave, handleTestClient,
+    testAllClients
+  } = useClientManagement({
+    formData, setFormData, setSaveError,
+    setIsTesting, clearTestResults, testConfig, saveConfig,
+    fetchCurrent, buildFormData, getUnmaskedConfig
+  });
 
   // Load current configuration on mount
   useEffect(() => {
@@ -78,216 +123,63 @@ const SettingsView = () => {
     fetchInterfaces().then(data => { if (data && data.length) setInterfaces(data); });
   }, []);
 
-  // Initialize form data when config is loaded
+  // Fetch current admin's API key for *arr integration display
   useEffect(() => {
-    if (currentConfig && !formData) {
-      // Store masked form data for display
-      setFormData({
-        server: { ...currentConfig.server },
-        amule: { ...currentConfig.amule },
-        rtorrent: { ...currentConfig.rtorrent },
-        qbittorrent: { ...currentConfig.qbittorrent || { enabled: false, host: '127.0.0.1', port: 8080, username: 'admin', password: '', useSsl: false } },
-        directories: { ...currentConfig.directories },
-        integrations: {
-          sonarr: { ...currentConfig.integrations.sonarr },
-          radarr: { ...currentConfig.integrations.radarr },
-          prowlarr: { ...currentConfig.integrations?.prowlarr || { enabled: false, url: '', apiKey: '' } }
-        },
-        history: { ...currentConfig.history },
-        eventScripting: { ...currentConfig.eventScripting || {
-          enabled: false,
-          scriptPath: '',
-          events: {
-            downloadAdded: true,
-            downloadFinished: true,
-            categoryChanged: true,
-            fileMoved: true,
-            fileDeleted: true
-          },
-          timeout: 30000
-        }}
-      });
+    if (!authIsActive || !currentUsername) return;
+    fetch('/api/users').then(r => r.json()).then(data => {
+      if (data.success && data.users) {
+        const me = data.users.find(u => u.username === currentUsername);
+        if (me?.apiKey) setAdminApiKey(me.apiKey);
+        setUserCount(data.users.length);
+      }
+    }).catch(() => {});
+  }, [authIsActive, currentUsername]);
 
-      // Store original password values (masked as '********')
-      // We'll keep them as '********' markers to know they haven't been changed
-      setOriginalPasswords({
-        auth: currentConfig.server?.auth?.password || '',
-        amule: currentConfig.amule.password,
-        rtorrent: currentConfig.rtorrent?.password || '',
-        qbittorrent: currentConfig.qbittorrent?.password || '',
-        sonarr: currentConfig.integrations.sonarr.apiKey,
-        radarr: currentConfig.integrations.radarr.apiKey,
-        prowlarr: currentConfig.integrations?.prowlarr?.apiKey || ''
-      });
+  // Auto-open Download Clients section on client test failure
+  useEffect(() => {
+    if (Object.keys(clientTestResults).length === 0) return;
+    const hasFailure = Object.values(clientTestResults).some(r => r && r.success === false);
+    if (hasFailure) {
+      setOpenSections(prev => ({ ...prev, clients: true }));
     }
-  }, [currentConfig]);
+  }, [clientTestResults]);
 
-  // Auto-open sections with test failures (preserves existing open state)
+  // Auto-open sections with non-client test failures
   useEffect(() => {
     if (!testResults || !testResults.results) return;
-
     const results = testResults.results;
+    const updates = {};
 
-    setOpenSections(prev => {
-      const updates = {};
-
-      // Only auto-open sections that have failures
-      // (preserves existing state for sections without failures)
-
-      // Check aMule
-      if (results.amule && results.amule.success === false) {
-        updates.amule = true;
+    if (results.directories) {
+      if ((results.directories.data && !results.directories.data.success) ||
+          (results.directories.logs && !results.directories.logs.success)) {
+        updates.directories = true;
       }
+    }
+    if ((results.sonarr && results.sonarr.success === false) ||
+        (results.radarr && results.radarr.success === false)) {
+      updates.integrations = true;
+    }
+    if (results.prowlarr && results.prowlarr.success === false) {
+      updates.clients = true;
+    }
 
-      // Check rtorrent
-      if (results.rtorrent && results.rtorrent.success === false) {
-        updates.bittorrent = true;
-      }
-
-      // Check qbittorrent
-      if (results.qbittorrent && results.qbittorrent.success === false) {
-        updates.bittorrent = true;
-      }
-
-      // Check directories
-      if (results.directories) {
-        if ((results.directories.data && !results.directories.data.success) ||
-            (results.directories.logs && !results.directories.logs.success)) {
-          updates.directories = true;
-        }
-      }
-
-      // Check Sonarr
-      if (results.sonarr && results.sonarr.success === false) {
-        updates.sonarr = true;
-      }
-
-      // Check Radarr
-      if (results.radarr && results.radarr.success === false) {
-        updates.radarr = true;
-      }
-
-      // Check Prowlarr
-      if (results.prowlarr && results.prowlarr.success === false) {
-        updates.prowlarr = true;
-      }
-
-      // Return merged state (preserves existing open sections)
-      return { ...prev, ...updates };
-    });
+    if (Object.keys(updates).length > 0) {
+      setOpenSections(prev => ({ ...prev, ...updates }));
+    }
   }, [testResults]);
 
-  // Helper to unmask passwords for API calls
-  // If a password is still '********', we DON'T send it (server will keep existing value)
-  const getUnmaskedConfig = (config) => {
-    const unmasked = JSON.parse(JSON.stringify(config));
+  // ==========================================================================
+  // TEST HANDLERS
+  // ==========================================================================
 
-    // Remove masked passwords - server will keep existing values
-    if (unmasked.server?.auth?.password === '********') {
-      delete unmasked.server.auth.password;
-    }
-    if (unmasked.amule?.password === '********') {
-      delete unmasked.amule.password;
-    }
-    if (unmasked.rtorrent?.password === '********') {
-      delete unmasked.rtorrent.password;
-    }
-    if (unmasked.qbittorrent?.password === '********') {
-      delete unmasked.qbittorrent.password;
-    }
-    if (unmasked.integrations?.sonarr?.apiKey === '********') {
-      delete unmasked.integrations.sonarr.apiKey;
-    }
-    if (unmasked.integrations?.radarr?.apiKey === '********') {
-      delete unmasked.integrations.radarr.apiKey;
-    }
-    if (unmasked.integrations?.prowlarr?.apiKey === '********') {
-      delete unmasked.integrations.prowlarr.apiKey;
-    }
-
-    return unmasked;
-  };
-
-  // Update field value
-  const updateField = (section, field, value) => {
-    setFormData(prev => ({
-      ...prev,
-      [section]: {
-        ...prev[section],
-        [field]: value
-      }
-    }));
-    setHasChanges(true);
-    setSaveSuccess(false);
-    clearTestResults();
-  };
-
-  // Update nested field value (for integrations)
-  const updateNestedField = (section, subsection, field, value) => {
-    setFormData(prev => ({
-      ...prev,
-      [section]: {
-        ...prev[section],
-        [subsection]: {
-          ...prev[section][subsection],
-          [field]: value
-        }
-      }
-    }));
-    setHasChanges(true);
-    setSaveSuccess(false);
-    clearTestResults();
-  };
-
-  // Test aMule connection
-  const handleTestAmule = async () => {
-    if (!formData || formData.amule?.enabled === false) return;
-    setIsTesting(true);
-    try {
-      const unmasked = getUnmaskedConfig(formData);
-      await testConfig({ amule: unmasked.amule });
-    } catch (err) {
-      // Error is handled by useConfig
-    } finally {
-      setIsTesting(false);
-    }
-  };
-
-  // Test rtorrent connection
-  const handleTestRtorrent = async () => {
-    if (!formData || !formData.rtorrent?.enabled) return;
-    setIsTesting(true);
-    try {
-      const unmasked = getUnmaskedConfig(formData);
-      await testConfig({ rtorrent: unmasked.rtorrent });
-    } catch (err) {
-      // Error is handled by useConfig
-    } finally {
-      setIsTesting(false);
-    }
-  };
-
-  // Test qBittorrent connection
-  const handleTestQbittorrent = async () => {
-    if (!formData || !formData.qbittorrent?.enabled) return;
-    setIsTesting(true);
-    try {
-      const unmasked = getUnmaskedConfig(formData);
-      await testConfig({ qbittorrent: unmasked.qbittorrent });
-    } catch (err) {
-      // Error is handled by useConfig
-    } finally {
-      setIsTesting(false);
-    }
-  };
-
-  // Test directories
-  const handleTestDirectories = async () => {
+  // Factory for integration test handlers (directories, sonarr, radarr, prowlarr)
+  const makeTestHandler = (key, getPayload) => async () => {
     if (!formData) return;
     setIsTesting(true);
     try {
       const unmasked = getUnmaskedConfig(formData);
-      await testConfig({ directories: unmasked.directories });
+      await testConfig({ [key]: getPayload(unmasked) });
     } catch (err) {
       // Error is handled by useConfig
     } finally {
@@ -295,47 +187,10 @@ const SettingsView = () => {
     }
   };
 
-  // Test Sonarr
-  const handleTestSonarr = async () => {
-    if (!formData) return;
-    setIsTesting(true);
-    try {
-      const unmasked = getUnmaskedConfig(formData);
-      await testConfig({ sonarr: unmasked.integrations.sonarr });
-    } catch (err) {
-      // Error is handled by useConfig
-    } finally {
-      setIsTesting(false);
-    }
-  };
-
-  // Test Radarr
-  const handleTestRadarr = async () => {
-    if (!formData) return;
-    setIsTesting(true);
-    try {
-      const unmasked = getUnmaskedConfig(formData);
-      await testConfig({ radarr: unmasked.integrations.radarr });
-    } catch (err) {
-      // Error is handled by useConfig
-    } finally {
-      setIsTesting(false);
-    }
-  };
-
-  // Test Prowlarr
-  const handleTestProwlarr = async () => {
-    if (!formData) return;
-    setIsTesting(true);
-    try {
-      const unmasked = getUnmaskedConfig(formData);
-      await testConfig({ prowlarr: unmasked.integrations.prowlarr });
-    } catch (err) {
-      // Error is handled by useConfig
-    } finally {
-      setIsTesting(false);
-    }
-  };
+  const handleTestDirectories = makeTestHandler('directories', c => c.directories);
+  const handleTestSonarr      = makeTestHandler('sonarr',      c => c.integrations.sonarr);
+  const handleTestRadarr      = makeTestHandler('radarr',      c => c.integrations.radarr);
+  const handleTestProwlarr    = makeTestHandler('prowlarr',    c => c.integrations.prowlarr);
 
   // Test Event Script Path
   const handleTestScript = async () => {
@@ -357,13 +212,24 @@ const SettingsView = () => {
     }
   };
 
-  // Test all
+  // Build non-client test payload (directories + enabled integrations)
+  const buildNonClientPayload = (unmasked) => {
+    const payload = { directories: unmasked.directories };
+    if (unmasked.integrations?.sonarr?.enabled) payload.sonarr = unmasked.integrations.sonarr;
+    if (unmasked.integrations?.radarr?.enabled) payload.radarr = unmasked.integrations.radarr;
+    if (unmasked.integrations?.prowlarr?.enabled) payload.prowlarr = unmasked.integrations.prowlarr;
+    return payload;
+  };
+
+  // Test all — tests each enabled client instance individually, then non-client items
   const handleTestAll = async () => {
     if (!formData) return;
+    closeAllSections();
     setIsTesting(true);
     try {
-      const payload = buildTestPayload(formData, true, getUnmaskedConfig);
-      await testConfig(payload);
+      const unmasked = getUnmaskedConfig(formData);
+      await testAllClients(unmasked);
+      await testConfig(buildNonClientPayload(unmasked));
     } catch (err) {
       // Error is handled by useConfig
     } finally {
@@ -371,50 +237,44 @@ const SettingsView = () => {
     }
   };
 
+  // ==========================================================================
+  // SAVE / CANCEL
+  // ==========================================================================
+
+  // Check if there are any test errors
+  const hasTestErrors = () => checkTestErrors(testResults, clientTestResults);
 
   // Save configuration
   const handleSave = async () => {
     if (!formData) return;
+    closeAllSections();
 
     setSaveError(null);
     setSaveSuccess(false);
     clearError();
 
-    // Validate authentication password if enabled and changed
-    if (formData.server.auth?.enabled && formData.server.auth.password && formData.server.auth.password !== '********') {
-      const passwordErrors = validatePassword(formData.server.auth.password);
-      if (passwordErrors.length > 0) {
-        setSaveError('Authentication password does not meet requirements: ' + passwordErrors.join(', '));
-        return;
-      }
-      if (formData.server.auth.password !== passwordConfirm) {
-        setSaveError('Authentication passwords do not match. Please ensure both password fields are identical.');
-        return;
-      }
-    }
-
     // Cross-validation: at least one client must be enabled
-    if (formData.amule?.enabled === false && !formData.rtorrent?.enabled && !formData.qbittorrent?.enabled) {
-      setSaveError('At least one download client (aMule, rTorrent, or qBittorrent) must be enabled.');
+    if (!formData.clients.some(c => c.enabled !== false)) {
+      setSaveError('At least one download client must be enabled.');
       return;
     }
 
-    // Always test before saving
-    // If tests haven't been run, run them first
-    if (!testResults || !testResults.results) {
+    // Check if we have complete test results
+    const allClientsTested = formData.clients.every((c, i) =>
+      c.enabled === false || clientTestResults[i] !== undefined
+    );
+    const nonClientsTested = testResults && testResults.results;
+
+    if (!allClientsTested || !nonClientsTested) {
+      // Run all tests before saving
       setIsTesting(true);
-      let results;
+
+      const unmasked = getUnmaskedConfig(formData);
+      const newClientResults = await testAllClients(unmasked);
+
+      let nonClientData;
       try {
-        const unmasked = getUnmaskedConfig(formData);
-        results = await testConfig({
-          amule: unmasked.amule?.enabled !== false ? unmasked.amule : undefined,
-          rtorrent: unmasked.rtorrent?.enabled ? unmasked.rtorrent : undefined,
-          qbittorrent: unmasked.qbittorrent?.enabled ? unmasked.qbittorrent : undefined,
-          directories: unmasked.directories,
-          sonarr: unmasked.integrations.sonarr.enabled ? unmasked.integrations.sonarr : undefined,
-          radarr: unmasked.integrations.radarr.enabled ? unmasked.integrations.radarr : undefined,
-          prowlarr: unmasked.integrations.prowlarr?.enabled ? unmasked.integrations.prowlarr : undefined
-        });
+        nonClientData = await testConfig(buildNonClientPayload(unmasked));
       } catch (err) {
         setSaveError('Configuration test failed. Please review the errors and fix them before saving.');
         setIsTesting(false);
@@ -422,16 +282,12 @@ const SettingsView = () => {
       }
       setIsTesting(false);
 
-      // Check results directly from the return value
-      if (checkResultsForErrors(results, formData)) {
+      // Check directly from values (not state, which may not be updated yet)
+      if (checkResultsForErrors(nonClientData, newClientResults)) {
         setSaveError('Configuration test failed. Please fix the errors and click Save Changes again.');
         return;
       }
-
-      // All tests passed - proceed with save automatically
-      // (fall through to save logic below)
     } else {
-      // Tests were already run - check for errors from state
       if (hasTestErrors()) {
         setSaveError('Configuration test failed. Please fix the errors before saving.');
         return;
@@ -449,7 +305,6 @@ const SettingsView = () => {
       setSaveSuccess(true);
       setHasChanges(false);
 
-      // Show success message
       setTimeout(() => {
         setSaveSuccess(false);
       }, 5000);
@@ -473,20 +328,14 @@ const SettingsView = () => {
     }
   };
 
-  // Check if there are any test errors
-  const hasTestErrors = () => checkTestErrors(testResults, formData);
-
 
   // Show loading state when formData hasn't been initialized yet
-  // (loading flag is for async operations, formData null means initial load)
   if (!formData) {
-    // If there's an error, show error message
     if (error) {
       return h('div', { className: 'p-4' },
         h('p', { className: 'text-red-600 dark:text-red-400' }, 'Failed to load configuration: ', error)
       );
     }
-    // Otherwise show loading spinner
     return h('div', { className: 'flex items-center justify-center h-64' },
       h(LoadingSpinner, { text: 'Loading configuration...' })
     );
@@ -495,14 +344,62 @@ const SettingsView = () => {
   const isDocker = configStatus?.isDocker;
   const meta = currentConfig?._meta;
 
-  return h('div', { className: 'w-full lg:w-3/4 mx-auto px-2 py-4 sm:px-4' },
+  // Check if any BitTorrent client exists (for Prowlarr section)
+  const hasAnyBittorrent = Object.values(instances).some(inst => inst.networkType === 'bittorrent');
+
+  // Badge helper
+  const pill = (text) => h('span', {
+    className: 'text-xs font-medium px-2 py-0.5 rounded-full bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200'
+  }, text);
+
+  // Compute badges
+  const authEnabled = formData.server.auth?.enabled || false;
+  const ssoEnabled = formData.server?.auth?.trustedProxy?.enabled || false;
+  const serverBadge = h(React.Fragment, {},
+    pill(authEnabled ? 'Auth' : 'No Auth'),
+    authEnabled && ssoEnabled && pill('SSO')
+  );
+
+  const enabledClientCount = formData.clients.filter(c => c.enabled !== false).length;
+  const prowlarrEnabled = formData.integrations.prowlarr?.enabled;
+  const clientsBadge = h(React.Fragment, {},
+    pill(`${enabledClientCount} client${enabledClientCount !== 1 ? 's' : ''}`),
+    prowlarrEnabled && pill('Prowlarr')
+  );
+
+  const enabledArrs = [
+    formData.integrations.sonarr?.enabled && 'Sonarr',
+    formData.integrations.radarr?.enabled && 'Radarr'
+  ].filter(Boolean);
+  const arrBadge = enabledArrs.length > 0 ? pill(enabledArrs.join(', ')) : null;
+
+  const historyEnabled = formData.history?.enabled ?? true;
+  const historyBadge = pill(historyEnabled ? 'Enabled' : 'Disabled');
+
+  const scriptEnabled = formData.eventScripting?.enabled || false;
+  const scriptBadge = scriptEnabled ? pill('Active') : null;
+
+  const usersBadge = userCount != null ? pill(`${userCount} user${userCount !== 1 ? 's' : ''}`) : null;
+
+  return h('div', { className: 'w-full lg:w-5/6 mx-auto px-2 py-4 sm:px-4' },
+    // Interaction overlay while testing/saving
+    (isTesting || loading) && h(Portal, null,
+      h('div', {
+        className: 'fixed inset-0 bg-white/30 dark:bg-gray-900/30 z-50 flex items-center justify-center'
+      },
+        h(LoadingSpinner, { size: 'lg' })
+      )
+    ),
     // Server & Authentication Configuration
     h(ConfigSection, {
       title: 'Server & Authentication',
       description: 'HTTP server and web interface access control',
       defaultOpen: false,
       open: openSections.server,
-      onToggle: (value) => setOpenSections(prev => ({ ...prev, server: value }))
+      onToggle: (value) => toggleSection('server', value),
+      icon: 'lock',
+
+      badge: serverBadge
     },
       h(ConfigField, {
         label: 'Port',
@@ -513,9 +410,6 @@ const SettingsView = () => {
         required: true,
         fromEnv: meta?.fromEnv.port
       }),
-      isDocker && h(AlertBox, { type: 'warning' },
-        h('p', {}, 'Changing the port requires updating the Docker port mapping and restarting the container.')
-      ),
 
       h(ConfigField, {
         label: 'Bind Address',
@@ -531,9 +425,9 @@ const SettingsView = () => {
           disabled: meta?.fromEnv.host
         })
       ),
-      (formData.server.host || '0.0.0.0') !== (currentConfig?.server?.host || '0.0.0.0') && h(AlertBox, { type: 'warning' },
-        h('p', {}, 'Changing the bind address requires a server restart to take effect.',
-          isDocker ? ' Update your Docker configuration and restart the container.' : '')
+      h(AlertBox, { type: 'warning' },
+        h('p', {}, 'Changing the port or bind address requires a server restart to take effect.',
+          isDocker ? ' Update your Docker port mapping and restart the container.' : '')
       ),
 
       h('hr', { className: 'my-4 border-gray-200 dark:border-gray-700' }),
@@ -544,83 +438,117 @@ const SettingsView = () => {
         enabled: formData.server.auth?.enabled || false,
         onChange: (enabled) => {
           updateNestedField('server', 'auth', 'enabled', enabled);
-          if (!enabled) {
-            setPasswordConfirm('');
-          }
         }
       }),
 
-      formData.server.auth?.enabled && h('div', { className: 'mt-4 space-y-4' },
-        // Show info about environment variable
-          meta?.fromEnv.serverAuthPassword && h(AlertBox, { type: 'warning' },
-          h('p', {}, 'Password is set via WEB_AUTH_PASSWORD environment variable and cannot be changed here. To change the password, update the environment variable and restart the server.')
-        ),
+      // Trusted Proxy SSO
+      formData.server.auth?.enabled && h('div', { className: 'mt-4' },
+        h('hr', { className: 'my-4 border-gray-200 dark:border-gray-700' }),
 
-        !meta?.fromEnv.serverAuthPassword && h('div', {},
-          h(AlertBox, { type: 'info', className: 'mb-4' },
-            h('div', {},
-              h('p', { className: 'font-medium mb-2' }, 'Password requirements:'),
-              h('ul', { className: 'list-disc list-inside space-y-1' },
-                h('li', {}, 'At least 8 characters'),
-                h('li', {}, 'Contains at least one digit'),
-                h('li', {}, 'Contains at least one letter'),
-                h('li', {}, 'Contains at least one special character')
-              )
-            )
-          ),
+        h(EnableToggle, {
+          label: 'Enable Trusted Proxy Authentication',
+          description: 'Authenticate users via reverse proxy headers (e.g., Authelia, Authentik, Nginx auth_request)',
+          enabled: formData.server?.auth?.trustedProxy?.enabled || false,
+          onChange: (enabled) => updateTrustedProxy('enabled', enabled)
+        }),
 
-          h(ConfigField, {
-            label: 'Password',
-            description: 'Choose a strong password for the web interface',
-            value: formData.server.auth?.password || '',
-            onChange: (value) => updateNestedField('server', 'auth', 'password', value),
-            required: true,
-          },
-            h(PasswordField, {
-              value: formData.server.auth?.password || '',
-              onChange: (value) => updateNestedField('server', 'auth', 'password', value),
-              placeholder: 'Enter password',
-            })
-          ),
+        formData.server?.auth?.trustedProxy?.enabled && h('div', { className: 'mt-4 space-y-4' },
+          h(EnableToggle, {
+            label: 'Auto-Provision Users',
+            description: 'Automatically create user accounts for new usernames from the proxy header',
+            enabled: formData.server?.auth?.trustedProxy?.autoProvision || false,
+            onChange: (enabled) => updateTrustedProxy('autoProvision', enabled)
+          }),
 
           h(ConfigField, {
-            label: 'Confirm Password',
-            description: 'Re-enter your password to confirm',
-            value: passwordConfirm,
-            onChange: (value) => setPasswordConfirm(value),
-            required: true,
-          },
-            h(PasswordField, {
-              value: passwordConfirm,
-              onChange: (value) => setPasswordConfirm(value),
-              placeholder: 'Confirm password',
-            })
-          ),
+            label: 'Username Header',
+            description: 'HTTP header containing the authenticated username from the reverse proxy',
+            value: formData.server?.auth?.trustedProxy?.usernameHeader || '',
+            onChange: (value) => updateTrustedProxy('usernameHeader', value),
+            placeholder: 'X-Remote-User',
+            required: true
+          }),
 
-          // Real-time validation feedback
-          formData.server.auth?.password && formData.server.auth.password !== '********' && (() => {
-            const passwordErrors = validatePassword(formData.server.auth.password);
-            const passwordMismatch = formData.server.auth.password !== passwordConfirm && passwordConfirm;
+          // SSO Default Capabilities picker (shown when auto-provision is enabled)
+          formData.server?.auth?.trustedProxy?.autoProvision && (() => {
+            const currentCaps = formData.server?.auth?.trustedProxy?.defaultCapabilities || SSO_DEFAULT_CAPABILITIES;
+            const currentPreset = detectPreset(currentCaps);
+
+            const setCaps = (caps) => updateTrustedProxy('defaultCapabilities', caps);
+
+            const handlePreset = (p) => {
+              if (p === 'full') setCaps(PRESETS.full.slice());
+              else if (p === 'readonly') setCaps(PRESETS.readonly.slice());
+            };
+
+            const toggleCap = (cap) => {
+              let next;
+              if (currentCaps.includes(cap)) {
+                next = currentCaps.filter(c => c !== cap);
+                if (cap === 'view_all_downloads') next = next.filter(c => c !== 'edit_all_downloads');
+              } else {
+                next = [...currentCaps, cap];
+                if (cap === 'edit_all_downloads' && !next.includes('view_all_downloads')) next.push('view_all_downloads');
+              }
+              setCaps(next);
+            };
 
             return h('div', {},
-              passwordErrors.length > 0 && h(AlertBox, { type: 'error' },
-                h('div', {},
-                  h('p', { className: 'font-medium mb-1' }, 'Password requirements not met:'),
-                  h('ul', { className: 'list-disc list-inside space-y-1' },
-                    passwordErrors.map(error => h('li', { key: error }, error))
-                  )
+              h('div', { className: 'flex items-center justify-between mb-2' },
+                h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300' }, 'Default Capabilities for New SSO Users'),
+                h('div', { className: 'flex gap-1' },
+                  h('button', {
+                    type: 'button',
+                    onClick: () => handlePreset('full'),
+                    className: `px-2 py-0.5 text-xs rounded font-medium transition-colors ${currentPreset === 'full' ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'}`
+                  }, 'Full'),
+                  h('button', {
+                    type: 'button',
+                    onClick: () => handlePreset('readonly'),
+                    className: `px-2 py-0.5 text-xs rounded font-medium transition-colors ${currentPreset === 'readonly' ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'}`
+                  }, 'Read-only'),
+                  h('span', {
+                    className: `px-2 py-0.5 text-xs rounded font-medium ${currentPreset === 'custom' ? 'bg-blue-600 text-white' : 'text-gray-400'}`
+                  }, 'Custom')
                 )
               ),
-
-              passwordMismatch && h(AlertBox, { type: 'error' },
-                h('p', {}, 'Passwords do not match')
-              ),
-
-              passwordErrors.length === 0 && !passwordMismatch && passwordConfirm && h(AlertBox, { type: 'success' },
-                h('p', {}, 'Password meets all requirements and matches')
+              h('div', { className: 'space-y-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3' },
+                ...CAPABILITY_GROUPS.map(group =>
+                  h('div', { key: group.label },
+                    h('p', { className: 'text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1' }, group.label),
+                    h('div', { className: 'grid grid-cols-2 gap-x-4 gap-y-1' },
+                      ...group.caps.map(cap =>
+                        h('label', {
+                          key: cap,
+                          className: 'flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer'
+                        },
+                          h('input', {
+                            type: 'checkbox',
+                            checked: currentCaps.includes(cap),
+                            onChange: () => toggleCap(cap),
+                            className: 'rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500'
+                          }),
+                          CAPABILITY_LABELS[cap] || cap
+                        )
+                      )
+                    )
+                  )
+                )
               )
             );
-          })()
+          })(),
+
+          h(AlertBox, { type: 'info' },
+            h('div', {},
+              h('p', { className: 'font-medium mb-1' }, 'How Trusted Proxy SSO works:'),
+              h('ul', { className: 'list-disc list-inside space-y-1' },
+                h('li', {}, 'Your reverse proxy authenticates users and sets a username header on each request'),
+                h('li', {}, 'This app reads the header and creates a session with the matching user account'),
+                h('li', {}, 'If auto-provision is enabled, new users are created automatically with the capabilities selected above'),
+                h('li', {}, 'Users can still log in with a password if one is set for their account')
+              )
+            )
+          )
         )
       ),
 
@@ -629,102 +557,225 @@ const SettingsView = () => {
       )
     ),
 
-    // aMule Configuration
-    h(ConfigSection, {
-      title: 'aMule Integration',
-      description: 'aMule External Connection (EC) settings',
+    // User Management (admin only, auth enabled)
+    formData.server.auth?.enabled && h(ConfigSection, {
+      title: 'User Management',
+      description: 'Manage user accounts and permissions',
       defaultOpen: false,
-      open: openSections.amule,
-      onToggle: (value) => setOpenSections(prev => ({ ...prev, amule: value }))
+      open: openSections.users,
+      onToggle: (value) => toggleSection('users', value),
+      icon: 'user',
+
+      badge: usersBadge
     },
-      h(EnableToggle, {
-        enabled: formData.amule?.enabled !== false,
-        onChange: (value) => updateField('amule', 'enabled', value),
-        label: 'Enable aMule Integration',
-        description: 'Connect to aMule for managing ed2k/Kademlia downloads'
-      }),
+      h(UserManagement, { currentUsername, onApiKeyChange: setAdminApiKey })
+    ),
 
-      formData.amule?.enabled !== false && h('div', { className: 'mt-4 space-y-4' },
-        isDocker && h(AlertBox, { type: 'info' },
-            h('p', {}, 'You are running in Docker. If aMule is running on your host machine, use the special hostname ', h('code', { className: 'bg-white dark:bg-gray-800 px-1 rounded' }, 'host.docker.internal'), '. If aMule is running in another container, use that container\'s name as the hostname.')
-        ),
-        h(ConfigField, {
-          label: 'Host',
-          description: 'aMule External Connection (EC) host address',
-          value: formData.amule.host,
-          onChange: (value) => updateField('amule', 'host', value),
-          placeholder: '127.0.0.1',
-          required: formData.amule?.enabled !== false,
-          fromEnv: meta?.fromEnv.amuleHost
-        }),
-        h(ConfigField, {
-          label: 'Port',
-          description: 'aMule EC port (default: 4712)',
-          value: formData.amule.port,
-          onChange: (value) => updateField('amule', 'port', value),
-          type: 'number',
-          placeholder: '4712',
-          required: formData.amule?.enabled !== false,
-          fromEnv: meta?.fromEnv.amulePort
-        }),
+    // Download Clients — unified section with card grid
+    h(ConfigSection, {
+      title: 'Download Clients',
+      description: 'Configure download client connections',
+      defaultOpen: false,
+      open: openSections.clients,
+      onToggle: (value) => toggleSection('clients', value),
+      warning: Object.values(instances).some(i => !i.connected && i.error),
+      icon: 'download',
 
-        // Warning if aMule password is from environment
-        meta?.fromEnv.amulePassword && h(AlertBox, { type: 'warning' },
-          h('p', {}, 'aMule password is set via AMULE_PASSWORD environment variable and cannot be changed here. To change the password, update the environment variable and restart the server.')
-        ),
-
-        !meta?.fromEnv.amulePassword && h(ConfigField, {
-          label: 'Password',
-          description: 'aMule EC password (set in aMule preferences)',
-          value: formData.amule.password,
-          onChange: (value) => updateField('amule', 'password', value),
-          required: formData.amule?.enabled !== false,
-          fromEnv: meta?.fromEnv.amulePassword
-        },
-          h(PasswordField, {
-            value: formData.amule.password,
-            onChange: (value) => updateField('amule', 'password', value),
-            placeholder: 'Enter aMule EC password',
-            disabled: meta?.fromEnv.amulePassword
+      badge: clientsBadge
+    },
+      // Card grid
+      h('div', { className: 'grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4' },
+        // Render each client as a compact card
+        formData.clients.map((client, clientIndex) =>
+          h(ClientInstanceCard, {
+            key: clientIndex,
+            client,
+            clientIndex,
+            totalClients: formData.clients.length,
+            onMove: handleMoveClient,
+            onEdit: handleEditClient,
+            onToggle: handleToggleClient,
+            onRemove: removeInstance,
+            onTest: handleTestClient,
+            isTesting,
+            testResult: clientTestResults[clientIndex],
+            instanceStatus: instances[client.id] || null
           })
         ),
-        h(ConfigField, {
-          label: 'Shared Files Auto-Reload Interval (hours)',
-          description: 'Hours between automatic shared files reload (0 = disabled, default: 3). This makes aMule rescan shared directories periodically.',
-          value: formData.amule.sharedFilesReloadIntervalHours ?? 3,
-          onChange: (value) => updateField('amule', 'sharedFilesReloadIntervalHours', parseInt(value) || 0),
-          type: 'number',
-          placeholder: '3',
-          fromEnv: meta?.fromEnv.amuleSharedFilesReloadInterval
+
+        // "Add Client" dashed-border button card
+        h('button', {
+          onClick: handleAddClient,
+          className: 'border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 flex flex-col items-center justify-center gap-2 text-gray-500 dark:text-gray-400 hover:border-blue-500 dark:hover:border-blue-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-colors md:min-h-[160px]'
+        },
+          h(Icon, { name: 'plus', size: 24 }),
+          h('span', { className: 'text-sm font-medium' }, 'Add Client')
+        )
+      ),
+
+      // No clients hint
+      formData.clients.length === 0 && h(AlertBox, { type: 'info', className: 'mb-4' },
+        h('p', {}, 'No download clients configured. Click "Add Client" to add one.')
+      ),
+
+      // Prowlarr Integration
+      !hasAnyBittorrent && h(AlertBox, { type: 'info', className: 'mt-4' },
+        h('p', {}, 'Add a BitTorrent client to enable Prowlarr integration.')
+      ),
+      hasAnyBittorrent && h('div', { className: 'mt-4 pt-4 border-t border-gray-200 dark:border-gray-700' },
+        h(EnableToggle, {
+          enabled: formData.integrations.prowlarr?.enabled || false,
+          onChange: (value) => updateNestedField('integrations', 'prowlarr', 'enabled', value),
+          label: 'Enable Prowlarr Integration',
+          description: 'Search for torrents via Prowlarr indexer manager'
         }),
-        h('div', { className: 'mt-4' },
-          h(TestButton, {
-            onClick: handleTestAmule,
-            loading: isTesting,
-            disabled: !formData.amule.host || !formData.amule.port || !formData.amule.password
-          }, 'Test Connection')
-        ),
-        testResults?.results?.amule && h(TestResultIndicator, {
-          result: testResults.results.amule,
-          label: 'aMule Connection Test'
-        })
+        formData.integrations.prowlarr?.enabled && h('div', { className: 'mt-4 space-y-4' },
+          h(ConfigField, {
+            label: 'Prowlarr URL',
+            description: 'Prowlarr server URL (e.g., http://localhost:9696)',
+            value: formData.integrations.prowlarr?.url || '',
+            onChange: (value) => updateNestedField('integrations', 'prowlarr', 'url', value),
+            placeholder: 'http://localhost:9696',
+            required: formData.integrations.prowlarr?.enabled,
+            fromEnv: meta?.fromEnv.prowlarrUrl
+          }),
+          meta?.fromEnv.prowlarrApiKey && h(AlertBox, { type: 'warning' },
+            h('p', {}, 'Prowlarr API key is set via PROWLARR_API_KEY environment variable.')
+          ),
+          !meta?.fromEnv.prowlarrApiKey && h(ConfigField, {
+            label: 'API Key',
+            description: 'Prowlarr API key (found in Settings → General)',
+            value: formData.integrations.prowlarr?.apiKey || '',
+            onChange: (value) => updateNestedField('integrations', 'prowlarr', 'apiKey', value),
+            required: formData.integrations.prowlarr?.enabled,
+            fromEnv: meta?.fromEnv.prowlarrApiKey
+          },
+            h(PasswordField, {
+              value: formData.integrations.prowlarr?.apiKey || '',
+              onChange: (value) => updateNestedField('integrations', 'prowlarr', 'apiKey', value),
+              placeholder: 'Enter Prowlarr API key',
+              disabled: meta?.fromEnv.prowlarrApiKey
+            })
+          ),
+          h('div', { className: 'mt-4' },
+            h(TestButton, {
+              onClick: handleTestProwlarr,
+              loading: isTesting,
+              disabled: !formData.integrations.prowlarr?.url || !formData.integrations.prowlarr?.apiKey
+            }, 'Test Prowlarr Connection')
+          ),
+          testResults?.results?.prowlarr && h(TestResultIndicator, {
+            result: testResults.results.prowlarr,
+            label: 'Prowlarr API Test'
+          })
+        )
       )
     ),
+
+    // Client Instance Modal
+    h(ClientInstanceModal, {
+      isOpen: clientModal.open,
+      onClose: () => setClientModal({ open: false, client: null }),
+      onSave: handleClientModalSave,
+      onTest: handleModalTest,
+      editClient: clientModal.client,
+      isDocker,
+      existingNames: formData.clients.map(c => c.name),
+      existingColors: formData.clients.map(c => c.color).filter(Boolean)
+    }),
+
+    // Remove Client Confirmation Modal
+    removeConfirm.open && (() => {
+      const client = formData.clients[removeConfirm.clientIndex];
+      const clientLabel = client?.name || TYPE_LABELS[client?.type] || 'this client';
+      return h('div', {
+        className: 'fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50',
+        onClick: () => setRemoveConfirm({ open: false, clientIndex: null })
+      },
+        h('div', {
+          className: 'w-full max-w-md bg-white dark:bg-gray-800 rounded-xl shadow-xl overflow-hidden',
+          onClick: (e) => e.stopPropagation()
+        },
+          h('div', { className: 'px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center gap-3' },
+            h('div', { className: 'flex-shrink-0 w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center' },
+              h(Icon, { name: 'trash', size: 20, className: 'text-red-600 dark:text-red-400' })
+            ),
+            h('h2', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100' }, `Remove ${clientLabel}?`)
+          ),
+          h('div', { className: 'px-6 py-4 space-y-3' },
+            h('p', { className: 'text-sm text-gray-700 dark:text-gray-300' },
+              'Are you sure you want to remove this download client configuration?'
+            ),
+            h(AlertBox, { type: 'warning' },
+              h('p', { className: 'text-sm' },
+                'Download history and metrics data associated with this instance will become orphaned and will no longer appear in the UI. This cannot be undone.'
+              )
+            )
+          ),
+          h('div', { className: 'px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3' },
+            h('button', {
+              onClick: () => setRemoveConfirm({ open: false, clientIndex: null }),
+              className: 'px-4 py-2 text-sm font-medium rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors'
+            }, 'Cancel'),
+            h('button', {
+              onClick: confirmRemoveInstance,
+              className: 'px-4 py-2 text-sm font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors'
+            }, 'Remove')
+          )
+        )
+      );
+    })(),
 
     // *arr Integrations
     h(ConfigSection, {
       title: '*arr Integrations',
-      description: 'Sonarr and Radarr scheduler settings',
+      description: 'Torznab and qBittorrent-compatible API for ED2K, Sonarr and Radarr schedulers',
       defaultOpen: false,
       open: openSections.integrations,
-      onToggle: (value) => setOpenSections(prev => ({ ...prev, integrations: value }))
+      onToggle: (value) => toggleSection('integrations', value),
+      icon: 'share',
+
+      badge: arrBadge
     },
-      // *arr Integration Configuration info
+      // aMule instance selector (only when 2+ aMule clients configured)
+      (() => {
+        const amuleClients = formData.clients.filter(c => c.type === 'amule' && c.enabled !== false);
+        return amuleClients.length > 1 && h('div', { className: 'mb-6' },
+          h(ConfigField, {
+            label: 'aMule Instance for *arr',
+            description: 'Which aMule instance to use for Torznab API and qBittorrent-compatible API for *arr apps'
+          },
+            h('select', {
+              value: formData.integrations.amuleInstanceId || '',
+              onChange: (e) => {
+                const val = e.target.value || null;
+                setFormData(prev => ({
+                  ...prev,
+                  integrations: { ...prev.integrations, amuleInstanceId: val }
+                }));
+                setHasChanges(true);
+                setSaveSuccess(false);
+                clearTestResults();
+              },
+              className: 'w-full text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded px-3 py-2'
+            },
+              h('option', { value: '' }, 'Auto (first connected)'),
+              ...amuleClients.map(c => {
+                const id = c.id || `${c.type}-${c.host}-${c.port}`;
+                return h('option', { key: id, value: id }, c.name || `aMule (${c.host}:${c.port})`);
+              })
+            )
+          )
+        );
+      })(),
+
       h(IntegrationConfigInfo, {
         title: '*arr Integration Configuration',
         port: formData.server.port,
         authEnabled: formData.server.auth?.enabled,
-        amuleEnabled: formData.amule?.enabled !== false,
+        amuleEnabled: formData.clients.some(c => c.type === 'amule' && c.enabled !== false),
+        apiKey: adminApiKey,
+        username: currentUsername,
         className: 'mb-6'
       }),
 
@@ -847,242 +898,14 @@ const SettingsView = () => {
       )
     ),
 
-    // BitTorrent Integration Configuration
-    h(ConfigSection, {
-      title: 'BitTorrent Integration',
-      description: 'BitTorrent client and Prowlarr settings',
-      defaultOpen: false,
-      open: openSections.bittorrent,
-      onToggle: (value) => setOpenSections(prev => ({ ...prev, bittorrent: value }))
-    },
-      isDocker && h(AlertBox, { type: 'info', className: 'mb-4' },
-        h('p', {}, 'You are running in Docker. If your BitTorrent clients are running on your host machine, use ', h('code', { className: 'bg-white dark:bg-gray-800 px-1 rounded' }, 'host.docker.internal'), ' as the hostname.')
-      ),
-
-      // rTorrent Section
-      h('div', { className: 'bg-gray-50 dark:bg-gray-900 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mb-4' },
-        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4' }, 'rTorrent (XML-RPC)'),
-
-        h(EnableToggle, {
-          enabled: formData.rtorrent?.enabled || false,
-          onChange: (value) => updateField('rtorrent', 'enabled', value),
-          label: 'Enable rTorrent',
-          description: 'Connect to rTorrent for managing BitTorrent downloads via XML-RPC'
-        }),
-
-        formData.rtorrent?.enabled && h('div', { className: 'mt-4 space-y-4' },
-          h(ConfigField, {
-            label: 'Host',
-            description: 'rTorrent XML-RPC host address',
-            value: formData.rtorrent.host || '',
-            onChange: (value) => updateField('rtorrent', 'host', value),
-            placeholder: '127.0.0.1',
-            required: formData.rtorrent.enabled,
-            fromEnv: meta?.fromEnv.rtorrentHost
-          }),
-
-          h(ConfigField, {
-            label: 'Port',
-            description: 'rTorrent XML-RPC port (default: 8000)',
-            value: formData.rtorrent.port || 8000,
-            onChange: (value) => updateField('rtorrent', 'port', parseInt(value, 10) || 8000),
-            type: 'number',
-            placeholder: '8000',
-            required: formData.rtorrent.enabled,
-            fromEnv: meta?.fromEnv.rtorrentPort
-          }),
-
-          h(ConfigField, {
-            label: 'XML-RPC Path',
-            description: 'Path for XML-RPC endpoint (default: /RPC2)',
-            value: formData.rtorrent.path || '/RPC2',
-            onChange: (value) => updateField('rtorrent', 'path', value),
-            placeholder: '/RPC2',
-            fromEnv: meta?.fromEnv.rtorrentPath
-          }),
-
-          h(ConfigField, {
-            label: 'Username (Optional)',
-            description: 'Username for HTTP basic authentication (if required)',
-            value: formData.rtorrent.username || '',
-            onChange: (value) => updateField('rtorrent', 'username', value),
-            placeholder: 'Leave empty if not required',
-            fromEnv: meta?.fromEnv.rtorrentUsername
-          }),
-
-          // Warning if rtorrent password is from environment
-          meta?.fromEnv.rtorrentPassword && h(AlertBox, { type: 'warning' },
-            h('p', {}, 'rTorrent password is set via RTORRENT_PASSWORD environment variable.')
-          ),
-
-          !meta?.fromEnv.rtorrentPassword && h(ConfigField, {
-            label: 'Password (Optional)',
-            description: 'Password for HTTP basic authentication (if required)',
-            fromEnv: meta?.fromEnv.rtorrentPassword
-          },
-            h(PasswordField, {
-              value: formData.rtorrent.password || '',
-              onChange: (value) => updateField('rtorrent', 'password', value),
-              placeholder: 'Leave empty if not required',
-              disabled: meta?.fromEnv.rtorrentPassword
-            })
-          ),
-
-          h('div', { className: 'mt-4' },
-            h(TestButton, {
-              onClick: handleTestRtorrent,
-              loading: isTesting,
-              disabled: !formData.rtorrent.host || !formData.rtorrent.port
-            }, 'Test rTorrent Connection')
-          ),
-
-          testResults?.results?.rtorrent && h(TestResultIndicator, {
-            result: testResults.results.rtorrent,
-            label: 'rTorrent Connection Test'
-          })
-        )
-      ),
-
-      // qBittorrent Section
-      h('div', { className: 'bg-gray-50 dark:bg-gray-900 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mb-4' },
-        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4' }, 'qBittorrent (WebUI API)'),
-
-        h(EnableToggle, {
-          enabled: formData.qbittorrent?.enabled || false,
-          onChange: (value) => updateField('qbittorrent', 'enabled', value),
-          label: 'Enable qBittorrent',
-          description: 'Connect to qBittorrent for managing BitTorrent downloads via WebUI API'
-        }),
-
-        formData.qbittorrent?.enabled && h('div', { className: 'mt-4 space-y-4' },
-          h(ConfigField, {
-            label: 'Host',
-            description: 'qBittorrent WebUI host address',
-            value: formData.qbittorrent.host || '',
-            onChange: (value) => updateField('qbittorrent', 'host', value),
-            placeholder: '127.0.0.1',
-            required: formData.qbittorrent.enabled,
-            fromEnv: meta?.fromEnv.qbittorrentHost
-          }),
-
-          h(ConfigField, {
-            label: 'Port',
-            description: 'qBittorrent WebUI port (default: 8080)',
-            value: formData.qbittorrent.port || 8080,
-            onChange: (value) => updateField('qbittorrent', 'port', parseInt(value, 10) || 8080),
-            type: 'number',
-            placeholder: '8080',
-            required: formData.qbittorrent.enabled,
-            fromEnv: meta?.fromEnv.qbittorrentPort
-          }),
-
-          h(ConfigField, {
-            label: 'Username',
-            description: 'qBittorrent WebUI username (default: admin)',
-            value: formData.qbittorrent.username || 'admin',
-            onChange: (value) => updateField('qbittorrent', 'username', value),
-            placeholder: 'admin',
-            fromEnv: meta?.fromEnv.qbittorrentUsername
-          }),
-
-          // Warning if qbittorrent password is from environment
-          meta?.fromEnv.qbittorrentPassword && h(AlertBox, { type: 'warning' },
-            h('p', {}, 'qBittorrent password is set via QBITTORRENT_PASSWORD environment variable.')
-          ),
-
-          !meta?.fromEnv.qbittorrentPassword && h(ConfigField, {
-            label: 'Password',
-            description: 'qBittorrent WebUI password',
-            fromEnv: meta?.fromEnv.qbittorrentPassword
-          },
-            h(PasswordField, {
-              value: formData.qbittorrent.password || '',
-              onChange: (value) => updateField('qbittorrent', 'password', value),
-              placeholder: 'Enter qBittorrent password',
-              disabled: meta?.fromEnv.qbittorrentPassword
-            })
-          ),
-
-          h(EnableToggle, {
-            label: 'Use SSL (HTTPS)',
-            description: 'Connect to qBittorrent using HTTPS',
-            enabled: formData.qbittorrent.useSsl || false,
-            onChange: (value) => updateField('qbittorrent', 'useSsl', value)
-          }),
-
-          h('div', { className: 'mt-4' },
-            h(TestButton, {
-              onClick: handleTestQbittorrent,
-              loading: isTesting,
-              disabled: !formData.qbittorrent.host || !formData.qbittorrent.port
-            }, 'Test qBittorrent Connection')
-          ),
-
-          testResults?.results?.qbittorrent && h(TestResultIndicator, {
-            result: testResults.results.qbittorrent,
-            label: 'qBittorrent Connection Test'
-          })
-        )
-      ),
-
-      // Prowlarr Integration (for BitTorrent clients)
-      (formData.rtorrent?.enabled || formData.qbittorrent?.enabled) && h('div', { className: 'mt-4 pt-4 border-t border-gray-200 dark:border-gray-700' },
-        h(EnableToggle, {
-          enabled: formData.integrations.prowlarr?.enabled || false,
-          onChange: (value) => updateNestedField('integrations', 'prowlarr', 'enabled', value),
-          label: 'Enable Prowlarr Integration',
-          description: 'Search for torrents via Prowlarr indexer manager'
-        }),
-        formData.integrations.prowlarr?.enabled && h('div', { className: 'mt-4 space-y-4' },
-          h(ConfigField, {
-            label: 'Prowlarr URL',
-            description: 'Prowlarr server URL (e.g., http://localhost:9696)',
-            value: formData.integrations.prowlarr?.url || '',
-            onChange: (value) => updateNestedField('integrations', 'prowlarr', 'url', value),
-            placeholder: 'http://localhost:9696',
-            required: formData.integrations.prowlarr?.enabled,
-            fromEnv: meta?.fromEnv.prowlarrUrl
-          }),
-          meta?.fromEnv.prowlarrApiKey && h(AlertBox, { type: 'warning' },
-            h('p', {}, 'Prowlarr API key is set via PROWLARR_API_KEY environment variable.')
-          ),
-          !meta?.fromEnv.prowlarrApiKey && h(ConfigField, {
-            label: 'API Key',
-            description: 'Prowlarr API key (found in Settings → General)',
-            value: formData.integrations.prowlarr?.apiKey || '',
-            onChange: (value) => updateNestedField('integrations', 'prowlarr', 'apiKey', value),
-            required: formData.integrations.prowlarr?.enabled,
-            fromEnv: meta?.fromEnv.prowlarrApiKey
-          },
-            h(PasswordField, {
-              value: formData.integrations.prowlarr?.apiKey || '',
-              onChange: (value) => updateNestedField('integrations', 'prowlarr', 'apiKey', value),
-              placeholder: 'Enter Prowlarr API key',
-              disabled: meta?.fromEnv.prowlarrApiKey
-            })
-          ),
-          h('div', { className: 'mt-4' },
-            h(TestButton, {
-              onClick: handleTestProwlarr,
-              loading: isTesting,
-              disabled: !formData.integrations.prowlarr?.url || !formData.integrations.prowlarr?.apiKey
-            }, 'Test Prowlarr Connection')
-          ),
-          testResults?.results?.prowlarr && h(TestResultIndicator, {
-            result: testResults.results.prowlarr,
-            label: 'Prowlarr API Test'
-          })
-        )
-      )
-    ),
-
     // Directories Configuration
     h(ConfigSection, {
       title: 'Directories',
       description: 'Data, logs, and GeoIP directories',
       defaultOpen: false,
       open: openSections.directories,
-      onToggle: (value) => setOpenSections(prev => ({ ...prev, directories: value }))
+      onToggle: (value) => toggleSection('directories', value),
+      icon: 'folder'
     },
       isDocker && h(AlertBox, { type: 'warning' },
         h('p', {}, 'You are running in Docker. Changing directories requires updating your docker-compose.yml volume mounts. Unless you know what you\'re doing, keep the default values.')
@@ -1139,7 +962,10 @@ const SettingsView = () => {
       description: 'Track and view download history',
       defaultOpen: false,
       open: openSections.history,
-      onToggle: (value) => setOpenSections(prev => ({ ...prev, history: value }))
+      onToggle: (value) => toggleSection('history', value),
+      icon: 'history',
+
+      badge: historyBadge
     },
       h(EnableToggle, {
         enabled: formData.history?.enabled ?? true,
@@ -1155,13 +981,6 @@ const SettingsView = () => {
           onChange: (value) => updateField('history', 'retentionDays', parseInt(value) || 0),
           type: 'number',
           placeholder: '0'
-        }),
-        h(ConfigField, {
-          label: 'Username Header (Optional)',
-          description: 'HTTP header containing username from reverse proxy (e.g., X-Remote-User for Authelia). Leave empty if not using proxy authentication.',
-          value: formData.history?.usernameHeader || '',
-          onChange: (value) => updateField('history', 'usernameHeader', value),
-          placeholder: 'X-Remote-User'
         }),
         h(AlertBox, { type: 'info' },
           h('div', {},
@@ -1183,9 +1002,11 @@ const SettingsView = () => {
       description: 'Advanced: Execute a custom script when events occur',
       defaultOpen: false,
       open: openSections.eventScripting,
-      onToggle: (value) => setOpenSections(prev => ({ ...prev, eventScripting: value }))
+      onToggle: (value) => toggleSection('eventScripting', value),
+      icon: 'zap',
+
+      badge: scriptBadge
     },
-      // Recommendation to use Notifications page
       h(AlertBox, { type: 'info', className: 'mb-4' },
         h('div', {},
           h('p', { className: 'font-medium mb-1' }, 'Looking for push notifications?'),
@@ -1290,7 +1111,7 @@ const SettingsView = () => {
     // Test summary
     h(TestSummary, {
       testResults,
-      formData,
+      clientTestResults,
       showDetails: false
     }),
 
@@ -1308,30 +1129,39 @@ const SettingsView = () => {
     ),
 
     // Action buttons
-    h('div', { className: 'flex flex-wrap gap-3 mt-6 pb-4' },
+    h('div', { className: 'flex gap-3 mt-6 pb-4' },
       h('button', {
         onClick: handleTestAll,
         disabled: isTesting || loading,
-        className: `px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium rounded-lg
+        className: `flex-1 px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium rounded-lg
           ${isTesting || loading
             ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
             : 'bg-blue-600 hover:bg-blue-700 text-white'}
           transition-colors`
-      }, isTesting ? 'Testing...' : 'Test All'),
+      }, h('span', { className: 'flex items-center justify-center gap-1.5' },
+        h(Icon, { name: 'activity', size: 15 }),
+        isTesting ? 'Testing...' : 'Test Configuration'
+      )),
       h('button', {
         onClick: handleSave,
         disabled: !hasChanges || loading || hasTestErrors(),
-        className: `px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium rounded-lg
+        className: `flex-1 px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium rounded-lg
           ${!hasChanges || loading || hasTestErrors()
             ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
             : 'bg-green-600 hover:bg-green-700 text-white'}
           transition-colors`
-      }, loading ? 'Saving...' : 'Save Changes'),
+      }, h('span', { className: 'flex items-center justify-center gap-1.5' },
+        h(Icon, { name: 'check', size: 15 }),
+        loading ? 'Saving...' : 'Save Changes'
+      )),
       h('button', {
         onClick: handleCancel,
         disabled: loading,
-        className: 'px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 transition-colors'
-      }, 'Cancel')
+        className: 'flex-1 px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 transition-colors'
+      }, h('span', { className: 'flex items-center justify-center gap-1.5' },
+        h(Icon, { name: 'x', size: 15 }),
+        'Cancel'
+      ))
     ),
 
   );

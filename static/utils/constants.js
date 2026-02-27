@@ -174,7 +174,7 @@ export const PROGRESS_BAR = {
 
 // Table row styles (alternating colors)
 export const TABLE_ROW_STYLES = {
-  rowEven: 'bg-gray-50 dark:bg-gray-800',
+  rowEven: 'bg-gray-100 dark:bg-gray-700/60',
   rowOdd: 'bg-white dark:bg-gray-900',
   hover: 'hover:bg-indigo-100 dark:hover:bg-indigo-700',
   transition: 'transition-colors duration-200',
@@ -228,10 +228,19 @@ export const ICON_SIZES = {
   LARGE: 16
 };
 
+// Network type display labels
+export const NETWORK_TYPE_LABELS = {
+  ed2k: 'ED2K',
+  bittorrent: 'BitTorrent'
+};
+
 // Client display names (single source of truth for UI labels)
 export const CLIENT_NAMES = {
+  amule: { name: 'aMule', shortName: 'aMu' },
   rtorrent: { name: 'rTorrent', shortName: 'rTor' },
-  qbittorrent: { name: 'qBittorrent', shortName: 'qBit' }
+  qbittorrent: { name: 'qBittorrent', shortName: 'qBit' },
+  deluge: { name: 'Deluge', shortName: 'Dlg' },
+  transmission: { name: 'Transmission', shortName: 'Trn' }
 };
 
 // Client software types (for uploads view)

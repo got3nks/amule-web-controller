@@ -1,20 +1,25 @@
 /**
  * Field Formatters
  *
- * Shared formatting utilities for displaying aMule EC tag fields
- * Used by DownloadInfoModal, SharedFileInfoModal, etc.
+ * Shared formatting utilities for displaying download/shared file fields.
+ * Uses declarative metadata from fieldRegistry.js for type-driven formatting.
  */
 
 import React from 'https://esm.sh/react@18.2.0';
 import { formatBytes, formatSpeed } from './index.js';
 import { AMULE_STATUS, RTORRENT_STATE_LABELS, QBITTORRENT_STATE_LABELS } from './constants.js';
+import {
+  FIELD_LABELS, FIELD_TYPES, SKIP_FIELDS, FIELD_CATEGORIES,
+  CATEGORIZE_SKIP, CATEGORIZE_CONDITIONAL_SKIP, CATEGORY_ORDER,
+} from './fieldRegistry.js';
 
 const { createElement: h } = React;
 
+// Re-export FIELD_LABELS so existing imports keep working
+export { FIELD_LABELS };
+
 /**
  * Format duration in seconds to readable format
- * @param {number} seconds - Duration in seconds
- * @returns {string} Formatted duration
  */
 export const formatDuration = (seconds) => {
   const days = Math.floor(seconds / 86400);
@@ -32,9 +37,7 @@ export const formatDuration = (seconds) => {
 };
 
 /**
- * Format priority value to readable string
- * @param {number} value - Priority value (0-12)
- * @returns {string} Formatted priority
+ * Format priority value to readable string (aMule 0-12 scale)
  */
 export const formatPriority = (value) => {
   switch (value) {
@@ -49,9 +52,7 @@ export const formatPriority = (value) => {
 };
 
 /**
- * Format download status value
- * @param {number} value - Status value
- * @returns {string} Formatted status
+ * Format aMule download status value
  */
 export const formatStatus = (value) => {
   if (value === AMULE_STATUS.DOWNLOADING || value === AMULE_STATUS.DOWNLOADING_ACTIVE) return 'Downloading';
@@ -60,597 +61,324 @@ export const formatStatus = (value) => {
 };
 
 /**
- * Custom labels for EC tag field names, rtorrent fields, and qBittorrent fields
- */
-export const FIELD_LABELS = {
-  // rtorrent fields (camelCase)
-  'clientType': 'Client',
-  'hash': 'Info Hash',
-  'name': 'Name',
-  'size': 'Size',
-  'completedBytes': 'Downloaded',
-  'progress': 'Progress',
-  'downloadSpeed': 'Download Speed',
-  'uploadSpeed': 'Upload Speed',
-  'downloadTotal': 'Total Downloaded',
-  'uploadTotal': 'Total Uploaded',
-  'status': 'Status',
-  'state': 'State',
-  'isActive': 'Active',
-  'isComplete': 'Complete',
-  'isOpen': 'Open',
-  'isHashing': 'Hashing',
-  'ratio': 'Ratio',
-  'label': 'Label',
-  'directory': 'Directory',
-  'basePath': 'Base Path',
-  'addedTime': 'Added',
-  'completedTime': 'Completed',
-  'seedingTime': 'Seeding Time',
-  'peers': 'Connected Peers',
-  'peersTotal': 'Total Peers',
-  'seeds': 'Connected Seeds',
-  'seedsTotal': 'Total Seeds',
-  'chunkSize': 'Chunk Size',
-  'chunksCompleted': 'Chunks Completed',
-  'chunksTotal': 'Total Chunks',
-  'priority': 'Priority',
-  'isPrivate': 'Private Torrent',
-  'isMultiFile': 'Multi-File',
-  'creationDate': 'Creation Date',
-  'startedTime': 'Started',
-  'finishedTime': 'Finished',
-  // qBittorrent fields (snake_case)
-  'added_on': 'Added',
-  'amount_left': 'Remaining',
-  'auto_tmm': 'Auto Torrent Management',
-  'availability': 'Availability',
-  'category': 'Category',
-  'comment': 'Comment',
-  'completed': 'Downloaded',
-  'completion_on': 'Completed',
-  'content_path': 'Content Path',
-  'dl_limit': 'Download Limit',
-  'dlspeed': 'Download Speed',
-  'download_path': 'Download Path',
-  'downloaded': 'Downloaded (Raw)',
-  'downloaded_session': 'Downloaded (Session)',
-  'eta': 'ETA',
-  'f_l_piece_prio': 'First/Last Piece Priority',
-  'force_start': 'Force Start',
-  'has_metadata': 'Has Metadata',
-  'infohash_v1': 'Info Hash (v1)',
-  'infohash_v2': 'Info Hash (v2)',
-  'inactive_seeding_time_limit': 'Inactive Seeding Limit',
-  'last_activity': 'Last Activity',
-  'magnet_uri': 'Magnet URI',
-  'max_inactive_seeding_time': 'Max Inactive Seeding',
-  'max_ratio': 'Max Ratio',
-  'max_seeding_time': 'Max Seeding Time',
-  'num_complete': 'Complete Seeds',
-  'num_incomplete': 'Incomplete Peers',
-  'num_leechs': 'Leechers',
-  'num_seeds': 'Seeds',
-  'popularity': 'Popularity',
-  'private': 'Private',
-  'ratio_limit': 'Ratio Limit',
-  'reannounce': 'Reannounce In',
-  'root_path': 'Root Path',
-  'save_path': 'Save Path',
-  'seeding_time': 'Seeding Time',
-  'seeding_time_limit': 'Seeding Time Limit',
-  'seen_complete': 'Last Seen Complete',
-  'seq_dl': 'Sequential Download',
-  'super_seeding': 'Super Seeding',
-  'tags': 'Tags',
-  'time_active': 'Time Active',
-  'total_size': 'Total Size',
-  'tracker': 'Tracker',
-  'trackers_count': 'Trackers Count',
-  'up_limit': 'Upload Limit',
-  'uploaded': 'Uploaded',
-  'uploaded_session': 'Uploaded (Session)',
-  'upspeed': 'Upload Speed',
-  // Known file (shared/upload) fields
-  'EC_TAG_KNOWNFILE_REQ_COUNT': 'Requests (Session)',
-  'EC_TAG_KNOWNFILE_REQ_COUNT_ALL': 'Requests (Total)',
-  'EC_TAG_KNOWNFILE_ACCEPT_COUNT': 'Accepted Requests (Session)',
-  'EC_TAG_KNOWNFILE_ACCEPT_COUNT_ALL': 'Accepted Requests (Total)',
-  'EC_TAG_KNOWNFILE_XFERRED': 'Uploaded (Session)',
-  'EC_TAG_KNOWNFILE_XFERRED_ALL': 'Uploaded (Total)',
-  'EC_TAG_KNOWNFILE_AICH_MASTERHASH': 'AICH Master Hash',
-  'EC_TAG_KNOWNFILE_PRIO': 'Upload Priority',
-  'EC_TAG_KNOWNFILE_COMPLETE_SOURCES_LOW': 'Complete Sources (Low Estimate)',
-  'EC_TAG_KNOWNFILE_COMPLETE_SOURCES_HIGH': 'Complete Sources (High Estimate)',
-  'EC_TAG_KNOWNFILE_COMPLETE_SOURCES': 'Complete Sources',
-  'EC_TAG_KNOWNFILE_ON_QUEUE': 'Clients in Queue',
-  'EC_TAG_KNOWNFILE_FILENAME': 'File Path',
-  'EC_TAG_KNOWNFILE_COMMENT': 'Comment',
-  'EC_TAG_KNOWNFILE_RATING': 'Rating',
-  // Part file (download) fields
-  'EC_TAG_PARTFILE_NAME': 'File Name',
-  'EC_TAG_PARTFILE_HASH': 'ED2K Hash',
-  'EC_TAG_PARTFILE_SIZE_FULL': 'Total Size',
-  'EC_TAG_PARTFILE_SIZE_XFER': 'Transferred (Raw)',
-  'EC_TAG_PARTFILE_SIZE_DONE': 'Verified & Written',
-  'EC_TAG_PARTFILE_STATUS': 'Download Status',
-  'EC_TAG_PARTFILE_STOPPED': 'Stopped by User',
-  'EC_TAG_PARTFILE_SOURCE_COUNT': 'Total Sources',
-  'EC_TAG_PARTFILE_SOURCE_COUNT_NOT_CURRENT': 'Sources Not Connected',
-  'EC_TAG_PARTFILE_SOURCE_COUNT_XFER': 'Sources Uploading',
-  'EC_TAG_PARTFILE_SOURCE_COUNT_A4AF': 'A4AF Sources',
-  'EC_TAG_PARTFILE_SPEED': 'Current Speed',
-  'EC_TAG_PARTFILE_PRIO': 'Download Priority',
-  'EC_TAG_PARTFILE_CAT': 'Category ID',
-  'EC_TAG_PARTFILE_LAST_SEEN_COMP': 'Last Complete Source Seen',
-  'EC_TAG_PARTFILE_LAST_RECV': 'Last Data Received',
-  'EC_TAG_PARTFILE_DOWNLOAD_ACTIVE': 'Active Download Time',
-  'EC_TAG_PARTFILE_AVAILABLE_PARTS': 'Available Parts',
-  'EC_TAG_PARTFILE_HASHED_PART_COUNT': 'Verified Parts',
-  'EC_TAG_PARTFILE_LOST_CORRUPTION': 'Lost to Corruption',
-  'EC_TAG_PARTFILE_GAINED_COMPRESSION': 'Saved by Compression',
-  'EC_TAG_PARTFILE_SAVED_ICH': 'Saved by ICH',
-  'EC_TAG_PARTFILE_A4AFAUTO': 'Auto A4AF Swapping',
-  'EC_TAG_PARTFILE_PARTMETID': 'Part.met ID',
-  'EC_TAG_PARTFILE_SOURCE_NAMES': 'Source Reported Filename',
-  'EC_TAG_PARTFILE_COMMENTS': 'File Comments'
-};
-
-/**
- * Format field name for display (convert EC_TAG, camelCase, or snake_case to readable label)
- * @param {string} key - Field key (EC_TAG_*, camelCase, or snake_case)
- * @returns {string} Human-readable label
+ * Format field name for display
  */
 export const formatFieldName = (key) => {
-  if (FIELD_LABELS[key]) {
-    return FIELD_LABELS[key];
-  }
+  if (FIELD_LABELS[key]) return FIELD_LABELS[key];
 
-  // Handle EC_TAG_ prefixed fields
   if (key.startsWith('EC_TAG_')) {
-    return key
-      .replace(/^EC_TAG_/, '')
-      .replace(/_/g, ' ')
-      .toLowerCase()
-      .split(' ')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
+    return key.replace(/^EC_TAG_/, '').replace(/_/g, ' ').toLowerCase()
+      .split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
   }
-
-  // Handle snake_case fields (qBittorrent)
   if (key.includes('_')) {
-    return key
-      .replace(/_/g, ' ')
-      .split(' ')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
+    return key.replace(/_/g, ' ').split(' ')
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
   }
-
-  // Handle camelCase fields (rtorrent)
-  return key
-    .replace(/([A-Z])/g, ' $1')  // Insert space before capitals
-    .replace(/^./, str => str.toUpperCase())  // Capitalize first letter
-    .trim();
+  return key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim();
 };
+
+// ─── Type Renderers ──────────────────────────────────────────────────────────
+
+const renderNull = () => h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'N/A');
+const renderNever = () => h('span', { className: 'text-gray-500 dark:text-gray-400 italic' }, 'Never');
+const renderInfinity = () => h('span', { className: 'text-gray-500 dark:text-gray-400 italic' }, '∞');
+
+const TYPE_RENDERERS = {
+  bytes: (v) => {
+    const n = typeof v === 'string' ? parseInt(v) : v;
+    if (isNaN(n)) return h('span', null, String(v));
+    return h('span', null,
+      formatBytes(n),
+      h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2 text-xs' }, `(${n.toLocaleString()} bytes)`)
+    );
+  },
+  speed: (v) => {
+    const n = typeof v === 'string' ? parseInt(v) : v;
+    return h('span', { className: 'font-mono text-blue-600 dark:text-blue-400' }, formatSpeed(n));
+  },
+  timestamp: (v) => {
+    if (v === -1 || v === 0 || v === null || v === undefined) return renderNever();
+    return h('span', null, new Date(v * 1000).toLocaleString());
+  },
+  timestamp_amule: (v) => {
+    if (v === 0) return renderNever();
+    const date = new Date(v * 1000);
+    const diff = Date.now() - (v * 1000);
+    const ago = diff > 0 ? ` (${Math.floor(diff / 1000 / 60)} min ago)` : '';
+    return h('span', null,
+      date.toLocaleString(),
+      h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2 text-xs' }, ago)
+    );
+  },
+  timestamp_rtorrent: (v, key) => {
+    if (v === 0 || v === null || v === undefined) {
+      if (key === 'creationDate') return null;
+      return renderNever();
+    }
+    if (typeof v === 'string') {
+      const date = new Date(v);
+      if (date.getTime() === 0 || isNaN(date.getTime())) {
+        if (key === 'creationDate') return null;
+        return renderNever();
+      }
+      return h('span', null, date.toLocaleString());
+    }
+    return h('span', null, new Date(v * 1000).toLocaleString());
+  },
+  timestamp_transmission: (v, key) => {
+    if (v === 0 || v === null || v === undefined) {
+      if (key === 'dateCreated') return null;
+      return renderNever();
+    }
+    return h('span', null, new Date(v * 1000).toLocaleString());
+  },
+  duration: (v) => h('span', null, formatDuration(v)),
+  duration_verbose: (v) => h('span', null,
+    formatDuration(v),
+    h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2 text-xs' }, `(${v.toLocaleString()}s)`)
+  ),
+  duration_infinity: (v) => {
+    if (v === 8640000 || v < 0) return renderInfinity();
+    return h('span', null, formatDuration(v));
+  },
+  boolean: (v) => h('span', {
+    className: v ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'
+  }, v ? 'Yes' : 'No'),
+  ratio: (v) => {
+    const display = typeof v === 'number' ? (v >= 0 ? v.toFixed(2) : '-') : v;
+    return h('span', { className: 'font-mono' }, display);
+  },
+  percent: (v) => h('span', { className: 'font-mono' }, `${(v * 100).toFixed(2)}%`),
+  hash: (v) => {
+    if (!v || v === '') return renderNull();
+    return h('span', { className: 'font-mono text-xs break-all' }, v);
+  },
+  decimal3: (v) => {
+    const n = typeof v === 'number' ? v.toFixed(3) : v;
+    return h('span', { className: 'font-mono' }, n);
+  },
+};
+
+// ─── Special Formatters ──────────────────────────────────────────────────────
+// Keys with custom rendering beyond simple type dispatch.
+
+const RTORRENT_PRIORITY_LABELS = { 0: 'Off', 1: 'Low', 2: 'Normal', 3: 'High' };
+const TRANSMISSION_STATUS_LABELS = {
+  0: 'Paused', 1: 'Check Pending', 2: 'Checking',
+  3: 'Download Pending', 4: 'Downloading', 5: 'Seed Pending', 6: 'Seeding'
+};
+const TRANSMISSION_BANDWIDTH_LABELS = { '-1': 'Low', '0': 'Normal', '1': 'High' };
+const TRANSMISSION_ERROR_TYPES = { 1: 'Tracker Warning', 2: 'Tracker Error', 3: 'Local Error' };
+
+const SPECIAL_FORMATTERS = {
+  // aMule nested objects
+  'EC_TAG_PARTFILE_SOURCE_NAMES': (value) => {
+    if (typeof value !== 'object' || Array.isArray(value)) return null;
+    const innerData = value['EC_TAG_PARTFILE_SOURCE_NAMES'];
+    let namesArray = Array.isArray(innerData) ? innerData
+      : (innerData && typeof innerData === 'object') ? [innerData] : [];
+    if (namesArray.length === 0) return null;
+    const sorted = [...namesArray].sort((a, b) =>
+      (b.EC_TAG_PARTFILE_SOURCE_NAMES_COUNTS || 0) - (a.EC_TAG_PARTFILE_SOURCE_NAMES_COUNTS || 0)
+    );
+    return h('div', { className: 'space-y-1' },
+      sorted.map((item, idx) => h('div', {
+        key: idx,
+        className: 'text-xs p-2 bg-gray-50 dark:bg-gray-800/50 rounded border-l-2 border-blue-500'
+      },
+        h('div', { className: 'font-medium text-gray-900 dark:text-gray-100 break-all' },
+          item.EC_TAG_PARTFILE_SOURCE_NAMES),
+        item.EC_TAG_PARTFILE_SOURCE_NAMES_COUNTS !== undefined &&
+          h('div', { className: 'text-gray-500 dark:text-gray-400 mt-0.5' },
+            `${item.EC_TAG_PARTFILE_SOURCE_NAMES_COUNTS} source${item.EC_TAG_PARTFILE_SOURCE_NAMES_COUNTS !== 1 ? 's' : ''}`)
+      ))
+    );
+  },
+  'EC_TAG_PARTFILE_A4AF_SOURCES': (value) => {
+    if (typeof value !== 'object' || Array.isArray(value)) return null;
+    const count = value['EC_TAG_ECID'];
+    return count !== undefined ? h('span', { className: 'font-mono' }, count.toString()) : null;
+  },
+  'EC_TAG_PARTFILE_COMMENTS': (value) => {
+    if (typeof value !== 'object' || Array.isArray(value)) return null;
+    const commentsArray = value['EC_TAG_PARTFILE_COMMENTS'];
+    if (!Array.isArray(commentsArray)) return null;
+    if (commentsArray.length === 0) {
+      return h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'No comments');
+    }
+    const [clientName, fileName, rating, commentText] = commentsArray;
+    return h('div', { className: 'p-2 bg-gray-100 dark:bg-gray-900 rounded text-xs' },
+      h('div', { className: 'flex items-center gap-2 mb-1' },
+        h('span', { className: 'font-semibold text-gray-700 dark:text-gray-300' }, clientName || 'Unknown'),
+        rating > 0 && h('span', { className: 'text-yellow-500' }, '★'.repeat(rating) + '☆'.repeat(5 - rating))
+      ),
+      fileName && h('div', { className: 'text-gray-600 dark:text-gray-400 mb-1' }, fileName),
+      commentText && h('div', { className: 'text-gray-800 dark:text-gray-200' }, commentText)
+    );
+  },
+  // aMule priority/status/category/rating/comment
+  'EC_TAG_KNOWNFILE_PRIO': (value) => {
+    const n = typeof value === 'string' ? parseInt(value) : value;
+    return h('span', null, formatPriority(n),
+      h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2 text-xs' }, `(${n})`));
+  },
+  'EC_TAG_PARTFILE_PRIO': (value) => {
+    const n = typeof value === 'string' ? parseInt(value) : value;
+    return h('span', null, formatPriority(n),
+      h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2 text-xs' }, `(${n})`));
+  },
+  'EC_TAG_PARTFILE_STATUS': (value) => h('span', null, formatStatus(value)),
+  'EC_TAG_PARTFILE_CAT': (value) =>
+    h('span', null, typeof value === 'string' ? value : (value === 0 ? 'Default' : `#${value}`)),
+  'EC_TAG_KNOWNFILE_RATING': (value) => {
+    if (value === 0) return null;
+    return h('span', null, `${'★'.repeat(value)}${'☆'.repeat(5 - value)}`);
+  },
+  'EC_TAG_KNOWNFILE_COMMENT': (value) => {
+    if (!value || (typeof value === 'string' && value.trim() === '')) return null;
+    return undefined; // fall through to default rendering
+  },
+  // rtorrent peers summary object
+  'peers': (value) => {
+    if (typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const { connected = 0, seeders = 0, total = 0 } = value;
+    return h('span', { className: 'font-mono' },
+      `${connected} connected`,
+      seeders > 0 && h('span', { className: 'text-green-600 dark:text-green-400 ml-2' }, `(${seeders} seeders)`),
+      total > 0 && h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2' }, `/ ${total} in swarm`)
+    );
+  },
+  // rtorrent priority (0=Off, 1=Low, 2=Normal, 3=High)
+  'priority': (value) => {
+    const n = typeof value === 'string' ? parseInt(value) : value;
+    return h('span', null, RTORRENT_PRIORITY_LABELS[n] || `Unknown (${n})`);
+  },
+  // Multi-client state (rtorrent: number, qBit/Deluge: string)
+  'state': (value) => {
+    if (typeof value === 'string') {
+      const label = QBITTORRENT_STATE_LABELS[value] || value.charAt(0).toUpperCase() + value.slice(1);
+      return h('span', { className: 'font-mono' }, label);
+    }
+    const label = RTORRENT_STATE_LABELS[value] || `Unknown (${value})`;
+    return h('span', { className: 'font-mono' }, label);
+  },
+  // Multi-client status (rtorrent: string, Transmission: number)
+  'status': (value) => {
+    if (typeof value === 'number') {
+      const label = TRANSMISSION_STATUS_LABELS[value];
+      if (label) return h('span', { className: 'font-mono' }, label);
+    }
+    if (typeof value === 'string') {
+      return h('span', { className: 'font-mono' }, value.charAt(0).toUpperCase() + value.slice(1));
+    }
+    return undefined; // fall through to default
+  },
+  // rtorrent progress (0-1 → percentage)
+  'progress': (value) => {
+    if (typeof value !== 'number') return undefined;
+    return h('span', { className: 'font-mono' }, `${(value * 100).toFixed(2)}%`);
+  },
+  // Transmission fields
+  'bandwidthPriority': (value) =>
+    h('span', null, TRANSMISSION_BANDWIDTH_LABELS[String(value)] || `Unknown (${value})`),
+  'error': (value) => {
+    if (value === 0) return h('span', { className: 'text-gray-500 dark:text-gray-400 italic' }, 'None');
+    return h('span', { className: 'text-red-600 dark:text-red-400' },
+      TRANSMISSION_ERROR_TYPES[value] || `Error ${value}`);
+  },
+  // qBittorrent limit fields (bytes with special -1/0 handling)
+  'dl_limit': (value) => {
+    const n = typeof value === 'string' ? parseInt(value) : value;
+    if (n === 0) return h('span', { className: 'text-gray-500 dark:text-gray-400 italic' }, 'No limit');
+    return TYPE_RENDERERS.bytes(n);
+  },
+  'up_limit': (value) => {
+    const n = typeof value === 'string' ? parseInt(value) : value;
+    if (n === 0) return h('span', { className: 'text-gray-500 dark:text-gray-400 italic' }, 'No limit');
+    return TYPE_RENDERERS.bytes(n);
+  },
+  // qBittorrent ratio/time limit fields (-1 = no limit, -2 = use global)
+  'max_ratio': limitFormatter,
+  'ratio_limit': limitFormatter,
+  'max_seeding_time': limitFormatter,
+  'seeding_time_limit': limitFormatter,
+  'inactive_seeding_time_limit': limitFormatter,
+  'max_inactive_seeding_time': limitFormatter,
+  // qBittorrent magnet URI (truncated)
+  'magnet_uri': (value) => {
+    if (!value || value === '') return renderNull();
+    const truncated = value.length > 80 ? value.substring(0, 80) + '...' : value;
+    return h('span', { className: 'font-mono text-xs break-all', title: value }, truncated);
+  },
+};
+
+function limitFormatter(value) {
+  if (value === -1 || value === -2) {
+    return h('span', { className: 'text-gray-500 dark:text-gray-400 italic' },
+      value === -1 ? 'No limit' : 'Use global');
+  }
+  return undefined; // fall through to type-based or default rendering
+}
+
+// ─── Main Format Function ────────────────────────────────────────────────────
 
 /**
  * Format field value based on type and content
  * @param {string} key - Field key
  * @param {any} value - Field value
- * @param {Object} options - Additional options (categories for category lookup)
  * @returns {React.Element|null} Formatted value element
  */
-export const formatFieldValue = (key, value, options = {}) => {
-  const { categories = [] } = options;
+export const formatFieldValue = (key, value) => {
+  if (value === undefined || value === null) return renderNull();
+  if (SKIP_FIELDS.has(key)) return null;
 
-  if (value === undefined || value === null) {
-    return h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'N/A');
-  }
-
-  // Skip ED2K link field (rendered separately)
-  if (key === 'EC_TAG_PARTFILE_ED2K_LINK') {
-    return null;
-  }
-
-  // Skip rtorrent fields that are rendered separately or redundant
-  if (key === 'peersDetailed' || key === 'trackersDetailed' || key === 'trackers') {
-    return null;
-  }
-
-  // Skip message field (rendered separately in rtorrent section)
-  if (key === 'message') {
-    return null;
-  }
-
-  // Handle arrays
+  // Arrays → JSON pre
   if (Array.isArray(value)) {
     return h('pre', {
       className: 'text-xs bg-gray-100 dark:bg-gray-900 p-2 rounded overflow-x-auto'
     }, JSON.stringify(value, null, 2));
   }
 
-  // Handle nested objects (like SOURCE_NAMES and COMMENTS)
-  if (typeof value === 'object' && !Array.isArray(value)) {
-    // Special handling for SOURCE_NAMES
-    if (key === 'EC_TAG_PARTFILE_SOURCE_NAMES') {
-      const innerData = value['EC_TAG_PARTFILE_SOURCE_NAMES'];
-      let namesArray = [];
-      if (Array.isArray(innerData)) {
-        namesArray = innerData;
-      } else if (innerData && typeof innerData === 'object') {
-        namesArray = [innerData];
-      }
-
-      if (namesArray.length > 0) {
-        const sortedNames = [...namesArray].sort((a, b) =>
-          (b.EC_TAG_PARTFILE_SOURCE_NAMES_COUNTS || 0) - (a.EC_TAG_PARTFILE_SOURCE_NAMES_COUNTS || 0)
-        );
-
-        return h('div', { className: 'space-y-1' },
-          sortedNames.map((item, idx) => {
-            const fileName = item.EC_TAG_PARTFILE_SOURCE_NAMES;
-            const sourceCount = item.EC_TAG_PARTFILE_SOURCE_NAMES_COUNTS;
-
-            return h('div', {
-              key: idx,
-              className: 'text-xs p-2 bg-gray-50 dark:bg-gray-800/50 rounded border-l-2 border-blue-500'
-            },
-              h('div', { className: 'font-medium text-gray-900 dark:text-gray-100 break-all' }, fileName),
-              sourceCount !== undefined && h('div', { className: 'text-gray-500 dark:text-gray-400 mt-0.5' },
-                `${sourceCount} source${sourceCount !== 1 ? 's' : ''}`
-              )
-            );
-          })
-        );
-      }
-      return null;
+  // Objects: special formatter or JSON fallback
+  if (typeof value === 'object') {
+    const special = SPECIAL_FORMATTERS[key];
+    if (special) {
+      const result = special(value);
+      if (result !== undefined) return result;
     }
-
-    // Special handling for A4AF_SOURCES
-    if (key === 'EC_TAG_PARTFILE_A4AF_SOURCES') {
-      const count = value['EC_TAG_ECID'];
-      if (count !== undefined) {
-        return h('span', { className: 'font-mono' }, count.toString());
-      }
-      return null;
-    }
-
-    // Special handling for COMMENTS
-    if (key === 'EC_TAG_PARTFILE_COMMENTS') {
-      const commentsArray = value['EC_TAG_PARTFILE_COMMENTS'];
-      if (Array.isArray(commentsArray)) {
-        if (commentsArray.length === 0) {
-          return h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'No comments');
-        }
-
-        const [clientName, fileName, rating, commentText] = commentsArray;
-        return h('div', { className: 'p-2 bg-gray-100 dark:bg-gray-900 rounded text-xs' },
-          h('div', { className: 'flex items-center gap-2 mb-1' },
-            h('span', { className: 'font-semibold text-gray-700 dark:text-gray-300' }, clientName || 'Unknown'),
-            rating > 0 && h('span', { className: 'text-yellow-500' }, '★'.repeat(rating) + '☆'.repeat(5 - rating))
-          ),
-          fileName && h('div', { className: 'text-gray-600 dark:text-gray-400 mb-1' }, fileName),
-          commentText && h('div', { className: 'text-gray-800 dark:text-gray-200' }, commentText)
-        );
-      }
-    }
-
-    // rtorrent peers summary object (connected, seeders, total)
-    if (key === 'peers') {
-      const { connected = 0, seeders = 0, total = 0 } = value;
-      return h('span', { className: 'font-mono' },
-        `${connected} connected`,
-        seeders > 0 && h('span', { className: 'text-green-600 dark:text-green-400 ml-2' }, `(${seeders} seeders)`),
-        total > 0 && h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2' }, `/ ${total} in swarm`)
-      );
-    }
-
     return h('pre', {
       className: 'text-xs bg-gray-100 dark:bg-gray-900 p-2 rounded overflow-x-auto'
     }, JSON.stringify(value, null, 2));
   }
 
-  // Priority fields (aMule EC_TAG)
-  if (key === 'EC_TAG_KNOWNFILE_PRIO' || key === 'EC_TAG_PARTFILE_PRIO') {
-    const numValue = typeof value === 'string' ? parseInt(value) : value;
-    return h('span', null,
-      formatPriority(numValue),
-      h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2 text-xs' }, `(${numValue})`)
-    );
+  // Special formatters (client-specific complex rendering)
+  const special = SPECIAL_FORMATTERS[key];
+  if (special) {
+    const result = special(value);
+    if (result !== undefined) return result;
   }
 
-  // Priority field (rtorrent: 0=Off, 1=Low, 2=Normal, 3=High)
-  if (key === 'priority') {
-    const RTORRENT_PRIORITY_LABELS = { 0: 'Off', 1: 'Low', 2: 'Normal', 3: 'High' };
-    const numValue = typeof value === 'string' ? parseInt(value) : value;
-    return h('span', null, RTORRENT_PRIORITY_LABELS[numValue] || `Unknown (${numValue})`);
+  // Type-driven formatting
+  const type = FIELD_TYPES[key];
+  if (type) {
+    const renderer = TYPE_RENDERERS[type];
+    if (renderer) return renderer(value, key);
   }
 
-  // Status field
-  if (key === 'EC_TAG_PARTFILE_STATUS') {
-    return h('span', null, formatStatus(value));
-  }
-
-  // Skip A4AF auto field
-  if (key === 'EC_TAG_PARTFILE_A4AFAUTO') {
-    return null;
-  }
-
-  // Active download time
-  if (key === 'EC_TAG_PARTFILE_DOWNLOAD_ACTIVE') {
-    return h('span', null,
-      formatDuration(value),
-      h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2 text-xs' }, `(${value.toLocaleString()}s)`)
-    );
-  }
-
-  // Speed field
-  if (key === 'EC_TAG_PARTFILE_SPEED') {
-    return h('span', { className: 'font-mono text-blue-600 dark:text-blue-400' },
-      formatSpeed(value)
-    );
-  }
-
-  // Format known byte fields
-  if (key.includes('SIZE') || key.includes('XFERRED') || key.includes('LOST') || key.includes('GAINED') || key.includes('SAVED')) {
-    const numValue = typeof value === 'string' ? parseInt(value) : value;
-    if (!isNaN(numValue)) {
-      return h('span', null,
-        formatBytes(numValue),
-        h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2 text-xs' }, `(${numValue.toLocaleString()} bytes)`)
-      );
-    }
-  }
-
-  // Format timestamps
-  if (key.includes('LAST_SEEN') || key.includes('LAST_RECV')) {
-    if (value === 0) {
-      return h('span', { className: 'text-gray-500 dark:text-gray-400 italic' }, 'Never');
-    }
-    const date = new Date(value * 1000);
-    const now = Date.now();
-    const diff = now - (value * 1000);
-    const ago = diff > 0 ? ` (${Math.floor(diff / 1000 / 60)} min ago)` : '';
-    return h('span', null,
-      date.toLocaleString(),
-      h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2 text-xs' }, ago)
-    );
-  }
-
-  // AICH hash
-  if (key === 'EC_TAG_KNOWNFILE_AICH_MASTERHASH') {
-    if (!value || value === '') {
-      return null;
-    }
-    return h('span', { className: 'font-mono text-xs break-all' }, value);
-  }
-
-  // Hash field
-  if (key === 'EC_TAG_PARTFILE_HASH') {
-    return h('span', { className: 'font-mono text-xs break-all' }, value);
-  }
-
-  // Rating field
-  if (key === 'EC_TAG_KNOWNFILE_RATING') {
-    if (value === 0) {
-      return null;
-    }
-    return h('span', null, `${'★'.repeat(value)}${'☆'.repeat(5 - value)}`);
-  }
-
-  // Comment field
-  if (key === 'EC_TAG_KNOWNFILE_COMMENT') {
-    if (!value || value.trim() === '') {
-      return null;
-    }
-  }
-
-  // Category field
-  if (key === 'EC_TAG_PARTFILE_CAT') {
-    const catId = typeof value === 'string' ? parseInt(value) : value;
-    const cat = categories.find(c => c.id === catId);
-    const categoryName = catId === 0 ? 'Default' : (cat?.title || 'Unknown');
-    const categoryPath = cat?.path || '';
-
-    return h('span', null,
-      categoryName,
-      categoryPath && h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2 text-xs' }, `(${categoryPath})`)
-    );
-  }
-
-  // rtorrent byte size fields
-  if (key === 'size' || key === 'completedBytes' || key === 'downloadTotal' ||
-      key === 'uploadTotal' || key === 'chunkSize') {
-    const numValue = typeof value === 'string' ? parseInt(value) : value;
-    if (!isNaN(numValue)) {
-      return h('span', null,
-        formatBytes(numValue),
-        h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2 text-xs' }, `(${numValue.toLocaleString()} bytes)`)
-      );
-    }
-  }
-
-  // rtorrent speed fields
-  if (key === 'downloadSpeed' || key === 'uploadSpeed') {
-    const numValue = typeof value === 'string' ? parseInt(value) : value;
-    return h('span', { className: 'font-mono text-blue-600 dark:text-blue-400' },
-      formatSpeed(numValue)
-    );
-  }
-
-  // rtorrent timestamp fields
-  if (key === 'creationDate' || key === 'startedTime' || key === 'finishedTime') {
-    // Handle missing/unavailable dates - return null to hide them
-    if (value === 0 || value === null || value === undefined) {
-      // For creationDate, don't show if unavailable
-      if (key === 'creationDate') return null;
-      return h('span', { className: 'text-gray-500 dark:text-gray-400 italic' }, 'Never');
-    }
-    // Handle ISO string format (e.g., "1970-01-01T00:00:00.000Z")
-    if (typeof value === 'string') {
-      const date = new Date(value);
-      // If it's epoch (1970-01-01), hide it
-      if (date.getTime() === 0 || isNaN(date.getTime())) {
-        if (key === 'creationDate') return null;
-        return h('span', { className: 'text-gray-500 dark:text-gray-400 italic' }, 'Never');
-      }
-      return h('span', null, date.toLocaleString());
-    }
-    // Handle Unix timestamp
-    const date = new Date(value * 1000);
-    return h('span', null, date.toLocaleString());
-  }
-
-  // rtorrent seedingTime (duration in seconds)
-  if (key === 'seedingTime') {
-    return h('span', null, formatDuration(value));
-  }
-
-  // rtorrent progress field (raw format is 0-1, convert to percentage)
-  if (key === 'progress') {
-    const progressValue = (value * 100).toFixed(2);
-    return h('span', { className: 'font-mono' }, `${progressValue}%`);
-  }
-
-  // state field - rtorrent uses numbers (0=stopped, 1=started), qBittorrent uses strings
-  if (key === 'state') {
-    // qBittorrent states are strings like 'downloading', 'stalledDL', 'stoppedDL', etc.
-    if (typeof value === 'string') {
-      const stateLabel = QBITTORRENT_STATE_LABELS[value] || value.charAt(0).toUpperCase() + value.slice(1);
-      return h('span', { className: 'font-mono' }, stateLabel);
-    }
-    // rtorrent states are numbers (0=stopped, 1=started)
-    const stateLabel = RTORRENT_STATE_LABELS[value] || `Unknown (${value})`;
-    return h('span', { className: 'font-mono' }, stateLabel);
-  }
-
-  // rtorrent status field (human-readable text like "downloading", "seeding")
-  if (key === 'status' && typeof value === 'string') {
-    const capitalizedStatus = value.charAt(0).toUpperCase() + value.slice(1);
-    return h('span', { className: 'font-mono' }, capitalizedStatus);
-  }
-
-  // rtorrent ratio field
-  if (key === 'ratio') {
-    const ratioValue = typeof value === 'number' ? value.toFixed(2) : value;
-    return h('span', { className: 'font-mono' }, ratioValue);
-  }
-
-  // rtorrent boolean fields
-  if (key === 'isActive' || key === 'isComplete' || key === 'isOpen' ||
-      key === 'isHashing' || key === 'isPrivate' || key === 'isMultiFile') {
-    return h('span', {
-      className: value ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'
-    }, value ? 'Yes' : 'No');
-  }
-
-  // rtorrent hash field
-  if (key === 'hash') {
-    return h('span', { className: 'font-mono text-xs break-all' }, value);
-  }
-
-  // ===== qBittorrent fields (snake_case) =====
-
-  // qBittorrent timestamp fields (Unix timestamps)
-  if (key === 'added_on' || key === 'completion_on' || key === 'last_activity' || key === 'seen_complete') {
-    if (value === -1 || value === 0 || value === null || value === undefined) {
-      return h('span', { className: 'text-gray-500 dark:text-gray-400 italic' }, 'Never');
-    }
-    const date = new Date(value * 1000);
-    return h('span', null, date.toLocaleString());
-  }
-
-  // qBittorrent byte size fields
-  if (key === 'amount_left' || key === 'completed' || key === 'downloaded' ||
-      key === 'downloaded_session' || key === 'uploaded' || key === 'uploaded_session' ||
-      key === 'total_size' || key === 'dl_limit' || key === 'up_limit') {
-    const numValue = typeof value === 'string' ? parseInt(value) : value;
-    if (numValue === 0 && (key === 'dl_limit' || key === 'up_limit')) {
-      return h('span', { className: 'text-gray-500 dark:text-gray-400 italic' }, 'No limit');
-    }
-    if (!isNaN(numValue)) {
-      return h('span', null,
-        formatBytes(numValue),
-        h('span', { className: 'text-gray-500 dark:text-gray-400 ml-2 text-xs' }, `(${numValue.toLocaleString()} bytes)`)
-      );
-    }
-  }
-
-  // qBittorrent speed fields
-  if (key === 'dlspeed' || key === 'upspeed') {
-    const numValue = typeof value === 'string' ? parseInt(value) : value;
-    return h('span', { className: 'font-mono text-blue-600 dark:text-blue-400' },
-      formatSpeed(numValue)
-    );
-  }
-
-  // qBittorrent duration fields (in seconds)
-  if (key === 'eta' || key === 'seeding_time' || key === 'time_active' || key === 'reannounce') {
-    if (value === 8640000 || value === -1) {
-      return h('span', { className: 'text-gray-500 dark:text-gray-400 italic' }, '∞');
-    }
-    return h('span', null, formatDuration(value));
-  }
-
-  // qBittorrent limit fields (-1 or -2 = use global/no limit)
-  if (key === 'max_ratio' || key === 'ratio_limit' || key === 'max_seeding_time' ||
-      key === 'seeding_time_limit' || key === 'inactive_seeding_time_limit' ||
-      key === 'max_inactive_seeding_time') {
-    if (value === -1 || value === -2) {
-      return h('span', { className: 'text-gray-500 dark:text-gray-400 italic' },
-        value === -1 ? 'No limit' : 'Use global'
-      );
-    }
-  }
-
-  // qBittorrent boolean fields
-  if (key === 'auto_tmm' || key === 'f_l_piece_prio' || key === 'force_start' ||
-      key === 'has_metadata' || key === 'private' || key === 'seq_dl' || key === 'super_seeding') {
-    return h('span', {
-      className: value ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'
-    }, value ? 'Yes' : 'No');
-  }
-
-  // qBittorrent ratio/availability (decimal values)
-  if (key === 'availability' || key === 'popularity') {
-    const numValue = typeof value === 'number' ? value.toFixed(3) : value;
-    return h('span', { className: 'font-mono' }, numValue);
-  }
-
-  // qBittorrent hash fields
-  if (key === 'infohash_v1' || key === 'infohash_v2') {
-    if (!value || value === '') {
-      return h('span', { className: 'text-gray-500 dark:text-gray-400 italic' }, 'N/A');
-    }
-    return h('span', { className: 'font-mono text-xs break-all' }, value);
-  }
-
-  // qBittorrent magnet URI (show truncated)
-  if (key === 'magnet_uri') {
-    if (!value || value === '') {
-      return h('span', { className: 'text-gray-500 dark:text-gray-400 italic' }, 'N/A');
-    }
-    const truncated = value.length > 80 ? value.substring(0, 80) + '...' : value;
-    return h('span', { className: 'font-mono text-xs break-all', title: value }, truncated);
-  }
-
-  // Default formatting for numbers
+  // Fallback: number → toLocaleString, empty string → "Empty", else text
   if (typeof value === 'number') {
     return h('span', { className: 'font-mono' }, value.toLocaleString());
   }
-
-  // String values
   if (typeof value === 'string' && value.trim() === '') {
     return h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'Empty');
   }
-
   return h('span', null, String(value));
 };
 
+// ─── Categorize Functions ────────────────────────────────────────────────────
+
 /**
- * Categorize shared file fields for display
- * @param {Object} raw - Raw EC tag data
- * @returns {Object} Fields grouped by category
+ * Categorize shared file fields for display (aMule only, already clean)
  */
 export const categorizeSharedFields = (raw) => {
   const fieldCategories = {
@@ -660,30 +388,19 @@ export const categorizeSharedFields = (raw) => {
   };
 
   Object.entries(raw).forEach(([key, value]) => {
-    // Skip certain fields
     if (key === 'EC_TAG_PARTFILE_ED2K_LINK') return;
     if (key === 'EC_TAG_PARTFILE_PART_STATUS') return;
 
-    // File Identification
-    if (key === 'EC_TAG_PARTFILE_NAME' ||
-        key === 'EC_TAG_PARTFILE_HASH' ||
-        key === 'EC_TAG_PARTFILE_SIZE_FULL' ||
-        key === 'EC_TAG_KNOWNFILE_FILENAME' ||
-        key === 'EC_TAG_KNOWNFILE_AICH_MASTERHASH' ||
-        key === 'EC_TAG_KNOWNFILE_COMMENT' ||
+    if (key === 'EC_TAG_PARTFILE_NAME' || key === 'EC_TAG_PARTFILE_HASH' ||
+        key === 'EC_TAG_PARTFILE_SIZE_FULL' || key === 'EC_TAG_KNOWNFILE_FILENAME' ||
+        key === 'EC_TAG_KNOWNFILE_AICH_MASTERHASH' || key === 'EC_TAG_KNOWNFILE_COMMENT' ||
         key === 'EC_TAG_KNOWNFILE_RATING') {
       fieldCategories['File Identification'].push([key, value]);
-    }
-    // Upload Statistics
-    else if (key.includes('KNOWNFILE_REQ_COUNT') ||
-             key.includes('KNOWNFILE_ACCEPT_COUNT') ||
-             key.includes('KNOWNFILE_XFERRED') ||
-             key === 'EC_TAG_KNOWNFILE_PRIO' ||
-             key === 'EC_TAG_KNOWNFILE_ON_QUEUE') {
+    } else if (key.includes('KNOWNFILE_REQ_COUNT') || key.includes('KNOWNFILE_ACCEPT_COUNT') ||
+               key.includes('KNOWNFILE_XFERRED') || key === 'EC_TAG_KNOWNFILE_PRIO' ||
+               key === 'EC_TAG_KNOWNFILE_ON_QUEUE') {
       fieldCategories['Upload Statistics'].push([key, value]);
-    }
-    // Source Information
-    else if (key.includes('COMPLETE_SOURCES')) {
+    } else if (key.includes('COMPLETE_SOURCES')) {
       fieldCategories['Source Information'].push([key, value]);
     }
   });
@@ -692,186 +409,26 @@ export const categorizeSharedFields = (raw) => {
 };
 
 /**
- * Categorize download fields for display
- * @param {Object} raw - Raw EC tag data
- * @returns {Object} Fields grouped by category
+ * Categorize download fields for display — registry-driven
  */
 export const categorizeDownloadFields = (raw) => {
-  const fieldCategories = {
-    'File Identification': [],
-    'Source Information': [],
-    'Timing & Activity': [],
-    'Priority & Category': [],
-    'State & Progress': [],
-    'Download Statistics': [],
-    'Upload Statistics': [],
-    'Data Integrity & Optimization': []
-  };
+  const clientType = raw.clientType;
+  const categoryMap = FIELD_CATEGORIES[clientType] || {};
+  const globalSkip = CATEGORIZE_SKIP._global;
+  const clientSkip = CATEGORIZE_SKIP[clientType] || new Set();
+  const result = Object.fromEntries(CATEGORY_ORDER.map(c => [c, []]));
 
-  Object.entries(raw).forEach(([key, value]) => {
-    // Skip certain fields (aMule)
-    if (key === 'EC_TAG_PARTFILE_ED2K_LINK') return;
-    if (key === 'EC_TAG_PARTFILE_STOPPED') return;
-    if (key === 'EC_TAG_PARTFILE_A4AFAUTO') return;
-    if (key === 'EC_TAG_PARTFILE_PARTMETID') return;
-
-    // Skip certain rtorrent fields (rendered separately or redundant)
-    if (key === 'peersDetailed' || key === 'trackersDetailed' || key === 'trackers') return;
-    if (key === 'message') return;
-    if (key === 'clientType') return; // metadata, not user-facing
-
-    // Skip certain qBittorrent fields (redundant, internal, or displayed elsewhere)
-    if (key === 'magnet_uri') return; // Too long, not useful in details view
-    if (key === 'infohash_v2' && (!value || value === '')) return; // Only show if present
-
-    // ===== aMule EC_TAG fields =====
-
-    // File Identification (aMule)
-    if (key === 'EC_TAG_PARTFILE_NAME' ||
-        key === 'EC_TAG_PARTFILE_HASH' ||
-        key === 'EC_TAG_PARTFILE_SIZE_FULL' ||
-        key === 'EC_TAG_KNOWNFILE_FILENAME' ||
-        key === 'EC_TAG_KNOWNFILE_AICH_MASTERHASH' ||
-        key === 'EC_TAG_PARTFILE_COMMENTS') {
-      fieldCategories['File Identification'].push([key, value]);
+  for (const [key, value] of Object.entries(raw)) {
+    if (globalSkip.has(key) || clientSkip.has(key)) continue;
+    const condSkip = CATEGORIZE_CONDITIONAL_SKIP[key];
+    if (condSkip && condSkip(value)) continue;
+    const category = categoryMap[key];
+    if (category) {
+      result[category].push([key, value]);
+    } else {
+      // Unknown/unmapped keys go to Uncategorized for review
+      result['Uncategorized'].push([key, value]);
     }
-    // State & Progress (aMule)
-    else if (key === 'EC_TAG_PARTFILE_STATUS') {
-      fieldCategories['State & Progress'].push([key, value]);
-    }
-    // Download Statistics (aMule)
-    else if (key === 'EC_TAG_PARTFILE_SIZE_XFER' ||
-             key === 'EC_TAG_PARTFILE_SIZE_DONE' ||
-             key === 'EC_TAG_PARTFILE_SPEED' ||
-             key === 'EC_TAG_PARTFILE_AVAILABLE_PARTS' ||
-             key === 'EC_TAG_PARTFILE_HASHED_PART_COUNT') {
-      fieldCategories['Download Statistics'].push([key, value]);
-    }
-    // Priority & Category (aMule)
-    else if (key.includes('PRIO') ||
-             key === 'EC_TAG_PARTFILE_CAT') {
-      fieldCategories['Priority & Category'].push([key, value]);
-    }
-    // Upload Statistics (aMule)
-    else if (key.includes('KNOWNFILE_REQ_COUNT') ||
-             key.includes('KNOWNFILE_ACCEPT_COUNT') ||
-             key.includes('KNOWNFILE_XFERRED') ||
-             key === 'EC_TAG_KNOWNFILE_ON_QUEUE' ||
-             key === 'EC_TAG_KNOWNFILE_RATING' ||
-             key === 'EC_TAG_KNOWNFILE_COMMENT') {
-      fieldCategories['Upload Statistics'].push([key, value]);
-    }
-    // Source Information (aMule)
-    else if (key.includes('SOURCE') || key.includes('COMPLETE_SOURCES')) {
-      fieldCategories['Source Information'].push([key, value]);
-    }
-    // Timing & Activity (aMule)
-    else if (key === 'EC_TAG_PARTFILE_LAST_SEEN_COMP' ||
-             key === 'EC_TAG_PARTFILE_LAST_RECV' ||
-             key === 'EC_TAG_PARTFILE_DOWNLOAD_ACTIVE') {
-      fieldCategories['Timing & Activity'].push([key, value]);
-    }
-    // Data Integrity & Optimization (aMule)
-    else if (key === 'EC_TAG_PARTFILE_LOST_CORRUPTION' ||
-             key === 'EC_TAG_PARTFILE_GAINED_COMPRESSION' ||
-             key === 'EC_TAG_PARTFILE_SAVED_ICH') {
-      fieldCategories['Data Integrity & Optimization'].push([key, value]);
-    }
-
-    // ===== rtorrent fields (camelCase) =====
-
-    // File Identification (rtorrent)
-    else if (key === 'hash' || key === 'name' || key === 'size' ||
-             key === 'directory' || key === 'basePath' ||
-             key === 'isPrivate' || key === 'isMultiFile') {
-      fieldCategories['File Identification'].push([key, value]);
-    }
-    // State & Progress (rtorrent)
-    else if (key === 'status' || key === 'state' ||
-             key === 'isActive' || key === 'isComplete' ||
-             key === 'isOpen' || key === 'isHashing' ||
-             key === 'progress') {
-      fieldCategories['State & Progress'].push([key, value]);
-    }
-    // Download Statistics (rtorrent)
-    else if (key === 'completedBytes' || key === 'downloadSpeed' ||
-             key === 'downloadTotal' || key === 'chunksCompleted' ||
-             key === 'chunksTotal') {
-      fieldCategories['Download Statistics'].push([key, value]);
-    }
-    // Upload Statistics (rtorrent)
-    else if (key === 'uploadSpeed' || key === 'uploadTotal' || key === 'ratio') {
-      fieldCategories['Upload Statistics'].push([key, value]);
-    }
-    // Priority & Category (rtorrent)
-    else if (key === 'priority' || key === 'label') {
-      fieldCategories['Priority & Category'].push([key, value]);
-    }
-    // Timing & Activity (rtorrent)
-    else if (key === 'creationDate' || key === 'startedTime' ||
-             key === 'finishedTime') {
-      fieldCategories['Timing & Activity'].push([key, value]);
-    }
-    // Source Information (rtorrent - peers/seeds)
-    else if (key === 'peers' || key === 'peersTotal' ||
-             key === 'seeds' || key === 'seedsTotal') {
-      fieldCategories['Source Information'].push([key, value]);
-    }
-    // Data Integrity & Optimization (rtorrent)
-    else if (key === 'chunkSize') {
-      fieldCategories['Data Integrity & Optimization'].push([key, value]);
-    }
-
-    // ===== qBittorrent fields (snake_case) =====
-
-    // File Identification (qBittorrent)
-    else if (key === 'infohash_v1' || key === 'infohash_v2' || key === 'name' ||
-             key === 'total_size' || key === 'save_path' || key === 'content_path' ||
-             key === 'root_path' || key === 'download_path' || key === 'private' ||
-             key === 'comment' || key === 'tags') {
-      fieldCategories['File Identification'].push([key, value]);
-    }
-    // State & Progress (qBittorrent)
-    else if (key === 'state' || key === 'progress' || key === 'amount_left' ||
-             key === 'completed' || key === 'eta' || key === 'availability' ||
-             key === 'has_metadata' || key === 'force_start' || key === 'auto_tmm' ||
-             key === 'seq_dl' || key === 'f_l_piece_prio') {
-      fieldCategories['State & Progress'].push([key, value]);
-    }
-    // Download Statistics (qBittorrent)
-    else if (key === 'downloaded' || key === 'downloaded_session' ||
-             key === 'dlspeed' || key === 'dl_limit') {
-      fieldCategories['Download Statistics'].push([key, value]);
-    }
-    // Upload Statistics (qBittorrent)
-    else if (key === 'uploaded' || key === 'uploaded_session' ||
-             key === 'upspeed' || key === 'up_limit' || key === 'ratio' ||
-             key === 'max_ratio' || key === 'ratio_limit' || key === 'super_seeding') {
-      fieldCategories['Upload Statistics'].push([key, value]);
-    }
-    // Priority & Category (qBittorrent)
-    else if (key === 'category' || key === 'priority') {
-      fieldCategories['Priority & Category'].push([key, value]);
-    }
-    // Timing & Activity (qBittorrent)
-    else if (key === 'added_on' || key === 'completion_on' || key === 'last_activity' ||
-             key === 'seen_complete' || key === 'time_active' || key === 'seeding_time' ||
-             key === 'seeding_time_limit' || key === 'max_seeding_time' ||
-             key === 'inactive_seeding_time_limit' || key === 'max_inactive_seeding_time') {
-      fieldCategories['Timing & Activity'].push([key, value]);
-    }
-    // Source Information (qBittorrent)
-    else if (key === 'num_seeds' || key === 'num_leechs' ||
-             key === 'num_complete' || key === 'num_incomplete' ||
-             key === 'tracker' || key === 'trackers_count' ||
-             key === 'reannounce' || key === 'popularity') {
-      fieldCategories['Source Information'].push([key, value]);
-    }
-    // Anything else goes to File Identification
-    else {
-      fieldCategories['File Identification'].push([key, value]);
-    }
-  });
-
-  return fieldCategories;
+  }
+  return result;
 };

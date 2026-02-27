@@ -9,6 +9,7 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
+import { itemKey } from '../utils/itemKey.js';
 
 const { useMemo, useCallback } = React;
 
@@ -22,6 +23,7 @@ const { useMemo, useCallback } = React;
  * @param {function} options.selectAll - Function to select all items
  * @param {function} options.isShownFullySelected - Function to check if all shown items are selected
  * @param {string} options.hashKey - Key to use for getting item hash (default: 'fileHash')
+ * @param {function} options.selectableFilter - Optional filter: (item) => boolean. Only selectable items are included in bulk select.
  * @returns {Object} Selection state and handlers
  */
 export const usePageSelection = ({
@@ -31,17 +33,20 @@ export const usePageSelection = ({
   selectShown,
   selectAll,
   isShownFullySelected,
-  hashKey = 'fileHash'
+  hashKey = 'fileHash',
+  selectableFilter
 }) => {
-  // Get hashes for shown items
+  // Get compound keys for shown items (filtered to selectable if filter provided)
   const shownHashes = useMemo(() => {
-    return shownData.map(item => item[hashKey]);
-  }, [shownData, hashKey]);
+    const data = selectableFilter ? shownData.filter(selectableFilter) : shownData;
+    return data.map(item => itemKey(item.instanceId, item[hashKey]));
+  }, [shownData, hashKey, selectableFilter]);
 
-  // Get hashes for all items
+  // Get compound keys for all items (filtered to selectable if filter provided)
   const allHashes = useMemo(() => {
-    return allData.map(item => item[hashKey]);
-  }, [allData, hashKey]);
+    const data = selectableFilter ? allData.filter(selectableFilter) : allData;
+    return data.map(item => itemKey(item.instanceId, item[hashKey]));
+  }, [allData, hashKey, selectableFilter]);
 
   // Check if all shown items are selected
   const shownFullySelected = isShownFullySelected(shownHashes);

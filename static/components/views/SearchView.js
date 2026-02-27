@@ -6,11 +6,12 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { SearchResultsSection, Icon } from '../common/index.js';
+import { SearchResultsSection, Icon, AlertBox } from '../common/index.js';
 import QuickSearchWidget from '../dashboard/QuickSearchWidget.js';
 import { useSearch } from '../../contexts/SearchContext.js';
 import { useActions } from '../../contexts/ActionsContext.js';
 import { useDataFetch } from '../../contexts/DataFetchContext.js';
+import { useAmuleInstanceSelector } from '../../hooks/useAmuleInstanceSelector.js';
 
 const { createElement: h, useEffect } = React;
 
@@ -26,18 +27,26 @@ const SearchView = () => {
     searchError,
     searchPreviousResults,
     searchPreviousResultsLoaded,
+    searchInstanceId,
     setSearchPreviousResultsLoaded,
     setSearchQuery,
-    setSearchType
+    setSearchType,
+    setSearchInstanceId
   } = useSearch();
   const actions = useActions();
   const { fetchPreviousSearchResults } = useDataFetch();
+  const {
+    connectedInstances: amuleInstances,
+    showSelector: showAmuleSelector,
+    selectedId: effectiveAmuleInstance,
+    selectInstance: selectAmuleInstance
+  } = useAmuleInstanceSelector({ selectedId: searchInstanceId, onSelect: setSearchInstanceId });
 
   // Fetch previous search results on mount (always fetch fresh from backend)
   useEffect(() => {
     setSearchPreviousResultsLoaded(false);
-    fetchPreviousSearchResults();
-  }, [fetchPreviousSearchResults, setSearchPreviousResultsLoaded]);
+    fetchPreviousSearchResults(effectiveAmuleInstance);
+  }, [fetchPreviousSearchResults, setSearchPreviousResultsLoaded, effectiveAmuleInstance]);
 
   return h('div', { className: 'space-y-2 sm:space-y-3 px-2 sm:px-0' },
     // Search form (reusing QuickSearchWidget without border)
@@ -49,12 +58,16 @@ const SearchView = () => {
         onSearchQueryChange: setSearchQuery,
         onSearch: actions.search.perform,
         searchLocked,
-        noBorder: true
+        noBorder: true,
+        searchInstanceId: effectiveAmuleInstance,
+        onSearchInstanceChange: selectAmuleInstance,
+        amuleInstances,
+        showAmuleSelector
       })
     ),
 
     // Search error message
-    searchError && h('div', { className: 'p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-red-700 dark:text-red-200 text-sm' }, searchError),
+    searchError && h(AlertBox, { type: 'error', className: 'mb-0' }, searchError),
 
     // Horizontal divider
     h('hr', { className: 'border-gray-200 dark:border-gray-700' }),

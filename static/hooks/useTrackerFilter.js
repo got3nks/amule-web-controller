@@ -21,7 +21,7 @@ import { filterByTracker, buildTrackerFilterOptions } from '../utils/downloadHel
  */
 export const useTrackerFilter = ({ includeNoTracker = false } = {}) => {
   const { knownTrackers } = useStaticData();
-  const { isBittorrentEnabled } = useClientFilter();
+  const { isBittorrentEnabled } = useClientFilter();  // network-type-level enabled
 
   // Filter state
   const [trackerFilter, setTrackerFilter] = useState('all');

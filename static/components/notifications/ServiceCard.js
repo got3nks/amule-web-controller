@@ -6,6 +6,7 @@
 
 import React from 'https://esm.sh/react@18.2.0';
 import { Icon } from '../common/index.js';
+import { ToggleSwitch } from '../settings/EnableToggle.js';
 import { getServiceSchema } from '../../utils/notificationServiceSchemas.js';
 
 const { createElement: h } = React;
@@ -40,24 +41,19 @@ const ServiceCard = ({ service, onEdit, onDelete, onTest, onToggle, loading = fa
         ),
         h('div', {},
           h('h3', { className: 'font-medium text-gray-900 dark:text-gray-100' }, service.name),
-          h('span', {
-            className: 'text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
-          }, serviceName)
+          h('div', { className: '-ml-1' },
+            h('span', {
+              className: 'text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+            }, serviceName)
+          )
         )
       ),
       // Enable/disable toggle
-      h('label', { className: 'relative inline-flex items-center cursor-pointer' },
-        h('input', {
-          type: 'checkbox',
-          checked: service.enabled,
-          onChange: () => onToggle(service.id, !service.enabled),
-          disabled: loading,
-          className: 'sr-only peer'
-        }),
-        h('div', {
-          className: 'w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[\'\'] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600'
-        })
-      )
+      h(ToggleSwitch, {
+        enabled: service.enabled,
+        onChange: (val) => onToggle(service.id, val),
+        disabled: loading
+      })
     ),
 
     // Status indicator

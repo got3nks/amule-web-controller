@@ -3,126 +3,19 @@
  * Handles qBittorrent connection, reconnection, and data retrieval
  */
 
-const crypto = require('crypto');
 const QBittorrentClient = require('../lib/qbittorrent/QBittorrentClient');
-const config = require('./config');
-const BaseModule = require('../lib/BaseModule');
+const BaseClientManager = require('../lib/BaseClientManager');
 const logger = require('../lib/logger');
+const { parseMagnetUri, parseTorrentBuffer } = require('../lib/torrentUtils');
+const { normalizeQBittorrentDownload, extractQBittorrentUploads } = require('../lib/downloadNormalizer');
 
 
-class QbittorrentManager extends BaseModule {
+class QbittorrentManager extends BaseClientManager {
   constructor() {
     super();
-    this.client = null;
-    this.reconnectInterval = null;
-    this.connectionInProgress = false;
     this.lastTorrents = [];
     this.lastStats = null;
     this.cachedListenPort = 0;
-
-    // Tracker cache: Map<hash, { trackers: Object[], lastUpdated: number }>
-    this.trackerCache = new Map();
-    // Peer cache: Map<hash, { peers: Object[], lastUpdated: number }>
-    this.peerCache = new Map();
-    this.trackerRefreshInterval = null;
-    this.TRACKER_REFRESH_INTERVAL = 10000; // Refresh every 10 seconds
-
-    // Connection callbacks
-    this._onConnectCallbacks = [];
-  }
-
-  /**
-   * Check if history tracking is enabled
-   * @returns {boolean}
-   */
-  isHistoryEnabled() {
-    return config.getConfig()?.history?.enabled !== false && this.downloadHistoryDB;
-  }
-
-  /**
-   * Parse magnet URI to extract hash and name
-   * @param {string} magnetUri - Magnet URI
-   * @returns {Object} { hash, name }
-   */
-  parseMagnetUri(magnetUri) {
-    let hash = null;
-    let name = null;
-
-    try {
-      // Extract hash from xt=urn:btih:HASH
-      const hashMatch = magnetUri.match(/xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
-      if (hashMatch) {
-        hash = hashMatch[1];
-        // Convert base32 to hex if needed (32 chars = base32, 40 chars = hex)
-        if (hash.length === 32) {
-          hash = this.base32ToHex(hash);
-        }
-        hash = hash.toLowerCase();
-      }
-
-      // Extract name from dn= parameter
-      const nameMatch = magnetUri.match(/dn=([^&]+)/);
-      if (nameMatch) {
-        name = decodeURIComponent(nameMatch[1].replace(/\+/g, ' '));
-      }
-    } catch (err) {
-      logger.warn('[qbittorrentManager] Failed to parse magnet URI:', err.message);
-    }
-
-    return { hash, name };
-  }
-
-  /**
-   * Convert base32 to hex (for magnet links with base32 hashes)
-   * @param {string} base32 - Base32 encoded string
-   * @returns {string} Hex string
-   */
-  base32ToHex(base32) {
-    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    let bits = '';
-    for (const char of base32.toUpperCase()) {
-      const val = alphabet.indexOf(char);
-      if (val === -1) continue;
-      bits += val.toString(2).padStart(5, '0');
-    }
-    let hex = '';
-    for (let i = 0; i + 4 <= bits.length; i += 4) {
-      hex += parseInt(bits.substr(i, 4), 2).toString(16);
-    }
-    return hex;
-  }
-
-  /**
-   * Track a download in history
-   * @param {string} hash - Info hash
-   * @param {string} name - Torrent name
-   * @param {number} size - Size in bytes (optional)
-   * @param {string} username - Username (optional)
-   * @param {string} category - Category name (optional)
-   */
-  trackDownload(hash, name, size = null, username = null, category = null) {
-    if (!this.isHistoryEnabled() || !hash) return;
-
-    try {
-      this.log(`📜 History: tracking qbittorrent download - hash: ${hash}, name: ${name}, size: ${size}`);
-      this.downloadHistoryDB.addDownload(hash, name || 'Unknown', size, username, 'qbittorrent', category);
-    } catch (err) {
-      logger.warn('[qbittorrentManager] Failed to track download:', err.message);
-    }
-  }
-
-  /**
-   * Track a deletion in history
-   * @param {string} hash - Info hash
-   */
-  trackDeletion(hash) {
-    if (!this.isHistoryEnabled() || !hash) return;
-
-    try {
-      this.downloadHistoryDB.markDeleted(hash);
-    } catch (err) {
-      logger.warn('[qbittorrentManager] Failed to track deletion:', err.message);
-    }
   }
 
   /**
@@ -136,15 +29,13 @@ class QbittorrentManager extends BaseModule {
       return false;
     }
 
-    const qbConfig = config.getQbittorrentConfig();
-
     // Check if qBittorrent is enabled and configured
-    if (!qbConfig || !qbConfig.enabled) {
+    if (!this._clientConfig || !this._clientConfig.enabled) {
       this.log('ℹ️  qBittorrent integration is disabled');
       return false;
     }
 
-    if (!qbConfig.host) {
+    if (!this._clientConfig.host) {
       this.log('⚠️  qBittorrent host not configured');
       return false;
     }
@@ -159,14 +50,14 @@ class QbittorrentManager extends BaseModule {
         this.client = null;
       }
 
-      this.log(`🔌 Creating new qBittorrent client (${qbConfig.host}:${qbConfig.port})...`);
+      this.log(`🔌 Creating new qBittorrent client (${this._clientConfig.host}:${this._clientConfig.port})...`);
 
       const newClient = new QBittorrentClient({
-        host: qbConfig.host,
-        port: qbConfig.port || 8080,
-        username: qbConfig.username || 'admin',
-        password: qbConfig.password || '',
-        useSsl: qbConfig.useSsl || false
+        host: this._clientConfig.host,
+        port: this._clientConfig.port || 8080,
+        username: this._clientConfig.username || 'admin',
+        password: this._clientConfig.password || '',
+        useSsl: this._clientConfig.useSsl || false
       });
 
       // Test the connection
@@ -177,13 +68,11 @@ class QbittorrentManager extends BaseModule {
       }
 
       this.client = newClient;
+      this._clearConnectionError();
       this.log(`✅ Connected to qBittorrent ${testResult.version} successfully`);
 
       // Stop reconnection attempts
-      if (this.reconnectInterval) {
-        clearInterval(this.reconnectInterval);
-        this.reconnectInterval = null;
-      }
+      this.clearReconnect();
 
       // Cache listen port from preferences (not available in server_state)
       try {
@@ -202,6 +91,7 @@ class QbittorrentManager extends BaseModule {
       return true;
     } catch (err) {
       this.log('❌ Failed to connect to qBittorrent:', logger.errorDetail(err));
+      this._setConnectionError(err);
       this.client = null;
       this.stopTrackerRefresh();
       return false;
@@ -214,40 +104,16 @@ class QbittorrentManager extends BaseModule {
    * Start connection and auto-reconnect
    */
   async startConnection() {
-    const qbConfig = config.getQbittorrentConfig();
-
     // Don't start if not enabled
-    if (!qbConfig || !qbConfig.enabled) {
+    if (!this._clientConfig || !this._clientConfig.enabled) {
       this.log('ℹ️  qBittorrent integration is disabled, skipping connection');
       return;
     }
 
     const connected = await this.initClient();
-    if (!connected && !this.reconnectInterval) {
-      this.log('🔄 Will retry qBittorrent connection every 30 seconds...');
-      this.reconnectInterval = setInterval(async () => {
-        // Check if still enabled before retrying
-        const currentConfig = config.getQbittorrentConfig();
-        if (!currentConfig || !currentConfig.enabled) {
-          this.log('ℹ️  qBittorrent disabled, stopping reconnection attempts');
-          if (this.reconnectInterval) {
-            clearInterval(this.reconnectInterval);
-            this.reconnectInterval = null;
-          }
-          return;
-        }
-        this.log('🔄 Attempting to reconnect to qBittorrent...');
-        await this.initClient();
-      }, 30000);
+    if (!connected) {
+      this.scheduleReconnect(30000);
     }
-  }
-
-  /**
-   * Get current client
-   * @returns {QBittorrentClient|null}
-   */
-  getClient() {
-    return this.client;
   }
 
   /**
@@ -256,23 +122,6 @@ class QbittorrentManager extends BaseModule {
    */
   isConnected() {
     return !!this.client && this.client.isConnected();
-  }
-
-  /**
-   * Check if qBittorrent is enabled in config
-   * @returns {boolean}
-   */
-  isEnabled() {
-    const qbConfig = config.getQbittorrentConfig();
-    return qbConfig && qbConfig.enabled === true;
-  }
-
-  /**
-   * Register a callback to be called when qBittorrent connects
-   * @param {Function} callback - Callback function
-   */
-  onConnect(callback) {
-    this._onConnectCallbacks.push(callback);
   }
 
   /**
@@ -288,14 +137,7 @@ class QbittorrentManager extends BaseModule {
       const torrents = await this.client.getTorrents();
 
       // Merge tracker and peer data from cache
-      for (const torrent of torrents) {
-        const hash = torrent.hash.toLowerCase();
-        const trackerCached = this.trackerCache.get(hash);
-        torrent.trackersDetailed = trackerCached ? trackerCached.trackers : [];
-
-        const peerCached = this.peerCache.get(hash);
-        torrent.peersDetailed = peerCached ? peerCached.peers : [];
-      }
+      this._mergeTrackerData(torrents);
 
       this.lastTorrents = torrents;
       return torrents;
@@ -304,99 +146,61 @@ class QbittorrentManager extends BaseModule {
       // Connection might be lost, mark as disconnected
       const errDetail = logger.errorDetail(err);
       if (errDetail.includes('ECONNREFUSED') || errDetail.includes('timeout') || errDetail.includes('403')) {
+        this._setConnectionError(err);
         if (this.client) {
           this.client.connected = false;
         }
-        this.scheduleReconnect();
+        this.scheduleReconnect(30000);
       }
       return this.lastTorrents; // Return cached data on error
     }
   }
 
   /**
-   * Start periodic tracker/peer refresh
+   * Return cached torrents or fetch fresh for tracker refresh.
+   * @returns {Promise<Array>}
    */
-  startTrackerRefresh() {
-    if (this.trackerRefreshInterval) {
-      return; // Already running
-    }
-
-    this.log('🔄 Starting tracker/peer cache refresh (every 10s)');
-
-    // Schedule periodic refresh
-    this.trackerRefreshInterval = setInterval(() => {
-      this.refreshAllTrackers();
-    }, this.TRACKER_REFRESH_INTERVAL);
-
-    // Do initial refresh
-    this.refreshAllTrackers();
+  async _getItemsForTrackerRefresh() {
+    return this.lastTorrents.length > 0
+      ? this.lastTorrents
+      : await this.client.getTorrents();
   }
 
   /**
-   * Stop periodic tracker refresh
+   * Fetch tracker and peer data for all torrents.
+   * qBittorrent API has no batch endpoint — fetches per-torrent in parallel.
+   * @param {Array} items - Torrent objects with .hash
+   * @returns {Promise<{ trackersByHash: Map, peersByHash: Map }>}
    */
-  stopTrackerRefresh() {
-    if (this.trackerRefreshInterval) {
-      clearInterval(this.trackerRefreshInterval);
-      this.trackerRefreshInterval = null;
-      this.log('⏹️  Stopped tracker cache refresh');
-    }
-  }
+  async _fetchTrackersAndPeers(items) {
+    const trackersByHash = new Map();
+    const peersByHash = new Map();
 
-  /**
-   * Refresh trackers and peers for all known torrents
-   */
-  async refreshAllTrackers() {
-    if (!this.client) {
-      return;
-    }
+    const promises = items.map(async (torrent) => {
+      const hash = torrent.hash.toLowerCase();
 
-    try {
-      // Get list of all torrent hashes
-      const torrents = this.lastTorrents.length > 0
-        ? this.lastTorrents
-        : await this.client.getTorrents();
+      try {
+        const [trackers, peers] = await Promise.all([
+          this.client.getTorrentTrackers(hash).catch(() => []),
+          this.client.getTorrentPeers(hash).catch(() => ({}))
+        ]);
 
-      if (torrents.length === 0) {
-        return;
-      }
+        trackersByHash.set(hash, { trackersDetailed: trackers });
 
-      const now = Date.now();
-
-      // Fetch trackers and peers for each torrent
-      // qBittorrent API doesn't have batch endpoints, so we do them individually
-      // but run them in parallel for efficiency
-      const promises = torrents.map(async (torrent) => {
-        const hash = torrent.hash.toLowerCase();
-
-        try {
-          const [trackers, peers] = await Promise.all([
-            this.client.getTorrentTrackers(hash).catch(() => []),
-            this.client.getTorrentPeers(hash).catch(() => ({}))
-          ]);
-
-          // Update tracker cache
-          this.trackerCache.set(hash, {
-            trackers: trackers,
-            lastUpdated: now
-          });
-
-          // Convert peers object to normalized array (matching rTorrent peer format)
-          // Keys are "ip:port" for IPv4 or "[ipv6]:port" for IPv6
-          const peersArray = Object.entries(peers).map(([ip, data]) => {
-            let address, port;
-            if (ip.startsWith('[')) {
-              // IPv6: [2a00:1450:4001::200e]:51413
-              const closeBracket = ip.lastIndexOf(']');
-              address = ip.substring(1, closeBracket);
-              port = parseInt(ip.substring(closeBracket + 2)) || 0;
-            } else {
-              // IPv4: 192.168.1.5:51413
-              const lastColon = ip.lastIndexOf(':');
-              address = lastColon > 0 ? ip.substring(0, lastColon) : ip;
-              port = lastColon > 0 ? parseInt(ip.substring(lastColon + 1)) || 0 : 0;
-            }
-            return {
+        // Convert peers object to normalized array
+        // Keys are "ip:port" for IPv4 or "[ipv6]:port" for IPv6
+        const peersArray = Object.entries(peers).map(([ip, data]) => {
+          let address, port;
+          if (ip.startsWith('[')) {
+            const closeBracket = ip.lastIndexOf(']');
+            address = ip.substring(1, closeBracket);
+            port = parseInt(ip.substring(closeBracket + 2)) || 0;
+          } else {
+            const lastColon = ip.lastIndexOf(':');
+            address = lastColon > 0 ? ip.substring(0, lastColon) : ip;
+            port = lastColon > 0 ? parseInt(ip.substring(lastColon + 1)) || 0 : 0;
+          }
+          return {
             address,
             port,
             client: data.client || 'Unknown',
@@ -411,35 +215,16 @@ class QbittorrentManager extends BaseModule {
             country: data.country || '',
             countryCode: data.country_code || '',
           };
-          });
+        });
 
-          // Update peer cache
-          this.peerCache.set(hash, {
-            peers: peersArray,
-            lastUpdated: now
-          });
-        } catch (err) {
-          // Individual torrent fetch failed, skip
-        }
-      });
-
-      await Promise.all(promises);
-
-      // Clean up cache for torrents that no longer exist
-      const currentHashes = new Set(torrents.map(t => t.hash.toLowerCase()));
-      for (const hash of this.trackerCache.keys()) {
-        if (!currentHashes.has(hash)) {
-          this.trackerCache.delete(hash);
-        }
+        peersByHash.set(hash, peersArray);
+      } catch {
+        // Individual torrent fetch failed, skip
       }
-      for (const hash of this.peerCache.keys()) {
-        if (!currentHashes.has(hash)) {
-          this.peerCache.delete(hash);
-        }
-      }
-    } catch (err) {
-      this.log('❌ Error refreshing tracker/peer cache:', logger.errorDetail(err));
-    }
+    });
+
+    await Promise.all(promises);
+    return { trackersByHash, peersByHash };
   }
 
   /**
@@ -480,6 +265,148 @@ class QbittorrentManager extends BaseModule {
     }
   }
 
+  // ============================================================================
+  // UNIFIED DATA FETCHING (same interface as all managers)
+  // ============================================================================
+
+  /**
+   * Fetch and normalize all data from qBittorrent.
+   * @returns {Promise<Object>} { downloads, sharedFiles, uploads }
+   */
+  async fetchData() {
+    const rawTorrents = await this.getTorrents();
+
+    if (!rawTorrents || rawTorrents.length === 0) {
+      return { downloads: [], sharedFiles: [], uploads: [] };
+    }
+
+    // Normalize all torrents
+    const downloads = rawTorrents.map(t => normalizeQBittorrentDownload(t));
+
+    // Extract uploads (peers with active upload) from raw data
+    const uploads = extractQBittorrentUploads(rawTorrents);
+
+    // Stamp instanceId on all normalized items
+    const instanceId = this.instanceId;
+    downloads.forEach(d => { d.instanceId = instanceId; });
+    uploads.forEach(u => { u.instanceId = instanceId; });
+
+    // For torrent clients, downloads ARE shared files (all torrents seed)
+    return { downloads, sharedFiles: downloads, uploads };
+  }
+
+  // ============================================================================
+  // UNIFIED STATS & NETWORK STATUS (same interface as all managers)
+  // ============================================================================
+
+  /**
+   * Get raw stats from qBittorrent (alias for getGlobalStats)
+   * @returns {Promise<Object>} Raw stats
+   */
+  async getStats() {
+    return await this.getGlobalStats();
+  }
+
+  /**
+   * Extract normalized metrics from raw qBittorrent stats
+   * @param {Object} rawStats - Raw qBittorrent stats (already normalized by getGlobalStats)
+   * @returns {Object} { uploadSpeed, downloadSpeed, uploadTotal, downloadTotal }
+   */
+  extractMetrics(rawStats) {
+    return {
+      uploadSpeed: rawStats.uploadSpeed || 0,
+      downloadSpeed: rawStats.downloadSpeed || 0,
+      uploadTotal: rawStats.uploadTotal || 0,
+      downloadTotal: rawStats.downloadTotal || 0
+    };
+  }
+
+  /**
+   * Compute network status from raw qBittorrent stats
+   * @param {Object} rawStats - Raw qBittorrent stats (already normalized by getGlobalStats)
+   * @returns {Object} { status, text, connectionStatus, listenPort }
+   */
+  getNetworkStatus(rawStats) {
+    const connectionStatus = rawStats.connectionStatus || 'disconnected';
+    let status, text;
+    switch (connectionStatus) {
+      case 'connected': status = 'green'; text = 'OK'; break;
+      case 'firewalled': status = 'yellow'; text = 'Firewalled'; break;
+      default: status = 'red'; text = 'Disconnected'; break;
+    }
+    return {
+      status,
+      text,
+      connectionStatus,
+      listenPort: rawStats.listenPort || null
+    };
+  }
+
+  /**
+   * Extract normalized history metadata from a raw qBittorrent download item
+   * @param {Object} item - Raw qBittorrent download data
+   * @returns {Object} Normalized metadata for history DB
+   */
+  extractHistoryMetadata(item) {
+    return {
+      hash: item.hash?.toLowerCase(),
+      instanceId: item.instanceId,
+      size: item.size,
+      name: item.name,
+      downloaded: item.downloaded || 0,
+      uploaded: item.uploadTotal || 0,
+      ratio: item.ratio || 0,
+      trackerDomain: item.trackerDomain || null,
+      directory: item.directory || null,
+      multiFile: item.isMultiFile || false,
+      category: item.category || null
+    };
+  }
+
+  // ============================================================================
+  // UNIFIED DOWNLOAD CONTROL (same interface as all managers)
+  // ============================================================================
+
+  /**
+   * Pause a download
+   * @param {string} hash - Torrent hash
+   */
+  async pause(hash) {
+    return await this.stopDownload(hash);
+  }
+
+  /**
+   * Resume a download
+   * @param {string} hash - Torrent hash
+   */
+  async resume(hash) {
+    return await this.startDownload(hash);
+  }
+
+  /**
+   * Hard stop a download (qBittorrent: same as pause, no separate hard-stop)
+   * @param {string} hash - Torrent hash
+   */
+  async stop(hash) {
+    return await this.pause(hash);
+  }
+
+  /**
+   * Update client's view of the download directory (uses native setLocation)
+   * @param {string} hash - Torrent hash
+   * @param {string} path - New directory path
+   */
+  async updateDirectory(hash, path) {
+    if (!this.client) {
+      throw new Error('qBittorrent not connected');
+    }
+    await this.client.setLocation(hash, path);
+  }
+
+  // ============================================================================
+  // INTERNAL DOWNLOAD CONTROL
+  // ============================================================================
+
   /**
    * Start a download (resume)
    * @param {string} hash - Torrent hash
@@ -519,62 +446,72 @@ class QbittorrentManager extends BaseModule {
   }
 
   /**
+   * Delete an item (qBittorrent API handles file deletion natively)
+   * @param {string} hash - Torrent hash
+   * @param {Object} options - { deleteFiles }
+   * @returns {Promise<Object>} { success, pathsToDelete }
+   */
+  async deleteItem(hash, { deleteFiles } = {}) {
+    await this.removeDownload(hash, !!deleteFiles);
+    return { success: true, pathsToDelete: [] };
+  }
+
+  /**
+   * Build qBittorrent-native options from unified format.
+   * Unified: { categoryName, savePath, priority, start, username }
+   * qBittorrent: { category, savepath, paused }
+   */
+  _buildAddOptions(options) {
+    const category = options.categoryName ?? options.category ?? '';
+    const savePath = options.savePath ?? options.savepath ?? options.directory;
+    const addOptions = {
+      category,
+      paused: options.start === false
+    };
+    if (savePath) {
+      addOptions.savepath = savePath;
+    }
+    return addOptions;
+  }
+
+  /**
    * Add a torrent from magnet link
    * @param {string} magnetUri - Magnet URI
-   * @param {Object} options - Options (category, savepath, paused, username)
+   * @param {Object} options - Unified options { categoryName, savePath, priority, start, username }
    */
   async addMagnet(magnetUri, options = {}) {
     if (!this.client) {
       throw new Error('qBittorrent not connected');
     }
 
-    // Build options, only include savepath if explicitly set
-    // (otherwise qBittorrent uses the category's configured path)
-    // Support both 'directory' and 'savepath' property names for flexibility
-    const savePath = options.savepath || options.directory;
-    const addOptions = {
-      category: options.category,
-      paused: options.start === false
-    };
-    if (savePath) {
-      addOptions.savepath = savePath;
-    }
-
+    const addOptions = this._buildAddOptions(options);
     await this.client.addMagnet(magnetUri, addOptions);
 
     // Track in history
-    const { hash, name } = this.parseMagnetUri(magnetUri);
+    const { hash, name } = parseMagnetUri(magnetUri);
     if (hash) {
-      this.trackDownload(hash, name || 'Magnet download', null, options.username, options.category || null);
+      this.trackDownload(hash, name || 'Magnet download', null, options.username, addOptions.category || null);
     }
   }
 
   /**
    * Add a torrent from raw data (Buffer)
    * @param {Buffer} torrentData - Raw .torrent file contents
-   * @param {Object} options - Options (category, savepath, paused, username)
+   * @param {Object} options - Unified options { categoryName, savePath, priority, start, username }
    */
   async addTorrentRaw(torrentData, options = {}) {
     if (!this.client) {
       throw new Error('qBittorrent not connected');
     }
 
-    // Build options, only include savepath if explicitly set
-    // (otherwise qBittorrent uses the category's configured path)
-    // Support both 'directory' and 'savepath' property names for flexibility
-    const savePath = options.savepath || options.directory;
-    const addOptions = {
-      category: options.category,
-      paused: options.start === false
-    };
-    if (savePath) {
-      addOptions.savepath = savePath;
-    }
-
+    const addOptions = this._buildAddOptions(options);
     await this.client.addTorrent(torrentData, addOptions);
 
-    // We don't have an easy way to parse the hash from the torrent buffer here
-    // History tracking will happen when we see the torrent appear in the list
+    // Track in history
+    const { hash, name, size } = parseTorrentBuffer(torrentData);
+    if (hash) {
+      this.trackDownload(hash, name || 'Torrent download', size, options.username, addOptions.category || null);
+    }
   }
 
   /**
@@ -587,6 +524,18 @@ class QbittorrentManager extends BaseModule {
       throw new Error('qBittorrent not connected');
     }
     await this.client.setCategory(hash, category);
+  }
+
+  /**
+   * Set category/label for a download (unified interface)
+   * @param {string} hash - Torrent hash
+   * @param {Object} options - { categoryName }
+   * @returns {Promise<Object>} { success }
+   */
+  async setCategoryOrLabel(hash, { categoryName } = {}) {
+    const categoryValue = categoryName === 'Default' ? '' : (categoryName || '');
+    await this.setCategory(hash, categoryValue);
+    return { success: true };
   }
 
   /**
@@ -614,44 +563,171 @@ class QbittorrentManager extends BaseModule {
 
   /**
    * Create a category in qBittorrent
-   * @param {string} name - Category name
-   * @param {string} savePath - Download path for this category
+   * @param {Object} opts - { name, path }
    * @returns {Promise<void>}
    */
-  async createCategory(name, savePath = '') {
+  async createCategory({ name, path = '' } = {}) {
     if (!this.client) {
       throw new Error('qBittorrent not connected');
     }
-    await this.client.createCategory(name, savePath);
-    this.log(`📁 Created category "${name}" in qBittorrent${savePath ? ` (path: ${savePath})` : ''}`);
+    await this.client.createCategory(name, path);
+    this.log(`📁 Created category "${name}" in qBittorrent${path ? ` (path: ${path})` : ''}`);
   }
 
   /**
-   * Edit/update a category in qBittorrent (update its savePath)
-   * @param {string} name - Category name
-   * @param {string} savePath - New download path for this category
-   * @returns {Promise<void>}
+   * Edit/update a category in qBittorrent (update its savePath) with read-back verification.
+   * @param {Object} opts - { name, path }
+   * @returns {Promise<Object>} { success, verified, mismatches }
    */
-  async editCategory(name, savePath) {
+  async editCategory({ name, path = '' } = {}) {
     if (!this.client) {
       throw new Error('qBittorrent not connected');
     }
-    await this.client.editCategory(name, savePath);
-    this.log(`📁 Updated category "${name}" in qBittorrent (path: ${savePath})`);
+
+    try {
+      // Check current state — skip if path unchanged, create if missing
+      const existing = await this.getCategories();
+      const existingCat = existing?.[name];
+
+      if (!existingCat) {
+        this.log(`📁 Category "${name}" not found in qBittorrent, creating it`);
+        await this.createCategory({ name, path });
+      } else if ((existingCat.savePath || '') !== path) {
+        await this.client.editCategory(name, path);
+        this.log(`📁 Updated category "${name}" in qBittorrent (path: ${path})`);
+      } else {
+        return { success: true, verified: true, mismatches: [] };
+      }
+
+      // Verify by reading back
+      const categories = await this.getCategories();
+      const savedCat = categories?.[name];
+
+      if (!savedCat) {
+        this.log(`⚠️ Verify: Category "${name}" not found in qBittorrent after update`);
+        return { success: true, verified: false, mismatches: ['Category not found after update'] };
+      }
+
+      const mismatches = [];
+      const savedPath = savedCat.savePath || '';
+      if (savedPath !== path) mismatches.push(`path: expected "${path}", got "${savedPath}"`);
+
+      if (mismatches.length > 0) {
+        this.log(`⚠️ Verify: Category "${name}" mismatches: ${mismatches.join(', ')}`);
+        return { success: true, verified: false, mismatches };
+      }
+
+      this.log(`✅ Verify: Category "${name}" saved correctly in qBittorrent`);
+      return { success: true, verified: true, mismatches: [] };
+    } catch (err) {
+      this.log(`⚠️ Failed to update category in qBittorrent: ${err.message}`);
+      return { success: false, verified: false, mismatches: [err.message] };
+    }
   }
 
   /**
-   * Remove categories from qBittorrent
-   * @param {string|Array<string>} categories - Category name(s) to remove
+   * Ensure a category exists in qBittorrent (create if missing).
+   * @param {Object} opts - { name, path }
+   * @returns {Promise<Object>} { success: true }
+   */
+  async ensureCategoryExists({ name, path = '' } = {}) {
+    if (!this.client) throw new Error('qBittorrent not connected');
+
+    try {
+      const categories = await this.getCategories();
+      if (!categories || !categories[name]) {
+        await this.createCategory({ name, path });
+      }
+    } catch (err) {
+      this.log(`⚠️ Failed to ensure category in qBittorrent: ${err.message}`);
+    }
+    return { success: true };
+  }
+
+  /**
+   * Ensure multiple categories exist in qBittorrent (batch-aware: fetches existing list once).
+   * @param {Array<Object>} categories - Array of { name, path }
+   * @returns {Promise<Array<Object>>} Results per created category: [{ name }]
+   */
+  async ensureCategoriesBatch(categories) {
+    if (!this.client || !categories?.length) return [];
+
+    const results = [];
+    try {
+      const qbCategories = await this.getCategories() || {};
+
+      for (const cat of categories) {
+        if (qbCategories[cat.name]) continue;
+
+        try {
+          await this.createCategory({ name: cat.name, path: cat.path || '' });
+          results.push({ name: cat.name });
+          this.log(`📤 Propagated category "${cat.name}" to qBittorrent`);
+        } catch (err) {
+          this.log(`⚠️ Failed to propagate "${cat.name}" to qBittorrent: ${err.message}`);
+        }
+      }
+    } catch (err) {
+      this.log(`⚠️ Failed to fetch qBittorrent categories for batch propagation: ${err.message}`);
+    }
+    return results;
+  }
+
+  /**
+   * Delete a category from qBittorrent
+   * @param {Object} opts - { name }
    * @returns {Promise<void>}
    */
-  async removeCategories(categories) {
+  async deleteCategory({ name } = {}) {
     if (!this.client) {
       throw new Error('qBittorrent not connected');
     }
-    await this.client.removeCategories(categories);
-    const names = Array.isArray(categories) ? categories.join(', ') : categories;
-    this.log(`🗑️  Removed category/categories from qBittorrent: ${names}`);
+    await this.client.removeCategories(name);
+    this.log(`🗑️  Removed category from qBittorrent: ${name}`);
+  }
+
+  /**
+   * Rename a category in qBittorrent with verification.
+   * qBittorrent has no native rename — creates new, migrates torrents, deletes old.
+   * @param {Object} opts - { oldName, newName, path }
+   * @returns {Promise<Object>} { success, verified, mismatches }
+   */
+  async renameCategory({ oldName, newName, path = '' } = {}) {
+    if (!this.client) throw new Error('qBittorrent not connected');
+
+    try {
+      // 1. Create new category
+      await this.client.createCategory(newName, path);
+
+      // 2. Find all torrents in the old category and reassign
+      const torrents = await this.client.getTorrents({ category: oldName });
+      if (torrents && torrents.length > 0) {
+        const hashes = torrents.map(t => t.hash).join('|');
+        await this.client.setCategory(hashes, newName);
+        this.log(`🔄 Migrated ${torrents.length} torrent(s) from "${oldName}" to "${newName}"`);
+      }
+
+      // 3. Delete old category
+      await this.client.removeCategories(oldName);
+      this.log(`📤 Renamed category "${oldName}" → "${newName}" in qBittorrent`);
+
+      // Verify by reading back
+      const categories = await this.getCategories();
+      const mismatches = [];
+      if (!categories?.[newName]) mismatches.push(`New category "${newName}" not found after rename`);
+      if (categories?.[oldName]) mismatches.push(`Old category "${oldName}" still exists after rename`);
+
+      if (mismatches.length > 0) {
+        this.log(`⚠️ Verify: Rename "${oldName}" → "${newName}" mismatches: ${mismatches.join(', ')}`);
+        return { success: true, verified: false, mismatches };
+      }
+
+      this.log(`✅ Verify: Category renamed "${oldName}" → "${newName}" correctly in qBittorrent`);
+      return { success: true, verified: true, mismatches: [] };
+    } catch (err) {
+      this.log(`⚠️ Failed to rename category in qBittorrent: ${err.message}`);
+      return { success: false, verified: false, mismatches: [err.message] };
+    }
   }
 
   /**
@@ -701,31 +777,66 @@ class QbittorrentManager extends BaseModule {
   }
 
   /**
-   * Schedule reconnection if not already scheduled
+   * Perform category sync when this qBittorrent instance connects.
+   * Imports qBit categories into app, pushes app categories to qBit,
+   * and updates qBit paths to match app (app is source of truth).
+   * @param {Object} categoryManager - CategoryManager instance
    */
-  scheduleReconnect() {
-    if (this.reconnectInterval) {
-      return; // Already scheduled
+  async onConnectSync(categoryManager) {
+    const defaultDir = await this.getDefaultDirectory();
+    if (defaultDir) {
+      categoryManager.setClientDefaultPath(this.instanceId, defaultDir);
     }
 
-    const qbConfig = config.getQbittorrentConfig();
-    if (!qbConfig || !qbConfig.enabled) {
-      return; // Disabled, don't reconnect
-    }
+    let qbCategories = await this.getCategories();
+    if (!qbCategories || typeof qbCategories !== 'object') qbCategories = {};
+    const categoryNames = Object.keys(qbCategories);
 
-    this.log('🔄 Will retry qBittorrent connection in 30 seconds...');
-    this.reconnectInterval = setInterval(async () => {
-      const currentConfig = config.getQbittorrentConfig();
-      if (!currentConfig || !currentConfig.enabled) {
-        if (this.reconnectInterval) {
-          clearInterval(this.reconnectInterval);
-          this.reconnectInterval = null;
+    // Phase 1: Import qBittorrent categories into app
+    let createdInApp = 0;
+    for (const name of categoryNames) {
+      if (!name) continue;
+      if (categoryManager.getByName(name)) continue;
+      const savePath = qbCategories[name]?.savePath || null;
+      categoryManager.importCategory({
+        name, path: savePath,
+        comment: 'Auto-created from qBittorrent category'
+      });
+      createdInApp++;
+    }
+    if (createdInApp > 0) await categoryManager.save();
+
+    // Phase 2: Push app categories to qBittorrent + update paths
+    let createdInQb = 0, updatedInQb = 0;
+    for (const [name, category] of categoryManager.getCategoriesSnapshot().entries()) {
+      if (name === 'Default') continue;
+      const qbCat = qbCategories[name];
+      const appPath = category.path || '';
+
+      if (!qbCat) {
+        try {
+          await this.createCategory({ name, path: appPath });
+          createdInQb++;
+          this.log(`📤 Created category "${name}" in qBittorrent (path: ${appPath})`);
+        } catch (err) {
+          this.log(`⚠️ Failed to create category "${name}" in qBittorrent: ${err.message}`);
         }
-        return;
+      } else if (qbCat.savePath !== appPath) {
+        try {
+          await this.editCategory({ name, path: appPath });
+          updatedInQb++;
+          this.log(`🔄 Updated qBittorrent category "${name}" path: ${qbCat.savePath} -> ${appPath}`);
+        } catch (err) {
+          this.log(`⚠️ Failed to update category "${name}" in qBittorrent: ${err.message}`);
+        }
       }
-      this.log('🔄 Attempting to reconnect to qBittorrent...');
-      await this.initClient();
-    }, 30000);
+    }
+
+    this.log(`📊 qBittorrent sync complete: ${createdInApp} imported, ${createdInQb} pushed, ${updatedInQb} updated`);
+
+    // Propagate all app categories to other connected clients that may not have them
+    await categoryManager.propagateToOtherClients(this.instanceId);
+    await categoryManager.validateAllPaths();
   }
 
   /**
@@ -738,10 +849,7 @@ class QbittorrentManager extends BaseModule {
     this.stopTrackerRefresh();
 
     // Stop reconnection attempts
-    if (this.reconnectInterval) {
-      clearInterval(this.reconnectInterval);
-      this.reconnectInterval = null;
-    }
+    this.clearReconnect();
 
     // Wait for any ongoing connection attempts
     let waitAttempts = 0;
@@ -765,4 +873,4 @@ class QbittorrentManager extends BaseModule {
   }
 }
 
-module.exports = new QbittorrentManager();
+module.exports = { QbittorrentManager };

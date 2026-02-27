@@ -13,12 +13,14 @@ const { minutesToMs } = require('../timeRange');
 const { verifyPassword } = require('../authUtils');
 const { convertToQBittorrentInfo } = require('./stateMapping');
 const { convertMagnetToEd2k } = require('../linkConverter');
+const { itemKey } = require('../itemKey');
 const preferences = require('./preferences.json');
 
 class QBittorrentHandler {
   constructor() {
     // Dependencies (set via setDependencies)
     this.getAmuleClient = null;
+    this.getAmuleInstanceId = null;
     this.hashStore = null;
     this.config = null;
     this.isFirstRun = async () => false;
@@ -47,10 +49,13 @@ class QBittorrentHandler {
   /**
    * Set all dependencies at once
    */
-  setDependencies({ getAmuleClient, hashStore, config, isFirstRun }) {
+  setDependencies({ getAmuleClient, getAmuleInstanceId, hashStore, config, registry, isFirstRun, userManager }) {
     this.getAmuleClient = getAmuleClient;
+    this.getAmuleInstanceId = getAmuleInstanceId;
     this.hashStore = hashStore;
     this.config = config;
+    this.registry = registry;
+    this.userManager = userManager;
     if (isFirstRun) this.isFirstRun = isFirstRun;
 
     // Start category initialization and periodic refresh
@@ -79,7 +84,7 @@ class QBittorrentHandler {
 
   /**
    * POST /api/v2/auth/login
-   * Verifies password against web UI password
+   * Verifies credentials against users.db (username + password or API key)
    */
   async login(req, res) {
     const authEnabled = this.config.getAuthEnabled();
@@ -88,21 +93,44 @@ class QBittorrentHandler {
       return res.send('Ok.');
     }
 
-    const { password } = req.body;
+    const { username, password } = req.body;
 
     if (!password) {
+      logger.warn('[qBittorrent] Login failed: no password provided');
       return res.send('Fails.');
     }
 
     try {
-      const hashedPassword = this.config.getAuthPassword();
+      if (!this.userManager) {
+        logger.error('[qBittorrent] Login failed: userManager not available');
+        return res.send('Fails.');
+      }
 
-      if (!hashedPassword) {
+      // Try username + password login
+      if (username) {
+        const user = this.userManager.getUserByUsername(username);
+        if (user && !user.disabled && user.is_admin && user.password_hash) {
+          const isValid = await verifyPassword(password, user.password_hash);
+          if (isValid) {
+            logger.log(`[qBittorrent] Login OK: user "${username}" via password`);
+            return res.send('Ok.');
+          }
+        }
+      }
+
+      // Try API key as password
+      const user = this.userManager.getUserByApiKey(password);
+      if (user && !user.disabled && user.is_admin) {
+        if (username && user.username !== username) {
+          logger.warn(`[qBittorrent] Login failed: API key belongs to "${user.username}", not "${username}"`);
+          return res.send('Fails.');
+        }
+        logger.log(`[qBittorrent] Login OK: user "${user.username}" via API key`);
         return res.send('Ok.');
       }
 
-      const isValid = await verifyPassword(password, hashedPassword);
-      res.send(isValid ? 'Ok.' : 'Fails.');
+      logger.warn(`[qBittorrent] Login failed: invalid credentials for "${username || 'unknown'}"`);
+      res.send('Fails.');
     } catch (err) {
       logger.error('[qBittorrent] Auth error:', err);
       res.send('Fails.');
@@ -125,14 +153,14 @@ class QBittorrentHandler {
    * Initial sync is triggered by amuleManager.onConnect callback (see server.js)
    */
   initCategories() {
-    if (this.config && !this.config.AMULE_ENABLED) {
-      // aMule disabled: mark as initialized (no categories to load)
+    if (this.registry && this.registry.getByType('amule').length === 0) {
+      // aMule not configured: mark as initialized (no categories to load)
       this.categoryCacheInitialized = true;
     }
 
     // Periodic refresh (every 5 minutes)
     setInterval(() => {
-      if (this.config && !this.config.AMULE_ENABLED) return;
+      if (this.registry && this.registry.getByType('amule').length === 0) return;
       this.syncCategories().catch(err => {
         logger.error('[qBittorrent] Failed to refresh category mappings:', err);
       });
@@ -427,6 +455,15 @@ class QBittorrentHandler {
               category: category || '',
               addedAt: Date.now()
             });
+
+            // Record ownership for the authenticated API user
+            if (req.apiUser?.id && this.userManager) {
+              const instanceId = this.getAmuleInstanceId?.();
+              if (instanceId) {
+                this.userManager.recordOwnership(itemKey(instanceId, ed2kHash), req.apiUser.id);
+              }
+            }
+
             logger.log(`[qBittorrent] Successfully added download: ${ed2kHash}`);
           } else {
             logger.log(`[qBittorrent] Failed to add download`);

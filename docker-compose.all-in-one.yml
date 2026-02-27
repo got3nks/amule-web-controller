@@ -6,16 +6,18 @@ services:
       - "4662:4662"       # ED2K TCP
       - "4665:4665/udp"   # ED2K UDP (global search)
       - "4672:4672/udp"   # ED2K UDP
-    volumes:
-      - ./data/aMule/config:/home/amule/.aMule
-      - ./data/aMule/incoming:/incoming
-      - ./data/aMule/temp:/temp
     environment:
       - PUID=1000
       - PGID=1000
       - TZ=Europe/Rome
       - GUI_PWD=${AMULE_PASSWORD:-admin}
       - WEBUI_PWD=${AMULE_PASSWORD:-admin}
+      - INCOMING_DIR=/downloads
+      - TEMP_DIR=/downloads/temp
+    volumes:
+      - ./data/aMule/config:/home/amule/.aMule
+      - ./data/aMule/incoming:/downloads
+      - ./data/aMule/temp:/downloads/temp
     stop_grace_period: 30s
     restart: unless-stopped
 
@@ -64,47 +66,38 @@ services:
       - qbittorrent
     ports:
       - "${PORT:-4000}:${PORT:-4000}"
+    # For additional environment variables (Deluge, Sonarr, Radarr, auth, etc.)
+    # see .env.example. Copy it to .env and uncomment what you need.
+    env_file:
+      - path: .env
+        required: false
     environment:
       - NODE_ENV=production
       - PORT=${PORT:-4000}
-      # Optional: Uncomment to pre-configure via environment variables
-      # Web UI Authentication
-      # - WEB_AUTH_ENABLED=true
-      # - WEB_AUTH_PASSWORD=your_secure_password
-      # aMule Connection
+      # Bundled client connections
       - AMULE_ENABLED=true
-      - AMULE_HOST=amule  # aMule container service name
+      - AMULE_HOST=amule
       - AMULE_PORT=4712
-      - AMULE_PASSWORD=${AMULE_PASSWORD:-admin}  # Must match GUI_PWD in amule container
-      # rTorrent Connection
+      - AMULE_PASSWORD=${AMULE_PASSWORD:-admin}
       - RTORRENT_ENABLED=true
-      - RTORRENT_HOST=rtorrent  # rTorrent container service name
+      - RTORRENT_HOST=rtorrent
       - RTORRENT_PORT=8000
       - RTORRENT_PATH=/RPC2
-      # qBittorrent Connection
       - QBITTORRENT_ENABLED=true
-      - QBITTORRENT_HOST=qbittorrent  # qBittorrent container service name
+      - QBITTORRENT_HOST=qbittorrent
       - QBITTORRENT_PORT=8080
       - QBITTORRENT_USERNAME=admin
-      - QBITTORRENT_PASSWORD= # You have to set your password through qBittorrent WebUI: Tools > Options > Web UI > Authentication
-      # Prowlarr Integration (requires rTorrent or qBittorrent)
+      - QBITTORRENT_PASSWORD= # Set via qBittorrent WebUI: Tools > Options > Web UI > Authentication
       - PROWLARR_ENABLED=true
       - PROWLARR_URL=http://prowlarr:9696
-      # - PROWLARR_API_KEY=your_api_key  # Get from Prowlarr Settings → General
-      # Sonarr/Radarr Integration (optional)
-      # - SONARR_URL=http://sonarr:8989
-      # - SONARR_API_KEY=your_api_key
-      # - RADARR_URL=http://radarr:7878
-      # - RADARR_API_KEY=your_api_key
     volumes:
       - ./logs:/usr/src/app/server/logs
       - ./data:/usr/src/app/server/data
       # Event Scripting: Edit scripts/custom.sh to run your own scripts on events
       # - ./scripts:/usr/src/app/scripts
-      # Download directories (optional): Required for moving/deleting files
-      - ./data/aMule/incoming:/incoming
+      # Download directories (optional): Required for moving/deleting files (clients without native APIs)
+      - ./data/aMule/incoming:/downloads/aMule
       - ./data/rTorrent/downloads:/downloads/rTorrent
-      - ./data/qBittorrent/downloads:/downloads/qBittorrent
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:' + (process.env.PORT || 4000) + '/health', r => r.statusCode === 200 ? process.exit(0) : process.exit(1)).on('error', () => process.exit(1))"]
       interval: 30s

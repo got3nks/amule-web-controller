@@ -1,4 +1,4 @@
-FROM node:18-alpine AS builder
+FROM node:22-alpine AS builder
 
 # Build frontend (Tailwind CSS + JS bundle)
 WORKDIR /build
@@ -8,24 +8,28 @@ COPY static ./static
 RUN npm install
 RUN npm run build
 
-FROM node:18-alpine
+FROM node:22-alpine
 
-# Install git (required for npm to install from GitHub)
-# Install python3, pip, jq for event scripting with Apprise
+# Install runtime dependencies + Apprise
 RUN apk add --no-cache git bash curl python3 py3-pip jq && \
     pip3 install --no-cache-dir --break-system-packages apprise
 
 # Create app directory
 WORKDIR /usr/src/app
 
-# Install app dependencies
+# Install app dependencies (only re-runs when package.json changes)
+# Build tools needed for better-sqlite3 native addon, removed after
 COPY server/package.json ./server/
+RUN apk add --no-cache --virtual .build-deps make g++ python3 && \
+    npm install --prefix server --omit=dev && \
+    apk del .build-deps
+
+# Copy server source code (changes here don't invalidate npm install cache)
 COPY server/server.js ./server/
 COPY server/database.js ./server/
 COPY server/lib ./server/lib
 COPY server/middleware ./server/middleware
 COPY server/modules ./server/modules
-RUN npm install --prefix server --omit=dev
 
 # Copy static assets (HTML, images, icons, manifest - no source JS)
 COPY static/index.html ./static/

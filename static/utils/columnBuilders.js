@@ -335,7 +335,7 @@ export const buildStatusColumn = ({
  * @param {function} options.resetLoaded - Reset loaded items function (for load-more mode)
  * @param {Array} options.filterOptions - Filter options array [{value, label}]
  * @param {Array} options.categories - Unified categories array for color lookup
- * @param {function} options.onCategoryClick - Optional click handler (hash, name, categoryName, client) => void
+ * @param {function} options.onCategoryClick - Optional click handler (hash, name, categoryName, instanceId) => void
  * @param {boolean} options.disabled - Disable click handlers (for selection mode)
  * @returns {Object} Column definition
  */
@@ -358,7 +358,8 @@ export const buildCategoryColumn = ({
     filterOptions
   ) : undefined,
   render: (item) => {
-    const isClickable = onCategoryClick && !disabled;
+    const isDisabled = typeof disabled === 'function' ? disabled(item) : disabled;
+    const isClickable = onCategoryClick && !isDisabled;
 
     // Get category name from unified item (all items now have category name)
     const categoryName = item.category || 'Default';
@@ -382,7 +383,7 @@ export const buildCategoryColumn = ({
 
     if (isClickable) {
       return h('button', {
-        onClick: () => onCategoryClick(item.hash, item.name, categoryName, item.client || 'amule'),
+        onClick: () => onCategoryClick(item.hash, item.name, categoryName, item.instanceId),
         title: 'Click to change category',
         className: 'text-xs px-2 py-1 rounded flex items-center gap-1 hover:opacity-80 transition-opacity'
       }, ...content);

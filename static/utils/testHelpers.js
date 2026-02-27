@@ -1,120 +1,75 @@
 /**
  * Test Helpers
  *
- * Shared utility functions for test result validation
+ * Shared utility functions for test result validation.
+ * Uses `clientTestResults` (per-instance keyed object) for client checks.
  */
+
+/**
+ * Check if any client instance has a failure in test results.
+ * @param {Object} clientTestResults - { [key]: { success, message, _label } }
+ */
+function _hasClientErrors(clientTestResults) {
+  if (!clientTestResults) return false;
+  return Object.values(clientTestResults).some(r => r && r.success === false);
+}
 
 /**
  * Check if test results contain any errors
- * @param {object} testResults - Test results object with results property
- * @param {object} formData - Form data to check which integrations are enabled
+ * @param {object} testResults - Test results object with results property (non-client: directories, integrations)
+ * @param {object} clientTestResults - Per-instance client test results
  * @returns {boolean} True if there are any test errors
  */
-export function hasTestErrors(testResults, formData) {
+export function hasTestErrors(testResults, clientTestResults) {
+  // Check client errors
+  if (_hasClientErrors(clientTestResults)) return true;
+
   if (!testResults || !testResults.results) return false;
-
   const results = testResults.results;
-
-  // Check aMule (only if enabled)
-  if (formData?.amule?.enabled !== false && results.amule && results.amule.success === false) {
-    return true;
-  }
-
-  // Check rtorrent (only if enabled)
-  if (formData?.rtorrent?.enabled && results.rtorrent && results.rtorrent.success === false) {
-    return true;
-  }
-
-  // Check qbittorrent (only if enabled)
-  if (formData?.qbittorrent?.enabled && results.qbittorrent && results.qbittorrent.success === false) {
-    return true;
-  }
 
   // Check directories (data and logs are required)
   if (results.directories) {
-    if (results.directories.data && !results.directories.data.success) {
-      return true;
-    }
-    if (results.directories.logs && !results.directories.logs.success) {
-      return true;
-    }
-    // GeoIP is optional, so we don't check it
+    if (results.directories.data && !results.directories.data.success) return true;
+    if (results.directories.logs && !results.directories.logs.success) return true;
   }
 
-  // Check Sonarr (only if enabled)
-  if (formData?.integrations?.sonarr?.enabled && results.sonarr && results.sonarr.success === false) {
-    return true;
-  }
-
-  // Check Radarr (only if enabled)
-  if (formData?.integrations?.radarr?.enabled && results.radarr && results.radarr.success === false) {
-    return true;
-  }
-
-  // Check Prowlarr (only if enabled)
-  if (formData?.integrations?.prowlarr?.enabled && results.prowlarr && results.prowlarr.success === false) {
-    return true;
-  }
+  // Check integrations — if a result exists and failed, it's an error
+  if (results.sonarr && results.sonarr.success === false) return true;
+  if (results.radarr && results.radarr.success === false) return true;
+  if (results.prowlarr && results.prowlarr.success === false) return true;
 
   return false;
 }
 
 /**
- * Check if results object contains any errors (alternative form for direct return value checking)
+ * Check if results object contains any errors (for direct return value checking)
  * @param {object} results - Results object with results property
- * @param {object} formData - Form data to check which integrations are enabled
+ * @param {object} clientTestResults - Per-instance client test results
  * @returns {boolean} True if there are any errors
  */
-export function checkResultsForErrors(results, formData) {
+export function checkResultsForErrors(results, clientTestResults) {
+  // Check client errors
+  if (_hasClientErrors(clientTestResults)) return true;
+
   if (!results || !results.results) return false;
-
   const testData = results.results;
-
-  // Check aMule (only if enabled)
-  if (formData?.amule?.enabled !== false && testData.amule && testData.amule.success === false) {
-    return true;
-  }
-
-  // Check rtorrent (only if enabled)
-  if (formData?.rtorrent?.enabled && testData.rtorrent && testData.rtorrent.success === false) {
-    return true;
-  }
-
-  // Check qbittorrent (only if enabled)
-  if (formData?.qbittorrent?.enabled && testData.qbittorrent && testData.qbittorrent.success === false) {
-    return true;
-  }
 
   // Check directories (data and logs are required)
   if (testData.directories) {
-    if (testData.directories.data && !testData.directories.data.success) {
-      return true;
-    }
-    if (testData.directories.logs && !testData.directories.logs.success) {
-      return true;
-    }
+    if (testData.directories.data && !testData.directories.data.success) return true;
+    if (testData.directories.logs && !testData.directories.logs.success) return true;
   }
 
-  // Check Sonarr (only if enabled)
-  if (formData?.integrations?.sonarr?.enabled && testData.sonarr && testData.sonarr.success === false) {
-    return true;
-  }
-
-  // Check Radarr (only if enabled)
-  if (formData?.integrations?.radarr?.enabled && testData.radarr && testData.radarr.success === false) {
-    return true;
-  }
-
-  // Check Prowlarr (only if enabled)
-  if (formData?.integrations?.prowlarr?.enabled && testData.prowlarr && testData.prowlarr.success === false) {
-    return true;
-  }
+  // Check integrations
+  if (testData.sonarr && testData.sonarr.success === false) return true;
+  if (testData.radarr && testData.radarr.success === false) return true;
+  if (testData.prowlarr && testData.prowlarr.success === false) return true;
 
   return false;
 }
 
 /**
- * Build test payload for testConfig API
+ * Build test payload for testConfig API (used by SetupWizard)
  * @param {object} formData - Form data containing configuration
  * @param {boolean} unmaskPasswords - Whether to unmask passwords (for SettingsView)
  * @param {function} getUnmaskedConfig - Function to unmask config (optional, for SettingsView)
@@ -127,19 +82,14 @@ export function buildTestPayload(formData, unmaskPasswords = false, getUnmaskedC
     directories: configData.directories
   };
 
-  // Add aMule if enabled
-  if (configData.amule?.enabled !== false) {
-    payload.amule = configData.amule;
-  }
-
-  // Add rtorrent if enabled
-  if (configData.rtorrent?.enabled) {
-    payload.rtorrent = configData.rtorrent;
-  }
-
-  // Add qbittorrent if enabled
-  if (configData.qbittorrent?.enabled) {
-    payload.qbittorrent = configData.qbittorrent;
+  // Build from clients array
+  if (configData.clients) {
+    const seenTypes = new Set();
+    for (const client of configData.clients) {
+      if (client.enabled === false || seenTypes.has(client.type)) continue;
+      seenTypes.add(client.type);
+      payload[client.type] = { ...client, instanceId: client.id };
+    }
   }
 
   // Add Sonarr if enabled

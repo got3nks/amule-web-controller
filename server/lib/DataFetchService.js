@@ -1,31 +1,22 @@
 /**
- * DataFetchService - Centralized data fetching, normalization, and enrichment
+ * DataFetchService - Centralized data assembly and enrichment
  *
- * This service encapsulates all logic for fetching data from aMule and rtorrent,
- * normalizing it to a common format, and enriching it with GeoIP/hostname data.
+ * Fetches data from all connected client managers via their unified fetchData()
+ * interface, assembles unified items, and enriches with GeoIP/hostname data.
  *
  * Both webSocketHandlers and autoRefreshManager use this service to avoid
  * code duplication and ensure consistent data handling.
  */
 
 const BaseModule = require('./BaseModule');
-const {
-  normalizeAmuleDownload,
-  normalizeAmuleSharedFile,
-  normalizeAmuleUpload,
-  normalizeRtorrentDownload,
-  extractRtorrentUploads,
-  normalizeQBittorrentDownload,
-  extractQBittorrentUploads
-} = require('./downloadNormalizer');
 const { assembleUnifiedItems } = require('./unifiedItemBuilder');
+const { itemKey } = require('./itemKey');
 const moveOperationManager = require('./MoveOperationManager');
 const config = require('../modules/config');
+const clientMeta = require('./clientMeta');
 
-// Singleton managers - imported directly instead of injected
-const amuleManager = require('../modules/amuleManager');
-const rtorrentManager = require('../modules/rtorrentManager');
-const qbittorrentManager = require('../modules/qbittorrentManager');
+// Client registry - replaces direct singleton manager imports
+const registry = require('./ClientRegistry');
 const geoIPManager = require('../modules/geoIPManager');
 const categoryManager = require('./CategoryManager');
 const hostnameResolver = require('./hostnameResolver');
@@ -119,7 +110,7 @@ class DataFetchService extends BaseModule {
       }
 
       // Look up from history database
-      const historyEntry = this.downloadHistoryDB.getByHash(item.hash);
+      const historyEntry = this.downloadHistoryDB.getByHash(item.hash, item.instanceId);
       if (historyEntry && historyEntry.started_at) {
         item.addedAt = new Date(historyEntry.started_at);
       }
@@ -138,7 +129,7 @@ class DataFetchService extends BaseModule {
     }
 
     for (const item of items) {
-      const moveOp = activeOps.get(item.hash);
+      const moveOp = activeOps.get(itemKey(item.instanceId, item.hash));
       if (moveOp) {
         // Override status to 'moving'
         item.status = 'moving';
@@ -161,178 +152,12 @@ class DataFetchService extends BaseModule {
   }
 
   // ============================================================================
-  // AMULE PROCESSING
-  // ============================================================================
-
-  /**
-   * Normalize raw aMule uploads data structure.
-   * Handles EC protocol quirks: EC_TAG_CLIENT wrapper, single-object responses.
-   * @param {*} uploadsData - Raw uploads data from aMule
-   * @returns {Array} Normalized uploads array
-   */
-  _normalizeAmuleUploads(uploadsData) {
-    if (!uploadsData) {
-      return [];
-    }
-
-    // Extract EC_TAG_CLIENT if present (aMule specific)
-    let uploads = uploadsData.EC_TAG_CLIENT || uploadsData;
-
-    // Normalize to array (aMule can return single object)
-    if (Array.isArray(uploads)) {
-      // Already an array
-    } else if (uploads && typeof uploads === 'object') {
-      uploads = [uploads];
-    } else {
-      uploads = [];
-    }
-
-    if (uploads.length === 0) {
-      return uploads;
-    }
-
-    // Normalize EC_TAG_* fields to clean names
-    return uploads.map(normalizeAmuleUpload);
-  }
-
-  /**
-   * Process all raw aMule data into normalized downloads, shared files, and uploads.
-   * Handles the bidirectional data flow between uploads and shared files:
-   *   uploads → shared files: per-file upload speed and peer list
-   *   shared files → uploads: category, size, hash
-   *
-   * @param {Array} rawDownloads - Raw downloads from aMule
-   * @param {*} rawUploads - Raw uploads data from aMule (EC_TAG_CLIENT wrapper)
-   * @param {Array} rawSharedFiles - Raw shared files from aMule
-   * @param {Array} categories - Categories for name lookup and path-based derivation
-   * @returns {Object} { downloads, sharedFiles, uploads }
-   */
-  _processAmuleData(rawDownloads, rawUploads, rawSharedFiles, categories = []) {
-    // ── Normalize downloads ──────────────────────────────────────────────
-    const downloads = (rawDownloads || []).map(d => normalizeAmuleDownload(d, categories));
-
-    // ── Normalize uploads (unwrap EC protocol quirks) ────────────────────
-    let uploads = this._normalizeAmuleUploads(rawUploads);
-
-    // ── Aggregate upload speed by file name (for shared file assembly) ───
-    const speedByFile = new Map();
-
-    for (const upload of uploads) {
-      const fileName = upload.fileName || '';
-      if (!fileName) continue;
-
-      const speed = upload.uploadRate || 0;
-      if (speed > 0) {
-        speedByFile.set(fileName, (speedByFile.get(fileName) || 0) + speed);
-      }
-    }
-
-    // ── Normalize shared files (attach aggregated upload speed) ──────────
-    const sharedFiles = (rawSharedFiles || []).map(f => {
-      const normalized = normalizeAmuleSharedFile(f, categories);
-      return {
-        ...normalized,
-        uploadSpeed: speedByFile.get(normalized.name) || 0
-      };
-    });
-
-    // ── Enrich uploads with category/size/hash from shared files ─────────
-    if (sharedFiles.length > 0 && uploads.length > 0) {
-      const sharedByName = new Map();
-      for (const sf of sharedFiles) {
-        if (sf.name) {
-          sharedByName.set(sf.name, sf);
-        }
-      }
-
-      if (sharedByName.size > 0) {
-        uploads = uploads.map(upload => {
-          const sf = sharedByName.get(upload.fileName);
-          if (sf) {
-            return {
-              ...upload,
-              category: sf.category,
-              fileSize: sf.size,
-              sharedFileHash: sf.hash
-            };
-          }
-          return upload;
-        });
-      }
-    }
-
-    return { downloads, sharedFiles, uploads };
-  }
-
-  // ============================================================================
-  // RTORRENT PROCESSING
-  // ============================================================================
-
-  /**
-   * Process raw rtorrent downloads into all derived data
-   * Normalizes each item ONCE, then derives uploads and labels
-   * @param {Array} rawDownloads - Raw downloads from rtorrent
-   * @returns {Object} { downloads, uploads, labels }
-   */
-  _processRtorrentData(rawDownloads) {
-    if (!rawDownloads || rawDownloads.length === 0) {
-      return { downloads: [], uploads: [], labels: [] };
-    }
-
-    // Normalize all downloads
-    const downloads = rawDownloads.map(d => normalizeRtorrentDownload(d));
-
-    // Extract uploads (peers with active upload) from raw data
-    const uploads = extractRtorrentUploads(rawDownloads);
-
-    // Extract unique labels
-    const labelsSet = new Set();
-    rawDownloads.forEach(d => {
-      if (d.label) labelsSet.add(d.label);
-    });
-    const labels = Array.from(labelsSet).sort();
-
-    return { downloads, uploads, labels };
-  }
-
-  // ============================================================================
-  // QBITTORRENT PROCESSING
-  // ============================================================================
-
-  /**
-   * Process raw qBittorrent torrents into all derived data
-   * Normalizes each item ONCE, then derives uploads and categories
-   * @param {Array} rawTorrents - Raw torrents from qBittorrent
-   * @returns {Object} { downloads, uploads, categories }
-   */
-  _processQBittorrentData(rawTorrents) {
-    if (!rawTorrents || rawTorrents.length === 0) {
-      return { downloads: [], uploads: [], categories: [] };
-    }
-
-    // Normalize all torrents
-    const downloads = rawTorrents.map(t => normalizeQBittorrentDownload(t));
-
-    // Extract uploads (peers with active upload) from raw data
-    const uploads = extractQBittorrentUploads(rawTorrents);
-
-    // Extract unique categories
-    const categoriesSet = new Set();
-    rawTorrents.forEach(t => {
-      if (t.category) categoriesSet.add(t.category);
-    });
-    const categories = Array.from(categoriesSet).sort();
-
-    return { downloads, uploads, categories };
-  }
-
-  // ============================================================================
   // PUBLIC API
   // ============================================================================
 
   /**
    * Get all data for batch update (downloads, shared, uploads, categories)
-   * Optimized to minimize API calls - fetches each source only once
+   * Fetches from all connected clients via their unified fetchData() interface
    * @returns {Promise<Object>} Batch data object
    */
   async getBatchData() {
@@ -355,7 +180,7 @@ class DataFetchService extends BaseModule {
     let allShared = [];
     let allUploads = [];
     let categories = [];
-    let clientDefaultPaths = { amule: null, rtorrent: null, qbittorrent: null };
+    let clientDefaultPaths = {};
     let hasPathWarnings = false;
 
     // Get unified categories from CategoryManager if available
@@ -366,91 +191,51 @@ class DataFetchService extends BaseModule {
       hasPathWarnings = frontendData.hasPathWarnings || false;
     }
 
-    // Fetch all aMule data if connected
-    if (amuleManager && amuleManager.isConnected()) {
-      let rawDownloads = [], rawUploads = null, rawSharedFiles = [];
+    // Use unified categories for normalization (convert frontend format to normalizer format)
+    const categoriesForNormalizer = categories.map(c => ({
+      id: c.id,
+      title: c.title,
+      color: c.color,
+      path: c.path,
+      comment: c.comment,
+      priority: c.priority
+    }));
 
-      // Use unified categories for normalization (convert frontend format to normalizer format)
-      const categoriesForNormalizer = categories.map(c => ({
-        id: c.id,
-        title: c.title,
-        color: c.color,
-        path: c.path,
-        comment: c.comment,
-        priority: c.priority
-      }));
-
+    // Fetch data from all connected clients via unified fetchData() interface
+    for (const manager of registry.getConnected()) {
       try {
-        rawDownloads = await amuleManager.getClient().getDownloadQueue();
+        const data = await manager.fetchData(categoriesForNormalizer);
+        allDownloads = allDownloads.concat(data.downloads);
+        allShared = allShared.concat(data.sharedFiles);
+        allUploads = allUploads.concat(data.uploads);
       } catch (err) {
-        this.log('Error fetching aMule downloads:', err.message);
-      }
-
-      try {
-        rawUploads = await amuleManager.getClient().getUploadingQueue();
-      } catch (err) {
-        this.log('Error fetching aMule uploads:', err.message);
-      }
-
-      try {
-        rawSharedFiles = await amuleManager.getClient().getSharedFiles();
-      } catch (err) {
-        this.log('Error fetching aMule shared files:', err.message);
-      }
-
-      const amuleData = this._processAmuleData(rawDownloads, rawUploads, rawSharedFiles, categoriesForNormalizer);
-      allDownloads = allDownloads.concat(amuleData.downloads);
-      allShared = allShared.concat(amuleData.sharedFiles);
-      allUploads = allUploads.concat(amuleData.uploads);
-    }
-
-    // Fetch all rtorrent data if connected (SINGLE fetch, reused for all)
-    if (rtorrentManager && rtorrentManager.isConnected()) {
-      try {
-        const rawDownloads = await rtorrentManager.getDownloads();
-        const rtorrentData = this._processRtorrentData(rawDownloads);
-
-        allDownloads = allDownloads.concat(rtorrentData.downloads);
-        allShared = allShared.concat(rtorrentData.downloads);
-        allUploads = allUploads.concat(rtorrentData.uploads);
-      } catch (err) {
-        this.log('Error fetching rtorrent data:', err.message);
-      }
-    }
-
-    // Fetch all qBittorrent data if connected
-    if (qbittorrentManager && qbittorrentManager.isConnected()) {
-      try {
-        const rawTorrents = await qbittorrentManager.getTorrents();
-        const qbittorrentData = this._processQBittorrentData(rawTorrents);
-
-        allDownloads = allDownloads.concat(qbittorrentData.downloads);
-        allShared = allShared.concat(qbittorrentData.downloads); // qBittorrent always seeds
-        allUploads = allUploads.concat(qbittorrentData.uploads);
-      } catch (err) {
-        this.log('Error fetching qBittorrent data:', err.message);
+        this.log(`Error fetching ${manager.instanceId} data:`, err.message);
       }
     }
 
     // Build unified items from the normalized arrays
     const items = assembleUnifiedItems(allDownloads, allShared, allUploads, categoryManager);
 
-    // Enrich all peer arrays with GeoIP and hostname data (single pass, both clients)
+    // Enrich all peer arrays with GeoIP and hostname data (single pass, all clients)
     this._enrichItems(items);
 
     // Inject move operation status into items
     this._injectMoveStatus(items);
+
+    // Separate shared files for history: only from clients with separate completion tracking
+    // (aMule reports completion via shared files list; torrent clients use progress field)
+    const sharedFilesForHistory = allShared.filter(f =>
+      clientMeta.hasCapability(f.clientType, 'sharedMeansComplete')
+    );
 
     const result = {
       items,
       categories,
       clientDefaultPaths,
       hasPathWarnings,
-      // Return filtered data for history status computation (internal use only)
-      _amuleDownloads: allDownloads.filter(d => d.clientType === 'amule'),
-      _amuleSharedFiles: allShared.filter(f => f.clientType === 'amule'),
-      _rtorrentDownloads: allShared.filter(f => f.clientType === 'rtorrent'),
-      _qbittorrentDownloads: allShared.filter(f => f.clientType === 'qbittorrent')
+      // Unified arrays for history status computation (internal use only)
+      _allDownloads: allDownloads,
+      _sharedFilesForHistory: sharedFilesForHistory
     };
 
     // Cache the result for history API and other consumers

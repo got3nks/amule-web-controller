@@ -135,6 +135,29 @@ body.text-size-large button {
   }
 }
 
+/* Full-screen large modals on mobile (below Tailwind md breakpoint) */
+/* Add .modal-full class to the modal box element to opt in */
+@media (max-width: 767px) {
+  #portal-root > .fixed.inset-0:has(> .modal-full) {
+    padding: 0 !important;
+  }
+
+  #portal-root > .fixed.inset-0 > .modal-full {
+    max-width: 100% !important;
+    width: 100% !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    max-height: 100vh !important;
+    max-height: 100dvh !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+  }
+
+  #portal-root > .fixed.inset-0 > .modal-full [class*="max-h-["] {
+    max-height: 100% !important;
+  }
+}
+
 /* Scale specific UI elements (including responsive variants) */
 body.text-size-small .text-xs,
 body.text-size-small .sm\:text-xs,

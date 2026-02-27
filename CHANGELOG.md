@@ -5,6 +5,110 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - Five-Client Support, Multi-Instance & User Management
+
+### 🎉 Major Release - Five Download Clients & Multi-User
+
+This release adds **Deluge** and **Transmission** as fully supported clients, introduces **multi-instance support** allowing multiple instances of the same client type, and a complete **user management system** with capability-based authorization. The entire client architecture has been rebuilt around an abstract, capability-driven model.
+
+### ✨ Added
+
+#### **Deluge Integration**
+- **Full Deluge Support** - Connect to Deluge via its WebUI JSON-RPC API
+- **Category Sync** - Bidirectional label synchronization between aMuTorrent and Deluge
+- **Torrent Management** - Add magnets and torrent files, pause/resume/delete
+- **Transfer Statistics** - Upload/download speeds and totals tracked in metrics
+- **File Browser** - View torrent file trees via `GET /api/deluge/files/:hash`
+- **Configuration** - Setup via Settings page or environment variables (`DELUGE_ENABLED`, `DELUGE_HOST`, `DELUGE_PORT`, `DELUGE_PASSWORD`)
+
+#### **Transmission Integration**
+- **Full Transmission Support** - Connect to Transmission via its RPC API
+- **Category Sync** - Bidirectional category synchronization between aMuTorrent and Transmission
+- **Torrent Management** - Add magnets and torrent files, pause/resume/stop/delete
+- **Transfer Statistics** - Upload/download speeds and totals tracked in metrics
+- **File Browser** - View torrent file trees via `GET /api/transmission/files/:hash`
+- **Configuration** - Setup via Settings page or environment variables (`TRANSMISSION_ENABLED`, `TRANSMISSION_HOST`, `TRANSMISSION_PORT`, `TRANSMISSION_USERNAME`, `TRANSMISSION_PASSWORD`)
+
+#### **Multi-Instance Support**
+- **Multiple Instances Per Client Type** - Run multiple aMule, rTorrent, qBittorrent, Deluge, or Transmission instances simultaneously
+- **Dynamic Instance Management** - Add, configure, and remove client instances from Settings without restart
+- **Deterministic Instance IDs** - Stable `{type}-{host}-{port}` identifiers for each instance
+- **Compound Item Keys** - Downloads identified by `instanceId:hash` for cross-instance uniqueness
+- **Per-Instance Category Sync** - Each instance syncs categories independently on connect
+- **Environment Variable Configuration** - First instance of each client type configurable via env vars; additional instances managed through Settings UI
+
+#### **User Management**
+- **Multi-User Authentication** - Create and manage multiple user accounts with username/password login
+- **Trusted Proxy SSO** - Single sign-on via trusted proxy headers (e.g., Authelia, Authentik) with auto-provisioning of SSO users
+- **Capability-Based Authorization** - Fine-grained permissions: `add_downloads`, `edit_downloads`, `edit_all_downloads`, `delete_downloads`, `clear_history`, `manage_categories`
+- **Admin Users** - Full system access with user management abilities
+- **Download Ownership** - Downloads are owned by the user who added them; mutation restricted to owner (or users with `edit_all_downloads`)
+- **Per-User WebSocket Filtering** - Each user only sees downloads they own (admins see all)
+- **Per-User API Keys** - External API integrations (Torznab, qBittorrent compat) use individual API keys instead of shared password
+- **User Management UI** - Admin panel to create, edit, disable, and delete users with capability presets
+- **Profile Management** - Self-service password change
+- **Session Invalidation** - Disabling a user or changing capabilities force-disconnects their active sessions and WebSocket connections
+
+#### **Client Abstraction Layer**
+- **BaseClientManager** - Shared base class for all client managers with common category/download CRUD interface
+- **ClientRegistry** - Runtime client dispatch by instance ID, replacing hardcoded client-type lookups
+- **clientMeta.js** - Static capability registry (`categories`, `nativeMove`, `sharedFiles`, `stopReplacesPause`, `logs`, `trackers`, `search`, etc.)
+- **Capability-Driven Logic** - Frontend and backend use capabilities instead of `clientType === 'x'` checks
+- **Field Registry** - Modular field definitions replacing monolithic field formatters
+
+### 🐛 Fixed
+
+- **IPv6 Peer Address Parsing** - Fixed parsing of IPv6 addresses in qBittorrent peer data
+- **Healthcheck Dual-Stack Binding** - Healthcheck no longer fails when server binds to `::` (IPv6 dual-stack)
+- **Table Column Alignment** - Fixed column alignment and width consistency across views
+- **Mobile Download Speed** - Error state items now show download speed in mobile card view
+- **Login Delay Timer** - Countdown timer correctly shown on page load after refresh
+
+### 🔧 Changed
+
+#### **Docker**
+- **Node 22** - Upgraded Docker base image from Node 18 to Node 22
+- **Improved Layer Caching** - npm install runs before source copy for faster rebuilds
+- **Simplified docker-compose** - Uses `env_file` directive pointing to `.env` instead of inline commented environment variables
+- **Removed qBittorrent Volume** - No download directory mount needed (uses native API for moves/deletes)
+
+#### **Architecture**
+- **CategoryManager Refactored** - Per-instance category sync, propagation to other clients on connect, `importCategory()`/`linkAmuleId()`/`getCategoriesSnapshot()` primitives
+- **Per-Instance aMule IDs** - Category-to-aMule-ID mapping is now per-instance instead of global
+- **Download Normalizer** - Extended with Deluge and Transmission normalizers
+- **Unified Item Builder** - `isTorrentClient()` helper, torrent utilities extracted to `torrentUtils.js`
+- **WebSocket Handlers** - Capability-gated actions, per-item ownership checks, filtered broadcasts
+
+#### **Frontend**
+- **Client Instance Management** - Add/edit/remove client instances from Settings UI
+- **Capability-Gated Navigation** - Nav items, action buttons, and views filtered by user capabilities
+- **Header User Dropdown** - Profile and logout accessible from header
+- **aMule Instance Selector** - Dropdown to select target aMule instance for ED2K downloads
+- **New Client Logos** - Dedicated SVG icons for Deluge and Transmission
+
+### 📦 Dependencies
+
+#### Added
+- `helmet` - HTTP security headers
+- `ipaddr.js` - IP address parsing and validation
+- `express-rate-limit` - Request rate limiting
+
+#### Updated
+- `xmlbuilder2` 3.x → 4.x
+
+#### Removed
+- `js-yaml` - No longer needed
+
+### 📝 Documentation
+
+- **Deluge Integration Guide** - New `docs/DELUGE.md` covering setup, Docker, and label sync
+- **Transmission Integration Guide** - New `docs/TRANSMISSION.md` covering setup, Docker, and group mapping
+- **User Management Guide** - New `docs/USERS.md` covering multi-user setup, capabilities, SSO, and API keys
+- **Updated Configuration Docs** - Multi-instance env vars, new client configs, user management settings
+- **Updated Client Docs** - aMule, rTorrent, qBittorrent docs refreshed for multi-instance
+
+---
+
 ## [3.1.3] - Configurable Bind Address & Security Hardening
 
 ### ✨ Added

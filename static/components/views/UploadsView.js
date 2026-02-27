@@ -36,9 +36,10 @@ const UploadsView = () => {
       name: item.name,
       size: item.size,
       hash: item.hash,
+      instanceId: item.instanceId,
       client: item.client,
       tracker: item.tracker,
-      categoryId: item.client === 'amule' ? (item.categoryId ?? 0) : undefined,
+      categoryId: item.networkType === 'ed2k' ? (item.categoryId ?? 0) : undefined,
       category: item.category,
       parentItem: item,
       parentHash: item.hash
@@ -109,7 +110,7 @@ const UploadsView = () => {
   // ============================================================================
   const handleShowInfo = useCallback((uploadItem) => {
     if (uploadItem.parentHash) {
-      openFileInfo(uploadItem.parentHash);
+      openFileInfo(uploadItem.parentHash, uploadItem.instanceId);
     }
   }, [openFileInfo]);
 
@@ -206,6 +207,7 @@ const UploadsView = () => {
       h(MobileCardHeader, {
         showBadge,
         clientType: item.client,
+        instanceId: item.instanceId,
         fileName,
         fileSize,
         onNameClick: hasParentFile ? (e, anchorEl) => openContextMenu(e, item, anchorEl) : undefined,
@@ -382,7 +384,7 @@ const UploadsView = () => {
       pageSize,
       onPageSizeChange,
       skipSort: contextMenu.show,
-      getRowKey: (item) => item.id,
+      getRowKey: (item) => item.instanceId ? `${item.instanceId}:${item.id}` : item.id,
       getRowClassName: (item) => getRowHighlightClass(
         false,
         contextMenu.show && contextMenu.item?.id === item.id

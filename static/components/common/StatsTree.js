@@ -42,7 +42,8 @@ const StatsTree = ({
   loading,
   showHeader = true,
   expandedNodes: controlledExpandedNodes,
-  onExpandedNodesChange
+  onExpandedNodesChange,
+  toolbarPrefix
 }) => {
   // Support both controlled and uncontrolled modes
   const [internalExpandedNodes, setInternalExpandedNodes] = useState({});
@@ -186,7 +187,9 @@ const StatsTree = ({
     ),
 
     // Expand/Collapse buttons when header is hidden
-    !showHeader && h('div', { className: 'flex gap-2 justify-end' },
+    !showHeader && h('div', { className: 'flex items-center gap-2' },
+      toolbarPrefix,
+      h('div', { className: 'flex-1' }),
       h(Button, {
         variant: 'secondary',
         onClick: expandAll,

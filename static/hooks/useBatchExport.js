@@ -7,6 +7,7 @@
 import { useCallback } from 'https://esm.sh/react@18.2.0';
 import { useCopyToClipboard } from './useCopyToClipboard.js';
 import { getExportLink } from '../utils/index.js';
+import { itemKey } from '../utils/itemKey.js';
 
 /**
  * Hook for batch exporting links with copy status feedback
@@ -22,7 +23,7 @@ export const useBatchExport = ({
   const { copyStatus: batchCopyStatus, handleCopy } = useCopyToClipboard();
 
   const handleBatchExport = useCallback(async () => {
-    const selectedItems = dataArray.filter(item => selectedFiles.has(item.hash));
+    const selectedItems = dataArray.filter(item => selectedFiles.has(itemKey(item.instanceId, item.hash)));
     const links = selectedItems
       .map(item => getExportLink(item))
       .filter(link => link)

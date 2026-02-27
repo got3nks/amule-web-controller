@@ -5,6 +5,7 @@
  * - Auth status check on mount
  * - First-run detection
  * - Login/logout operations
+ * - User identity (username, role, capabilities)
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'https://esm.sh/react@18.2.0';
@@ -19,6 +20,13 @@ export const AuthProvider = ({ children }) => {
   const [authEnabled, setAuthEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // User identity state
+  const [username, setUsername] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [capabilities, setCapabilities] = useState([]);
+  const [hasUsers, setHasUsers] = useState(false);
+  const [isSso, setIsSso] = useState(false);
 
   // First-run state (moved from AppContent)
   const [isFirstRun, setIsFirstRun] = useState(null);
@@ -36,6 +44,11 @@ export const AuthProvider = ({ children }) => {
 
       setAuthEnabled(data.authEnabled);
       setIsAuthenticated(data.authenticated);
+      setUsername(data.username || null);
+      setIsAdmin(data.isAdmin || false);
+      setCapabilities(Array.isArray(data.capabilities) ? data.capabilities : []);
+      setHasUsers(data.hasUsers || false);
+      setIsSso(!!data.sso);
       setLoginDelay({
         retryDelay: data.retryDelay || 0,
         retryAfter: data.retryAfter || 0
@@ -87,18 +100,23 @@ export const AuthProvider = ({ children }) => {
   }, [checkAuthStatus, checkFirstRunStatus]);
 
   /**
-   * Login with password
+   * Login with username and password
    */
-  const login = useCallback(async (password, rememberMe = false) => {
+  const login = useCallback(async (loginUsername, password, rememberMe = false) => {
     try {
       setError(null);
+
+      const body = { password, rememberMe };
+      if (loginUsername) {
+        body.username = loginUsername;
+      }
 
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ password, rememberMe })
+        body: JSON.stringify(body)
       });
 
       const data = await response.json();
@@ -130,6 +148,9 @@ export const AuthProvider = ({ children }) => {
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
       setIsAuthenticated(false);
+      setUsername(null);
+      setIsAdmin(false);
+      setCapabilities(null);
       setError(null);
     } catch (err) {
       console.error('Logout error:', err);
@@ -159,6 +180,11 @@ export const AuthProvider = ({ children }) => {
     error,
     isFirstRun,
     loginDelay,
+    username,
+    isAdmin,
+    capabilities,
+    hasUsers,
+    isSso,
 
     // Methods
     login,
@@ -166,7 +192,7 @@ export const AuthProvider = ({ children }) => {
     checkAuthStatus,
     clearError,
     completeFirstRun
-  }), [isAuthenticated, authEnabled, loading, error, isFirstRun, loginDelay, login, logout, checkAuthStatus, clearError, completeFirstRun]);
+  }), [isAuthenticated, authEnabled, loading, error, isFirstRun, loginDelay, username, isAdmin, capabilities, hasUsers, isSso, login, logout, checkAuthStatus, clearError, completeFirstRun]);
 
   return h(AuthContext.Provider, { value }, children);
 };

@@ -5,7 +5,8 @@
  *
  * Script invocation:
  * - Event type as first argument
- * - Environment variables: EVENT_TYPE, EVENT_HASH, EVENT_FILENAME, EVENT_CLIENT_TYPE
+ * - Environment variables: EVENT_TYPE, EVENT_HASH, EVENT_FILENAME, EVENT_CLIENT_TYPE,
+ *   EVENT_INSTANCE_ID, EVENT_INSTANCE_NAME
  * - Full JSON event data via stdin
  *
  * Execution is fire-and-forget (non-blocking), errors are logged only.
@@ -17,6 +18,7 @@ const path = require('path');
 const BaseModule = require('./BaseModule');
 const config = require('../modules/config');
 const notificationManager = require('./NotificationManager');
+const registry = require('./ClientRegistry');
 
 class EventScriptingManager extends BaseModule {
   constructor() {
@@ -49,6 +51,12 @@ class EventScriptingManager extends BaseModule {
    * @param {Object} eventData - Event data object
    */
   emit(eventType, eventData) {
+    // Enrich with instanceName from registry if not already set
+    if (eventData.instanceId && !eventData.instanceName) {
+      const manager = registry.get(eventData.instanceId);
+      eventData.instanceName = manager?.displayName || eventData.instanceId;
+    }
+
     // Send Apprise notification (if enabled for this event)
     notificationManager.notify(eventType, eventData).catch(err => {
       this.log(`[Notification] Error sending notification for ${eventType}: ${err.message}`);
@@ -98,7 +106,9 @@ class EventScriptingManager extends BaseModule {
       EVENT_TYPE: eventType,
       EVENT_HASH: eventData.hash || '',
       EVENT_FILENAME: eventData.filename || '',
-      EVENT_CLIENT_TYPE: eventData.clientType || ''
+      EVENT_CLIENT_TYPE: eventData.clientType || '',
+      EVENT_INSTANCE_ID: eventData.instanceId || '',
+      EVENT_INSTANCE_NAME: eventData.instanceName || eventData.clientType || ''
     };
 
     return new Promise((resolve) => {

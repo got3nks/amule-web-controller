@@ -175,7 +175,7 @@ export const isActiveStatus = (key) => {
  * @returns {boolean} True if BitTorrent client
  */
 export const isBittorrentClient = (item) => {
-  return item.client === 'rtorrent' || item.client === 'qbittorrent';
+  return item.networkType === 'bittorrent';
 };
 
 /**
@@ -261,7 +261,7 @@ export const hasRtorrentItems = hasBittorrentItems;
  * @returns {boolean} True if any aMule downloads exist
  */
 export const hasAmuleItems = (downloads) => {
-  return downloads.some(d => d.client === 'amule' || !d.client);
+  return downloads.some(d => d.networkType === 'ed2k');
 };
 
 /**
@@ -291,22 +291,6 @@ export const filterByUnifiedFilter = (downloads, unifiedFilter) => {
   }
 
   return downloads;
-};
-
-/**
- * Get selected client types from a selection
- * @param {Set} selectedFiles - Set of selected file hashes
- * @param {Array} downloads - Array of download items
- * @returns {Set} Set of client types in selection ('amule', 'rtorrent')
- */
-export const getSelectedClientTypes = (selectedFiles, downloads) => {
-  const types = new Set();
-  downloads.forEach(d => {
-    if (selectedFiles.has(d.hash)) {
-      types.add(d.client || 'amule');
-    }
-  });
-  return types;
 };
 
 /**
@@ -340,10 +324,10 @@ export const getIpString = (item) => {
  * @returns {string|null} Export link or null if not available
  */
 export const getExportLink = (item) => {
-  if (item.client === 'rtorrent' || item.client === 'qbittorrent') {
+  if (isBittorrentClient(item)) {
     return generateMagnetLink(item);
   }
-  // aMule: use unified ed2kLink field
+  // ED2K: use unified ed2kLink field
   return item.ed2kLink || null;
 };
 
@@ -353,7 +337,7 @@ export const getExportLink = (item) => {
  * @returns {string} Label for the export link
  */
 export const getExportLinkLabel = (item) => {
-  return (item.client === 'rtorrent' || item.client === 'qbittorrent') ? 'Magnet Link' : 'ED2K Link';
+  return isBittorrentClient(item) ? 'Magnet Link' : 'ED2K Link';
 };
 
 /**

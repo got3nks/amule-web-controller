@@ -1,7 +1,9 @@
 /**
  * TestSummary Component
  *
- * Reusable test summary component for displaying test results
+ * Reusable test summary component for displaying test results.
+ * Uses `clientTestResults` (per-instance keyed object) for client counts,
+ * and `testResults` for non-client counts (directories, integrations).
  */
 
 import React from 'https://esm.sh/react@18.2.0';
@@ -10,15 +12,52 @@ import { AlertBox, Icon } from '../common/index.js';
 const { createElement: h } = React;
 
 /**
+ * Count client test results from per-instance object.
+ * @param {Object} clientTestResults - { [key]: { success, message, _label } }
+ * @param {Object} summary - { passed, failed, warnings, total } to mutate
+ */
+function countClientResults(clientTestResults, summary) {
+  if (!clientTestResults) return;
+  for (const result of Object.values(clientTestResults)) {
+    if (!result) continue;
+    summary.total++;
+    if (result.success === false) summary.failed++;
+    else if (result.success) summary.passed++;
+  }
+}
+
+/**
+ * Collect detailed client error results using _label for display name.
+ * @param {Object} clientTestResults - { [key]: { success, message, _label } }
+ * @param {Array} detailedResults - Array to push results into
+ */
+function collectClientDetails(clientTestResults, detailedResults) {
+  if (!clientTestResults) return;
+  for (const result of Object.values(clientTestResults)) {
+    if (result && !result.success) {
+      detailedResults.push({
+        label: result._label || 'Client Connection',
+        success: false,
+        message: result.message || result.error,
+        warning: false
+      });
+    }
+  }
+}
+
+/**
  * TestSummary component
- * @param {object} testResults - Test results object
- * @param {object} formData - Form data to check which integrations are enabled
+ * @param {object} testResults - Test results object (non-client: directories, integrations)
+ * @param {object} clientTestResults - Per-instance client test results
  * @param {boolean} showDetails - Whether to show detailed error/warning messages (default: false)
  */
-const TestSummary = ({ testResults, formData, showDetails = false }) => {
-  if (!testResults || !testResults.results) return null;
+const TestSummary = ({ testResults, clientTestResults, showDetails = false }) => {
+  const hasClientResults = clientTestResults && Object.keys(clientTestResults).length > 0;
+  const hasNonClientResults = testResults && testResults.results;
 
-  const results = testResults.results;
+  if (!hasClientResults && !hasNonClientResults) return null;
+
+  const results = testResults?.results || {};
   const summary = {
     passed: 0,
     failed: 0,
@@ -26,35 +65,8 @@ const TestSummary = ({ testResults, formData, showDetails = false }) => {
     total: 0
   };
 
-  // Count aMule (only if enabled)
-  if (formData?.amule?.enabled !== false && results.amule) {
-    summary.total++;
-    if (results.amule.success === false) {
-      summary.failed++;
-    } else if (results.amule.success) {
-      summary.passed++;
-    }
-  }
-
-  // Count rtorrent (only if enabled)
-  if (formData?.rtorrent?.enabled && results.rtorrent) {
-    summary.total++;
-    if (results.rtorrent.success === false) {
-      summary.failed++;
-    } else if (results.rtorrent.success) {
-      summary.passed++;
-    }
-  }
-
-  // Count qbittorrent (only if enabled)
-  if (formData?.qbittorrent?.enabled && results.qbittorrent) {
-    summary.total++;
-    if (results.qbittorrent.success === false) {
-      summary.failed++;
-    } else if (results.qbittorrent.success) {
-      summary.passed++;
-    }
-  }
+  // Count client results from per-instance object
+  countClientResults(clientTestResults, summary);
 
   // Count directories
   if (results.directories) {
@@ -84,8 +96,8 @@ const TestSummary = ({ testResults, formData, showDetails = false }) => {
     }
   }
 
-  // Count Sonarr (only if enabled)
-  if (formData?.integrations?.sonarr?.enabled && results.sonarr) {
+  // Count Sonarr
+  if (results.sonarr) {
     summary.total++;
     if (results.sonarr.success === false) {
       summary.failed++;
@@ -94,8 +106,8 @@ const TestSummary = ({ testResults, formData, showDetails = false }) => {
     }
   }
 
-  // Count Radarr (only if enabled)
-  if (formData?.integrations?.radarr?.enabled && results.radarr) {
+  // Count Radarr
+  if (results.radarr) {
     summary.total++;
     if (results.radarr.success === false) {
       summary.failed++;
@@ -104,8 +116,8 @@ const TestSummary = ({ testResults, formData, showDetails = false }) => {
     }
   }
 
-  // Count Prowlarr (only if enabled)
-  if (formData?.integrations?.prowlarr?.enabled && results.prowlarr) {
+  // Count Prowlarr
+  if (results.prowlarr) {
     summary.total++;
     if (results.prowlarr.success === false) {
       summary.failed++;
@@ -113,6 +125,8 @@ const TestSummary = ({ testResults, formData, showDetails = false }) => {
       summary.passed++;
     }
   }
+
+  if (summary.total === 0) return null;
 
   const allPassed = summary.failed === 0 && summary.total > 0;
   const hasWarnings = summary.warnings > 0;
@@ -130,35 +144,8 @@ const TestSummary = ({ testResults, formData, showDetails = false }) => {
   // Build detailed results if requested
   const detailedResults = [];
   if (showDetails) {
-    // aMule result (only if enabled)
-    if (formData?.amule?.enabled !== false && results.amule && !results.amule.success) {
-      detailedResults.push({
-        label: 'aMule Connection',
-        success: false,
-        message: results.amule.message || results.amule.error,
-        warning: false
-      });
-    }
-
-    // rtorrent result
-    if (formData?.rtorrent?.enabled && results.rtorrent && !results.rtorrent.success) {
-      detailedResults.push({
-        label: 'rTorrent Connection',
-        success: false,
-        message: results.rtorrent.message || results.rtorrent.error,
-        warning: false
-      });
-    }
-
-    // qbittorrent result
-    if (formData?.qbittorrent?.enabled && results.qbittorrent && !results.qbittorrent.success) {
-      detailedResults.push({
-        label: 'qBittorrent Connection',
-        success: false,
-        message: results.qbittorrent.message || results.qbittorrent.error,
-        warning: false
-      });
-    }
+    // Client results from per-instance object
+    collectClientDetails(clientTestResults, detailedResults);
 
     // Directory results
     if (results.directories) {
@@ -189,7 +176,7 @@ const TestSummary = ({ testResults, formData, showDetails = false }) => {
     }
 
     // Sonarr result
-    if (formData?.integrations?.sonarr?.enabled && results.sonarr && !results.sonarr.success) {
+    if (results.sonarr && !results.sonarr.success) {
       detailedResults.push({
         label: 'Sonarr API',
         success: false,
@@ -199,7 +186,7 @@ const TestSummary = ({ testResults, formData, showDetails = false }) => {
     }
 
     // Radarr result
-    if (formData?.integrations?.radarr?.enabled && results.radarr && !results.radarr.success) {
+    if (results.radarr && !results.radarr.success) {
       detailedResults.push({
         label: 'Radarr API',
         success: false,
@@ -209,7 +196,7 @@ const TestSummary = ({ testResults, formData, showDetails = false }) => {
     }
 
     // Prowlarr result
-    if (formData?.integrations?.prowlarr?.enabled && results.prowlarr && !results.prowlarr.success) {
+    if (results.prowlarr && !results.prowlarr.success) {
       detailedResults.push({
         label: 'Prowlarr API',
         success: false,

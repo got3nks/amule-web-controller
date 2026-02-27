@@ -48,10 +48,19 @@ class ProwlarrHandler {
       ...options.headers
     };
 
-    const response = await fetch(url, {
-      ...options,
-      headers
-    });
+    let response;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 120000);
+      response = await fetch(url, { ...options, headers, signal: controller.signal });
+      clearTimeout(timeout);
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        throw new Error(`Prowlarr request timed out after 120s (${this.baseUrl}${endpoint})`);
+      }
+      const reason = err.cause?.message || err.message;
+      throw new Error(`Prowlarr connection failed (${this.baseUrl}): ${reason}`);
+    }
 
     if (!response.ok) {
       const text = await response.text();

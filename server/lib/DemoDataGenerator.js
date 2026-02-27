@@ -7,6 +7,8 @@
  * Enable with environment variable: DEMO_MODE=true
  */
 
+const clientMeta = require('./clientMeta');
+
 class DemoDataGenerator {
   constructor() {
     // 50 Linux ISO filenames
@@ -293,7 +295,7 @@ class DemoDataGenerator {
         downloading = true;
         complete = false;
         seeding = false;
-        shared = client === 'rtorrent';
+        shared = clientMeta.isBittorrent(client);
         break;
 
       case 'paused':
@@ -305,7 +307,7 @@ class DemoDataGenerator {
         downloading = false;
         complete = false;
         seeding = false;
-        shared = client === 'rtorrent';
+        shared = clientMeta.isBittorrent(client);
         break;
 
       case 'seeding':
@@ -352,7 +354,7 @@ class DemoDataGenerator {
     const uploadersCount = type === 'seeding' ? this._randomBetween(1, 5) : 0;
     const activeUploads = this._generateActiveUploads(uploadersCount);
 
-    const hash = this._randomHash(client === 'amule' ? 32 : 40);
+    const hash = this._randomHash(clientMeta.get(client).hashLength);
     const tracker = this._randomChoice(this.trackers);
     const uploadTotal = this._randomBetween(0, size * 3);
     const ratio = size > 0 ? uploadTotal / size : 0;
@@ -365,6 +367,7 @@ class DemoDataGenerator {
       hash,
       name,
       client,
+      instanceId: `demo-${client}`,
       size,
       sizeDownloaded,
       progress,
@@ -381,8 +384,8 @@ class DemoDataGenerator {
         total: sourcesTotal,
         connected: sourcesConnected,
         seeders: sourcesSeeders,
-        a4af: client === 'amule' ? this._randomBetween(0, 5) : 0,
-        notCurrent: client === 'amule' ? this._randomBetween(0, 10) : 0
+        a4af: clientMeta.isEd2k(client) ? this._randomBetween(0, 5) : 0,
+        notCurrent: clientMeta.isEd2k(client) ? this._randomBetween(0, 10) : 0
       },
       activeUploads,
       uploadTotal,
@@ -394,7 +397,7 @@ class DemoDataGenerator {
     };
 
     // Client-specific fields
-    if (client === 'amule') {
+    if (clientMeta.isEd2k(client)) {
       item.downloadPriority = this._randomBetween(0, 5);
       item.uploadPriority = this._randomBetween(0, 5);
       item.uploadSession = this._randomBetween(0, uploadTotal);
@@ -637,7 +640,7 @@ class DemoDataGenerator {
 
       history.push({
         id: i + 1,
-        hash: this._randomHash(client === 'amule' ? 32 : 40),
+        hash: this._randomHash(clientMeta.get(client).hashLength),
         name,
         client,
         clientType: client,
@@ -675,7 +678,7 @@ class DemoDataGenerator {
       items: this.generateItems(),
       categories: this.generateCategories(),
       stats: this.generateStats(),
-      clientDefaultPaths: { amule: '/downloads', rtorrent: '/downloads', qbittorrent: '/downloads' },
+      clientDefaultPaths: { 'demo-amule': '/downloads', 'demo-rtorrent': '/downloads', 'demo-qbittorrent': '/downloads' },
       hasPathWarnings: false
     };
   }

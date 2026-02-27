@@ -112,8 +112,8 @@ const Table = ({
   hoverActions = false,
   onRowClick = null
 }) => {
-  // Get categories and bothClientsConnected from context
-  const { dataCategories, bothClientsConnected } = useStaticData();
+  // Get categories and multi-instance info from context
+  const { dataCategories, multipleClientsConnected, instances, multiInstanceTypes } = useStaticData();
   // Get theme for sticky header border color
   const { theme } = useTheme();
   const isDark = theme === 'dark';
@@ -161,19 +161,28 @@ const Table = ({
 
   // Build effective columns - prepend client type badge column if enabled and data has client info
   const hasClientData = data.length > 0 && data.some(item => item.client);
-  const effectiveColumns = bothClientsConnected && hasClientData ? [
+  const hasMulti = multiInstanceTypes.size > 0;
+  const effectiveColumns = multipleClientsConnected && hasClientData ? [
     {
       key: '_clientType',
       label: '',
       sortable: false,
-      width: '32px',
+      width: hasMulti ? '80px' : '32px',
       render: (item) => {
         const clientType = item.client;
         if (!clientType) return null;
-        return h(ClientIcon, {
-          clientType,
-          size: 16
-        });
+        const instanceInfo = hasMulti ? instances[item.instanceId] : null;
+        if (instanceInfo) {
+          return h('span', {
+            className: `inline-flex items-center gap-1 text-[10px] font-medium ${instanceInfo.color ? '' : 'text-gray-600 dark:text-gray-400'}`,
+            style: instanceInfo.color ? { color: instanceInfo.color, maxWidth: '75px' } : { maxWidth: '75px' },
+            title: instanceInfo.name
+          },
+            h(ClientIcon, { clientType, size: 12, title: '', className: 'flex-shrink-0' }),
+            h('span', { className: 'truncate' }, instanceInfo.name)
+          );
+        }
+        return h(ClientIcon, { clientType, size: 16 });
       }
     },
     ...columns
@@ -192,8 +201,8 @@ const Table = ({
       displayData.map((item, idx) => {
         // Compute category style for mobile cards
         const categoryStyle = showCategoryBorder ? getCategoryBorderStyle(item, dataCategories) : null;
-        // Pass bothClientsConnected and categoryStyle to custom renderer
-        return h(React.Fragment, { key: getKey(item, idx) }, mobileCardRender(item, idx, bothClientsConnected, categoryStyle));
+        // Pass multipleClientsConnected and categoryStyle to custom renderer
+        return h(React.Fragment, { key: getKey(item, idx) }, mobileCardRender(item, idx, multipleClientsConnected, categoryStyle));
       })
     ),
 

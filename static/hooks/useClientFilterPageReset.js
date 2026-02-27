@@ -1,11 +1,11 @@
 /**
  * useClientFilterPageReset Hook
  *
- * Resets page to 0 when client filter (ED2K/BT toggle) changes,
+ * Resets page to 0 when any client filter changes (network type or individual instance),
  * but skips the initial render to avoid unnecessary reset on mount.
  *
  * Usage:
- *   useClientFilterPageReset(onPageChange, isAmuleEnabled, isBittorrentEnabled);
+ *   useClientFilterPageReset(onPageChange, isEd2kEnabled, isBittorrentEnabled, disabledInstances);
  */
 
 import React from 'https://esm.sh/react@18.2.0';
@@ -14,10 +14,11 @@ const { useRef, useEffect } = React;
 
 /**
  * @param {function} onPageChange - Callback to reset page (called with 0)
- * @param {boolean} isAmuleEnabled - Whether aMule client is enabled
- * @param {boolean} isBittorrentEnabled - Whether BitTorrent clients are enabled
+ * @param {boolean} isEd2kEnabled - Whether ED2K network type is enabled
+ * @param {boolean} isBittorrentEnabled - Whether BitTorrent network type is enabled
+ * @param {Set} disabledInstances - Set of disabled instance IDs (new ref on each change)
  */
-export const useClientFilterPageReset = (onPageChange, isAmuleEnabled, isBittorrentEnabled) => {
+export const useClientFilterPageReset = (onPageChange, isEd2kEnabled, isBittorrentEnabled, disabledInstances) => {
   const isFirstRender = useRef(true);
   const onPageChangeRef = useRef(onPageChange);
   onPageChangeRef.current = onPageChange;
@@ -28,7 +29,7 @@ export const useClientFilterPageReset = (onPageChange, isAmuleEnabled, isBittorr
       return;
     }
     onPageChangeRef.current(0);
-  }, [isAmuleEnabled, isBittorrentEnabled]);
+  }, [isEd2kEnabled, isBittorrentEnabled, disabledInstances]);
 };
 
 export default useClientFilterPageReset;

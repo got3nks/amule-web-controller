@@ -6,8 +6,9 @@
 
 import React from 'https://esm.sh/react@18.2.0';
 import { Icon } from '../common/index.js';
+import { useResponsiveLayout } from '../../hooks/index.js';
 
-const { createElement: h, useState } = React;
+const { createElement: h, useState, useEffect, useRef } = React;
 
 /**
  * ConfigSection component
@@ -18,37 +19,64 @@ const { createElement: h, useState } = React;
  * @param {function} onToggle - Callback when toggled (for controlled mode)
  * @param {ReactNode} children - Section content
  */
-const ConfigSection = ({ title, description, defaultOpen = true, open, onToggle, children }) => {
+const ConfigSection = ({ title, description, defaultOpen = true, open, onToggle, warning, icon, badge, children }) => {
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
+  const sectionRef = useRef(null);
+  const userToggledRef = useRef(false);
+  const { isMobile } = useResponsiveLayout();
 
   // Use controlled state if provided, otherwise use internal state
   const isOpen = open !== undefined ? open : internalOpen;
 
   const handleToggle = () => {
+    const willOpen = !isOpen;
+    if (willOpen) userToggledRef.current = true;
     if (onToggle) {
       // Controlled mode - call parent callback
-      onToggle(!isOpen);
+      onToggle(willOpen);
     } else {
       // Uncontrolled mode - update internal state
-      setInternalOpen(!isOpen);
+      setInternalOpen(willOpen);
     }
   };
 
-  return h('div', { className: 'border border-gray-200 dark:border-gray-700 rounded-lg mb-4 overflow-hidden' },
+  // Auto-scroll to section header on mobile when user opens it.
+  // Double-rAF ensures the browser has fully laid out the expanded content
+  // before calculating the scroll position.
+  useEffect(() => {
+    if (isOpen && userToggledRef.current && sectionRef.current && isMobile) {
+      userToggledRef.current = false;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      });
+    }
+  }, [isOpen]);
+
+  return h('div', {
+    ref: sectionRef,
+    className: 'border border-gray-200 dark:border-gray-700 rounded-lg mb-4 overflow-hidden scroll-mt-14'
+  },
     // Header
     h('button', {
       type: 'button',
       onClick: handleToggle,
-      className: 'w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 flex items-center justify-between hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors'
+      className: 'w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 flex items-center justify-between hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors gap-3'
     },
-      h('div', { className: 'text-left flex-1' },
-        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100' }, title),
+      icon && h(Icon, { name: icon, size: 22, className: 'text-gray-500 dark:text-gray-400 flex-shrink-0' }),
+      h('div', { className: 'text-left flex-1 min-w-0' },
+        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center flex-wrap gap-2' },
+          title,
+          warning && h(Icon, { name: 'alertTriangle', size: 16, className: 'text-amber-500' }),
+          badge
+        ),
         description && h('p', { className: 'text-sm text-gray-500 dark:text-gray-400 mt-0.5' }, description)
       ),
       h(Icon, {
         name: isOpen ? 'chevronUp' : 'chevronDown',
         size: 20,
-        className: 'text-gray-500 dark:text-gray-400'
+        className: 'text-gray-500 dark:text-gray-400 flex-shrink-0'
       })
     ),
     // Content

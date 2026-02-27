@@ -13,6 +13,7 @@
 
 import React from 'https://esm.sh/react@18.2.0';
 import { useSelectionMode } from './useSelectionMode.js';
+import { itemKey } from '../utils/itemKey.js';
 
 const { useState, useCallback, useRef } = React;
 
@@ -48,18 +49,23 @@ export const useFrozenSortSelection = ({
   // Ref to store the latest sorted data - view must update this after useTableState
   const sortedDataRef = useRef([]);
 
+  // Build compound key for an item (used for frozen order and selection)
+  const getItemKey = useCallback((item) => {
+    return itemKey(item.instanceId, item[hashKey]);
+  }, [hashKey]);
+
   // Custom toggle that freezes/unfreezes sort order
   const toggleSelectionMode = useCallback(() => {
     if (!selectionMode) {
-      // Entering selection mode - capture current sort order from ref
-      const currentOrder = sortedDataRef.current.map(item => item[hashKey]);
+      // Entering selection mode - capture current sort order from ref (compound keys)
+      const currentOrder = sortedDataRef.current.map(getItemKey);
       setFrozenSortOrder(currentOrder);
     } else {
       // Exiting selection mode - clear frozen order
       setFrozenSortOrder(null);
     }
     baseToggleSelectionMode();
-  }, [selectionMode, baseToggleSelectionMode, hashKey]);
+  }, [selectionMode, baseToggleSelectionMode, getItemKey]);
 
   // Custom exit that also clears frozen order
   const exitSelectionMode = useCallback(() => {
@@ -69,11 +75,11 @@ export const useFrozenSortSelection = ({
 
   // Custom enter with item that also freezes sort order
   const enterSelectionWithItem = useCallback((fileHash) => {
-    // Capture current sort order from ref before entering
-    const currentOrder = sortedDataRef.current.map(item => item[hashKey]);
+    // Capture current sort order from ref before entering (compound keys)
+    const currentOrder = sortedDataRef.current.map(getItemKey);
     setFrozenSortOrder(currentOrder);
     baseEnterSelectionWithItem(fileHash);
-  }, [baseEnterSelectionWithItem, hashKey]);
+  }, [baseEnterSelectionWithItem, getItemKey]);
 
   return {
     // Selection mode state
@@ -92,6 +98,8 @@ export const useFrozenSortSelection = ({
     isSelected,
     // Frozen sort order - pass to useTableState
     frozenSortOrder,
+    // Compound key builder - pass to useTableState for frozen order lookups
+    getItemKey,
     // Ref to update with sorted data after useTableState call
     sortedDataRef
   };

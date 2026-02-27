@@ -16,24 +16,28 @@ const { createElement: h } = React;
  */
 export const useFileInfoModal = () => {
   const [infoHash, setInfoHash] = useState(null);
+  const [infoInstanceId, setInfoInstanceId] = useState(null);
 
-  // Open modal with specific hash
-  const openFileInfo = useCallback((hash) => {
+  // Open modal with specific hash and optional instanceId
+  const openFileInfo = useCallback((hash, instanceId) => {
     setInfoHash(hash);
+    setInfoInstanceId(instanceId || null);
   }, []);
 
   // Close modal
   const closeFileInfo = useCallback(() => {
     setInfoHash(null);
+    setInfoInstanceId(null);
   }, []);
 
   // Pre-rendered modal element
   const FileInfoElement = useMemo(() => {
     return h(FileInfoModal, {
       hash: infoHash,
+      instanceId: infoInstanceId,
       onClose: closeFileInfo
     });
-  }, [infoHash, closeFileInfo]);
+  }, [infoHash, infoInstanceId, closeFileInfo]);
 
   return {
     openFileInfo,

@@ -8,12 +8,14 @@
 import React from 'https://esm.sh/react@18.2.0';
 import { Icon, Table, ContextMenu, MoreButton, Button, IconButton, Select, SelectionModeSection, MobileCardHeader, EmptyState, ClientIcon, ItemMobileCard, MobileStatusTabs, MobileFilterPills, MobileFilterSheet, MobileFilterButton, MobileSortButton, ExpandableSearch, FilterInput, SelectionCheckbox, TrackerLabel } from '../common/index.js';
 import { formatBytes, formatSpeed, getRowHighlightClass, getItemStatusInfo, calculateRatio, DEFAULT_SORT_CONFIG, DEFAULT_SECONDARY_SORT_CONFIG, formatTitleCount, buildSizeColumn, buildFileNameColumn, buildStatusColumn, buildCategoryColumn, buildRatioColumn, buildUploadSpeedColumn, buildUploadTotalColumn, buildAddedAtColumn, VIEW_TITLE_STYLES, createCategoryLabelFilter, createTrackerFilter } from '../../utils/index.js';
+import { itemKey } from '../../utils/itemKey.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useDataFetch } from '../../contexts/DataFetchContext.js';
 import { useViewDeleteModal, useBatchExport, useViewFilters, usePageSelection, useItemActions, useCategoryFilterOptions, useItemContextMenu, useColumnConfig, getSecondarySortConfig, useFileInfoModal, useFileCategoryModal } from '../../hooks/index.js';
 import { useActions } from '../../contexts/ActionsContext.js';
 import { useStickyToolbar } from '../../contexts/StickyHeaderContext.js';
+import { useCapabilities } from '../../hooks/useCapabilities.js';
 
 const { createElement: h, useCallback, useMemo } = React;
 
@@ -25,14 +27,18 @@ const SharedView = () => {
   // CONTEXT DATA
   // ============================================================================
   const { dataItems, dataLoaded } = useLiveData();
-  const { dataCategories } = useStaticData();
+  const { dataCategories, instances } = useStaticData();
   const { refreshSharedFiles } = useDataFetch();
   const actions = useActions();
+  const { hasCap } = useCapabilities();
+  const hasAnyMutationCap = hasCap('pause_resume') || hasCap('remove_downloads') || hasCap('assign_categories');
+
+  // Ownership check: user can mutate item if they have edit_all_downloads or own it
+  const canMutateItem = useCallback((item) => hasCap('edit_all_downloads') || item.ownedByMe !== false, [hasCap]);
 
   const amuleConfigEnabled = useMemo(() => {
-    // Check if aMule is enabled via live data stats
-    return dataItems.some(i => i.client === 'amule');
-  }, [dataItems]);
+    return Object.values(instances).some(inst => inst.type === 'amule' && inst.connected);
+  }, [instances]);
 
   // ============================================================================
   // DERIVED DATA
@@ -123,7 +129,8 @@ const SharedView = () => {
     selectShown,
     selectAll,
     isShownFullySelected,
-    hashKey: 'hash'
+    hashKey: 'hash',
+    selectableFilter: canMutateItem
   });
 
   // ============================================================================
@@ -176,7 +183,7 @@ const SharedView = () => {
   });
 
   const handleShowInfo = useCallback((item) => {
-    openFileInfo(item.hash);
+    openFileInfo(item.hash, item.instanceId);
   }, [openFileInfo]);
 
   // ============================================================================
@@ -185,9 +192,9 @@ const SharedView = () => {
   // Check if selection contains BitTorrent items (for showing pause/resume/stop buttons)
   const hasSelectedBittorrentItems = useMemo(() => {
     if (!selectionMode || selectedCount === 0) return false;
-    return Array.from(selectedFiles).some(hash => {
-      const file = sharedFiles.find(f => f.hash === hash);
-      return file?.client === 'rtorrent' || file?.client === 'qbittorrent';
+    return Array.from(selectedFiles).some(key => {
+      const file = sharedFiles.find(f => itemKey(f.instanceId, f.hash) === key);
+      return file?.networkType === 'bittorrent';
     });
   }, [selectionMode, selectedCount, selectedFiles, sharedFiles]);
 
@@ -199,8 +206,8 @@ const SharedView = () => {
     openContextMenu,
     closeContextMenu,
     onShowInfo: handleShowInfo,
-    onDelete: (item) => handleDeleteClick(item.hash, item.name, item.client || 'amule'),
-    onCategoryChange: (item) => openCategoryModal(item.hash, item.name, item.category || 'Default'),
+    onDelete: hasCap('remove_downloads') ? (item) => handleDeleteClick(item.hash, item.name, item.client || 'amule', item.instanceId) : null,
+    onCategoryChange: (item) => openCategoryModal(item.hash, item.name, item.category || 'Default', item.instanceId),
     onPause: handlePause,
     onResume: handleResume,
     onStop: handleStop,
@@ -236,10 +243,10 @@ const SharedView = () => {
       resetLoaded,
       filterOptions: categoryFilterOptions,
       categories: dataCategories,
-      onCategoryClick: openCategoryModal,
-      disabled: selectionMode
+      onCategoryClick: hasCap('assign_categories') ? openCategoryModal : null,
+      disabled: (item) => selectionMode || !canMutateItem(item)
     })
-  ], [handleShowInfo, statusFilter, setStatusFilter, resetLoaded, statusOptions, unifiedFilter, setUnifiedFilter, categoryFilterOptions, dataCategories, openCategoryModal, selectionMode]);
+  ], [handleShowInfo, statusFilter, setStatusFilter, resetLoaded, statusOptions, unifiedFilter, setUnifiedFilter, categoryFilterOptions, dataCategories, openCategoryModal, selectionMode, hasCap, canMutateItem]);
 
   // ============================================================================
   // COLUMN CONFIG (visibility and order)
@@ -277,14 +284,14 @@ const SharedView = () => {
           defaultSortBy: DEFAULT_SORT_CONFIG.shared.sortBy,
           defaultSortDirection: DEFAULT_SORT_CONFIG.shared.sortDirection
         }),
-        hiddenWhenExpanded: h(IconButton, {
+        hiddenWhenExpanded: hasAnyMutationCap ? h(IconButton, {
           key: 'select',
           variant: selectionMode ? 'danger' : 'secondary',
           icon: selectionMode ? 'x' : 'fileCheck',
           iconSize: 18,
           onClick: toggleSelectionMode,
           title: selectionMode ? 'Exit Selection Mode' : 'Select Files'
-        })
+        }) : null
       })
     ),
   [filteredShared.length, sharedFiles.length, filterText, setFilterText, clearFilter, columns, sortConfig, onSortChange, selectionMode, toggleSelectionMode]);
@@ -349,7 +356,7 @@ const SharedView = () => {
           dataLoaded.items && h(ClientIcon, { client: 'amule', size: 16, title: '' }),
           dataLoaded.items ? 'Reload Files' : h('span', { className: 'flex items-center gap-2' }, h('div', { className: 'loader' }), 'Loading...')
         ),
-        h(Button, {
+        hasAnyMutationCap && h(Button, {
           key: 'select',
           variant: selectionMode ? 'danger' : 'purple',
           onClick: toggleSelectionMode,
@@ -379,9 +386,12 @@ const SharedView = () => {
       }, h(Icon, { name: 'tableConfig', size: 16, className: 'text-gray-500 dark:text-gray-400' })),
       actions: (item) => {
         if (selectionMode) {
+          const key = itemKey(item.instanceId, item.hash);
+          const canSelect = canMutateItem(item);
           return h(SelectionCheckbox, {
-            checked: selectedFiles.has(item.hash),
-            onChange: () => toggleFileSelection(item.hash)
+            checked: selectedFiles.has(key),
+            onChange: canSelect ? () => toggleFileSelection(key) : undefined,
+            disabled: !canSelect
           });
         }
         return h(MoreButton, {
@@ -402,35 +412,37 @@ const SharedView = () => {
       pageSize,
       onPageSizeChange,
       skipSort: selectionMode || contextMenu.show,
-      getRowKey: (item) => item.hash,
+      getRowKey: (item) => itemKey(item.instanceId, item.hash),
       getRowClassName: (item) => getRowHighlightClass(
-        selectionMode && selectedFiles.has(item.hash),
-        contextMenu.show && contextMenu.item?.hash === item.hash
+        selectionMode && selectedFiles.has(itemKey(item.instanceId, item.hash)),
+        contextMenu.show && contextMenu.item?.hash === item.hash && contextMenu.item?.instanceId === item.instanceId
       ),
       onRowContextMenu: handleRowContextMenu,
-      onRowClick: selectionMode ? (item) => toggleFileSelection(item.hash) : null,
+      onRowClick: selectionMode ? (item) => { if (canMutateItem(item)) toggleFileSelection(itemKey(item.instanceId, item.hash)); } : null,
       breakpoint: 'xl',
       mobileCardStyle: 'card',
       mobileCardRender: (item, idx, showBadge, categoryStyle) => {
-        const isSelected = selectionMode && selectedFiles.has(item.hash);
-        const isContextTarget = contextMenu.show && contextMenu.item?.hash === item.hash;
+        const isSelected = selectionMode && selectedFiles.has(itemKey(item.instanceId, item.hash));
+        const isContextTarget = contextMenu.show && contextMenu.item?.hash === item.hash && contextMenu.item?.instanceId === item.instanceId;
 
+        const canSelect = canMutateItem(item);
         return h(ItemMobileCard, {
           isSelected,
           isContextTarget,
           idx,
           categoryStyle,
           selectionMode,
-          onSelectionToggle: () => toggleFileSelection(item.hash)
+          onSelectionToggle: canSelect ? () => toggleFileSelection(itemKey(item.instanceId, item.hash)) : undefined
         },
           h(MobileCardHeader, {
             showBadge,
             clientType: item.client,
+            instanceId: item.instanceId,
             fileName: item.name,
             fileSize: item.size,
             selectionMode,
             isSelected,
-            onSelectionToggle: () => toggleFileSelection(item.hash),
+            onSelectionToggle: canSelect ? () => toggleFileSelection(itemKey(item.instanceId, item.hash)) : undefined,
             onNameClick: (e, anchorEl) => openContextMenu(e, item, anchorEl),
             actions: h(MoreButton, {
               onClick: (e) => openContextMenu(e, item, e.currentTarget)
@@ -513,12 +525,12 @@ const SharedView = () => {
       onClearAll: clearAllSelections,
       onExit: toggleSelectionMode
     },
-      hasSelectedBittorrentItems && h(Button, { variant: 'warning', onClick: handleBatchPause, icon: 'pause', iconSize: 14 }, 'Pause'),
-      hasSelectedBittorrentItems && h(Button, { variant: 'success', onClick: handleBatchResume, icon: 'play', iconSize: 14 }, 'Resume'),
-      hasSelectedBittorrentItems && h(Button, { variant: 'secondary', onClick: handleBatchStop, icon: 'stop', iconSize: 14 }, 'Stop'),
-      h(Button, { variant: 'orange', onClick: handleBatchSetCategory, icon: 'folder', iconSize: 14 }, 'Edit Category'),
+      hasSelectedBittorrentItems && hasCap('pause_resume') && h(Button, { variant: 'warning', onClick: handleBatchPause, icon: 'pause', iconSize: 14 }, 'Pause'),
+      hasSelectedBittorrentItems && hasCap('pause_resume') && h(Button, { variant: 'success', onClick: handleBatchResume, icon: 'play', iconSize: 14 }, 'Resume'),
+      hasSelectedBittorrentItems && hasCap('pause_resume') && h(Button, { variant: 'secondary', onClick: handleBatchStop, icon: 'stop', iconSize: 14 }, 'Stop'),
+      hasCap('assign_categories') && h(Button, { variant: 'orange', onClick: handleBatchSetCategory, icon: 'folder', iconSize: 14 }, 'Edit Category'),
       h(Button, { variant: batchCopyStatus === 'success' ? 'success' : 'purple', onClick: handleBatchExport, disabled: batchCopyStatus === 'success', icon: batchCopyStatus === 'success' ? 'check' : 'share', iconSize: 14 }, batchCopyStatus === 'success' ? 'Copied!' : 'Export Links'),
-      h(Button, { variant: 'danger', onClick: handleBatchDeleteClick, icon: 'trash', iconSize: 14 }, 'Delete')
+      hasCap('remove_downloads') && h(Button, { variant: 'danger', onClick: handleBatchDeleteClick, icon: 'trash', iconSize: 14 }, 'Delete')
     ),
 
     // ========================================================================

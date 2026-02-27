@@ -34,4 +34,9 @@ export { useFileInfoModal } from './useFileInfoModal.js';
 export { useFileCategoryModal } from './useFileCategoryModal.js';
 export { useNotifications } from './useNotifications.js';
 export { useBitTorrentClientSelector } from './useBitTorrentClientSelector.js';
+export { useAmuleInstanceSelector } from './useAmuleInstanceSelector.js';
+export { useCapabilities } from './useCapabilities.js';
+export { useDebouncedValue } from './useDebouncedValue.js';
+export { useSettingsFormData } from './useSettingsFormData.js';
+export { useClientManagement } from './useClientManagement.js';
 // Note: useClientFilter is now in contexts/ClientFilterContext.js for global client filtering

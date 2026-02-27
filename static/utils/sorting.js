@@ -109,7 +109,6 @@ export const sortFiles = (files, sortBy, sortDirection, secondarySort = null, op
     }
 
     // Category fields
-    else if (sortBy === 'id') result = (a.id || 0) - (b.id || 0);
     else if (sortBy === 'title') result = (a.title || '').localeCompare(b.title || '');
     else if (sortBy === 'path') result = (a.path || '').localeCompare(b.path || '');
     else if (sortBy === 'comment') result = (a.comment || '').localeCompare(b.comment || '');

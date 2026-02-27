@@ -8,6 +8,9 @@
 const BaseModule = require('../lib/BaseModule');
 const config = require('./config');
 const dataFetchService = require('../lib/DataFetchService');
+const { itemKey } = require('../lib/itemKey');
+const { getNetworkType } = require('../lib/clientMeta');
+const { requireCapability } = require('../middleware/capabilities');
 
 // Demo mode generator (lazy-loaded)
 let demoGenerator = null;
@@ -43,11 +46,13 @@ class HistoryAPI extends BaseModule {
    * @returns {Array} Enriched entries
    */
   enrichEntriesWithLiveData(entries, cachedData) {
-    // Build lookup map from unified items (single pass, O(n))
-    const itemsByHash = new Map();
+    // Build lookup map from unified items keyed by compound key (single pass, O(n))
+    const itemsByKey = new Map();
     if (cachedData?.items) {
       for (const item of cachedData.items) {
-        if (item.hash) itemsByHash.set(item.hash.toLowerCase(), item);
+        if (item.hash) {
+          itemsByKey.set(itemKey(item.instanceId, item.hash), item);
+        }
       }
     }
 
@@ -55,10 +60,13 @@ class HistoryAPI extends BaseModule {
       const hash = entry.hash?.toLowerCase();
 
       // Normalize DB column names to API names
+      const clientType = entry.client_type || 'amule';
       const normalized = {
         ...entry,
-        clientType: entry.client_type || 'amule',
-        client: entry.client_type || 'amule',
+        instanceId: entry.instance_id || null,
+        clientType,
+        client: clientType,
+        networkType: getNetworkType(clientType),
         trackerDomain: entry.tracker_domain || null,
         tracker: entry.tracker_domain || null,
         name: entry.filename,
@@ -66,8 +74,9 @@ class HistoryAPI extends BaseModule {
         completedAt: entry.completed_at
       };
 
-      // Look up live data from unified items
-      const liveItem = hash ? itemsByHash.get(hash) : null;
+      // Look up live data from unified items using compound key
+      const key = hash ? itemKey(entry.instance_id, hash) : null;
+      const liveItem = key ? itemsByKey.get(key) : null;
 
       if (liveItem) {
         // Enrich with live data (real-time values)
@@ -103,8 +112,11 @@ class HistoryAPI extends BaseModule {
    * @param {Express} app - Express app instance
    */
   registerRoutes(app) {
+    const viewHistory = requireCapability('view_history');
+    const clearHistory = requireCapability('clear_history');
+
     // Get history list
-    app.get('/api/history', (req, res) => {
+    app.get('/api/history', viewHistory, (req, res) => {
       try {
         // Demo mode - return generated fake history
         if (config.DEMO_MODE) {
@@ -252,9 +264,8 @@ class HistoryAPI extends BaseModule {
           entries = this.enrichEntriesWithLiveData(entries, cachedData);
         }
 
-        // Check if username tracking is configured
-        const historyConfig = config.getConfig()?.history || {};
-        const trackUsername = !!historyConfig.usernameHeader;
+        // Username tracking is active whenever there are user accounts
+        const trackUsername = this.userManager?.hasUsers() || false;
 
         res.json({
           entries,
@@ -271,7 +282,7 @@ class HistoryAPI extends BaseModule {
 
     // Get all history entries (for client-side pagination)
     // Returns up to 10k most recent entries with live data enrichment
-    app.get('/api/history/all', (req, res) => {
+    app.get('/api/history/all', viewHistory, (req, res) => {
       try {
         // Demo mode - return generated fake history
         if (config.DEMO_MODE) {
@@ -296,9 +307,8 @@ class HistoryAPI extends BaseModule {
         const cachedData = dataFetchService.getCachedBatchData();
         const entries = this.enrichEntriesWithLiveData(result.entries, cachedData);
 
-        // Check if username tracking is configured
-        const historyConfig = config.getConfig()?.history || {};
-        const trackUsername = !!historyConfig.usernameHeader;
+        // Username tracking is active whenever there are user accounts
+        const trackUsername = this.userManager?.hasUsers() || false;
 
         res.json({
           entries,
@@ -312,7 +322,7 @@ class HistoryAPI extends BaseModule {
     });
 
     // Get history statistics
-    app.get('/api/history/stats', (req, res) => {
+    app.get('/api/history/stats', viewHistory, (req, res) => {
       try {
         // Demo mode - return fake stats
         if (config.DEMO_MODE) {
@@ -339,8 +349,8 @@ class HistoryAPI extends BaseModule {
       }
     });
 
-    // Get single history entry by hash
-    app.get('/api/history/:hash', (req, res) => {
+    // Get single history entry by hash (optionally scoped to instance)
+    app.get('/api/history/:hash', viewHistory, (req, res) => {
       try {
         // Demo mode - find in demo history
         if (config.DEMO_MODE) {
@@ -358,7 +368,8 @@ class HistoryAPI extends BaseModule {
         }
 
         const hash = req.params.hash.toLowerCase();
-        const entry = this.downloadHistoryDB.getByHash(hash);
+        const instanceId = req.query.instanceId || null;
+        const entry = this.downloadHistoryDB.getByHash(hash, instanceId);
 
         if (!entry) {
           return res.status(404).json({ error: 'Entry not found' });
@@ -375,15 +386,16 @@ class HistoryAPI extends BaseModule {
       }
     });
 
-    // Delete a history entry permanently
-    app.delete('/api/history/:hash', (req, res) => {
+    // Delete a history entry permanently (optionally scoped to instance)
+    app.delete('/api/history/:hash', clearHistory, (req, res) => {
       try {
         if (!this.downloadHistoryDB) {
           return res.status(503).json({ error: 'History service not available' });
         }
 
         const hash = req.params.hash.toLowerCase();
-        const deleted = this.downloadHistoryDB.removeEntry(hash);
+        const instanceId = req.query.instanceId || null;
+        const deleted = this.downloadHistoryDB.removeEntry(hash, instanceId);
 
         if (deleted) {
           res.json({ success: true, message: 'Entry deleted' });
@@ -397,7 +409,7 @@ class HistoryAPI extends BaseModule {
     });
 
     // Manually trigger cleanup (admin operation)
-    app.post('/api/history/cleanup', (req, res) => {
+    app.post('/api/history/cleanup', clearHistory, (req, res) => {
       try {
         if (!this.downloadHistoryDB) {
           return res.status(503).json({ error: 'History service not available' });

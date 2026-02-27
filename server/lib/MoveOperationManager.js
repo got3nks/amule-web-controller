@@ -27,10 +27,9 @@ const MoveOperationsDB = require('./MoveOperationsDB');
 const BaseModule = require('./BaseModule');
 const logger = require('./logger');
 
-// Singleton managers - imported directly instead of injected
-const amuleManager = require('../modules/amuleManager');
-const rtorrentManager = require('../modules/rtorrentManager');
-const qbittorrentManager = require('../modules/qbittorrentManager');
+const { itemKey } = require('./itemKey');
+const clientMeta = require('./clientMeta');
+const registry = require('./ClientRegistry');
 const categoryManager = require('./CategoryManager');
 const eventScriptingManager = require('./EventScriptingManager');
 
@@ -66,6 +65,7 @@ class MoveOperationManager extends BaseModule {
    * @param {Object} options - Move options
    * @param {string} options.hash - Download hash
    * @param {string} options.name - Download name
+   * @param {string} options.instanceId - Client instance identifier
    * @param {string} options.clientType - Client type ('rtorrent', 'qbittorrent', or 'amule')
    * @param {string} options.sourcePathRemote - Source directory (remote path as client sees it)
    * @param {string} options.destPathLocal - Destination directory (LOCAL path where app can access)
@@ -75,23 +75,24 @@ class MoveOperationManager extends BaseModule {
    * @param {string} options.categoryName - Category name (for setting priority after move)
    * @returns {Object} Created operation
    */
-  async queueMove({ hash, name, clientType = 'rtorrent', sourcePathRemote, destPathLocal, destPathRemote, totalSize, isMultiFile, categoryName }) {
+  async queueMove({ hash, name, instanceId, clientType = 'rtorrent', sourcePathRemote, destPathLocal, destPathRemote, totalSize, isMultiFile, categoryName }) {
     if (!this.db) {
       throw new Error('Move operation manager not initialized');
     }
 
-    // aMule files are always single files; rtorrent and qBittorrent can have multi-file
-    const actualIsMultiFile = clientType === 'amule' ? false : isMultiFile;
+    // Only clients with multiFile capability can have multi-file downloads
+    const actualIsMultiFile = clientMeta.hasCapability(clientType, 'multiFile') ? isMultiFile : false;
 
     // Translate source path from remote (client view) to local (app view)
     // Destination local path is already provided by caller from pathMappings
-    const localSourcePath = categoryManager.translatePath(sourcePathRemote, clientType);
+    const localSourcePath = categoryManager.translatePath(sourcePathRemote, clientType, instanceId);
 
     // If no explicit remote dest path, fall back to local (same filesystem, no Docker)
     const remoteDestPath = destPathRemote || destPathLocal;
 
     const operation = this.db.addOperation({
       hash,
+      instanceId,
       name,
       clientType,
       sourcePath: localSourcePath,         // Local path for file operations
@@ -103,8 +104,8 @@ class MoveOperationManager extends BaseModule {
       categoryName
     });
 
-    // Add to active operations for status injection
-    this.activeOperations.set(hash.toLowerCase(), operation);
+    // Add to active operations for status injection (compound key)
+    this.activeOperations.set(itemKey(instanceId, hash), operation);
 
     // Trigger queue processing
     this.processQueue();
@@ -158,18 +159,19 @@ class MoveOperationManager extends BaseModule {
    * @param {Object} operation - Operation record from database
    */
   async executeMove(operation) {
-    const { hash, name, clientType = 'rtorrent', sourcePath, destPath, remoteSourcePath, remoteDestPath, isMultiFile, categoryName } = operation;
+    const { hash, instanceId, name, clientType = 'rtorrent', sourcePath, destPath, remoteSourcePath, remoteDestPath, isMultiFile, categoryName } = operation;
     const clientDestPath = remoteDestPath || destPath;
+    const key = itemKey(instanceId, hash);
 
     this.log(`📦 Moving: ${name} -> ${clientDestPath}`);
 
     try {
       // Update status to moving
-      this.db.updateStatus(hash, 'moving');
-      this.updateActiveOperation(hash);
+      this.db.updateStatus(hash, instanceId, 'moving');
+      this.updateActiveOperation(hash, instanceId);
 
-      // qBittorrent: Use native setLocation API (handles pause/move/resume internally)
-      if (clientType === 'qbittorrent') {
+      // Clients with native move API (e.g. qBittorrent) handle pause/move/resume internally
+      if (clientMeta.hasCapability(clientType, 'nativeMove')) {
         await this.executeQBittorrentNativeMove(operation);
       } else {
         // rtorrent/aMule: Manual file move
@@ -177,12 +179,13 @@ class MoveOperationManager extends BaseModule {
       }
 
       // Mark completed
-      this.db.updateStatus(hash, 'completed');
-      this.activeOperations.delete(hash.toLowerCase());
+      this.db.updateStatus(hash, instanceId, 'completed');
+      this.activeOperations.delete(key);
 
       // Emit fileMoved event
       eventScriptingManager.emit('fileMoved', {
         hash: hash.toLowerCase(),
+        instanceId: instanceId || null,
         filename: name,
         clientType: clientType || 'unknown',
         category: categoryName || null,
@@ -202,13 +205,13 @@ class MoveOperationManager extends BaseModule {
       this.log(`❌ Move failed for ${name}: ${err.message}`);
 
       // Update status to failed
-      this.db.updateStatus(hash, 'failed', err.message);
-      this.updateActiveOperation(hash);
+      this.db.updateStatus(hash, instanceId, 'failed', err.message);
+      this.updateActiveOperation(hash, instanceId);
 
-      // Try to resume download at original location (skip for qBittorrent - it handles this)
-      if (clientType !== 'qbittorrent') {
+      // Try to resume download at original location (skip for clients with native move - they handle this)
+      if (!clientMeta.hasCapability(clientType, 'nativeMove')) {
         try {
-          await this.resumeDownload(hash, clientType);
+          await this.resumeDownload(operation);
           this.log(`🔄 Resumed download at original location: ${name}`);
         } catch (startErr) {
           this.log(`⚠️ Failed to resume download: ${startErr.message}`);
@@ -222,7 +225,7 @@ class MoveOperationManager extends BaseModule {
       this.broadcastError(`Failed to move "${name}": ${err.message}`);
 
       // Remove from active operations
-      this.activeOperations.delete(hash.toLowerCase());
+      this.activeOperations.delete(key);
 
       // Trigger batch update for UI refresh
       await this.triggerBatchUpdate();
@@ -237,19 +240,17 @@ class MoveOperationManager extends BaseModule {
    * @param {Object} operation - Operation record
    */
   async executeQBittorrentNativeMove(operation) {
-    const { hash, name, remoteDestPath, destPath, isMultiFile } = operation;
+    const { hash, instanceId, name, remoteDestPath, destPath, isMultiFile } = operation;
     const clientDestPath = remoteDestPath || destPath;
 
-    if (!qbittorrentManager || !qbittorrentManager.isConnected()) {
-      throw new Error('qBittorrent not connected');
-    }
+    const manager = this._getManagerForOp(operation);
 
     this.log(`📦 Using qBittorrent native move for: ${name}`);
 
     // For multi-file torrents, destination is the parent folder
     // For single-file torrents, destination is also the parent folder
     // qBittorrent's setLocation expects the parent directory, not the file/folder path
-    await qbittorrentManager.getClient().setLocation(hash, clientDestPath);
+    await manager.updateDirectory(hash, clientDestPath);
 
     // Wait for qBittorrent to complete the move
     // Poll the torrent's state until it's no longer moving
@@ -262,7 +263,7 @@ class MoveOperationManager extends BaseModule {
       attempts++;
 
       try {
-        const torrents = await qbittorrentManager.getTorrents();
+        const torrents = await manager.getTorrents();
         const torrent = torrents.find(t => t.hash.toLowerCase() === hash.toLowerCase());
 
         if (!torrent) {
@@ -283,8 +284,8 @@ class MoveOperationManager extends BaseModule {
         }
 
         // Still moving, update progress
-        this.db.updateStatus(hash, 'moving');
-        this.updateActiveOperation(hash);
+        this.db.updateStatus(hash, instanceId, 'moving');
+        this.updateActiveOperation(hash, instanceId);
       } catch (pollErr) {
         this.log(`⚠️ Error polling move status: ${pollErr.message}`);
       }
@@ -298,11 +299,11 @@ class MoveOperationManager extends BaseModule {
    * @param {Object} operation - Operation record
    */
   async executeManualMove(operation) {
-    const { hash, name, clientType, sourcePath, remoteDestPath, destPath, isMultiFile } = operation;
+    const { hash, instanceId, name, clientType, sourcePath, remoteDestPath, destPath, isMultiFile } = operation;
     const clientDestPath = remoteDestPath || destPath;
 
     // Step 1: Pause/close the download to release file handles
-    await this.pauseDownload(hash, clientType);
+    await this.pauseDownload(operation);
 
     // Small delay to ensure files are released
     await this.sleep(500);
@@ -326,12 +327,12 @@ class MoveOperationManager extends BaseModule {
     }
 
     // Step 4: Verify (compare against actual source size, not totalSize)
-    this.db.updateStatus(hash, 'verifying');
-    this.updateActiveOperation(hash);
+    this.db.updateStatus(hash, instanceId, 'verifying');
+    this.updateActiveOperation(hash, instanceId);
     await this.verifyMove(operation, actualSourceSize);
 
     // Step 4: Update client's directory setting (use remote path)
-    await this.updateClientDirectory(hash, clientDestPath, clientType);
+    await this.updateClientDirectory(operation, clientDestPath);
 
     // Step 5: Cleanup source (skip if rename was used - source already moved)
     if (!usedRename) {
@@ -339,12 +340,13 @@ class MoveOperationManager extends BaseModule {
     }
 
     // Step 6: Resume download
-    await this.resumeDownload(hash, clientType);
+    await this.resumeDownload(operation);
 
-    // Step 7: For aMule, refresh shared files to update the list
-    if (clientType === 'amule') {
+    // Step 7: Refresh shared files if the client requires it after move (e.g. aMule)
+    if (clientMeta.hasCapability(clientType, 'refreshSharedAfterMove')) {
       try {
-        await amuleManager.getClient().refreshSharedFiles();
+        const manager = this._getManagerForOp(operation);
+        await manager.refreshSharedFiles();
         await this.sleep(500); // Give aMule time to process
       } catch (err) {
         this.log(`⚠️ Failed to refresh aMule shared files: ${err.message}`);
@@ -353,68 +355,50 @@ class MoveOperationManager extends BaseModule {
   }
 
   /**
-   * Pause/close a download to release file handles
-   * @param {string} hash - Download hash
-   * @param {string} clientType - Client type
+   * Get the correct manager for a move operation via registry.
+   * @param {Object} operation - Operation record (with instanceId, clientType)
+   * @returns {Object} Manager instance
+   * @throws {Error} If manager not found or not connected
    */
-  async pauseDownload(hash, clientType) {
-    if (clientType === 'rtorrent') {
-      if (!rtorrentManager) {
-        throw new Error('rtorrent manager not available');
-      }
-      await rtorrentManager.closeDownload(hash);
-    } else if (clientType === 'qbittorrent') {
-      if (!qbittorrentManager) {
-        throw new Error('qBittorrent manager not available');
-      }
-      await qbittorrentManager.stopDownload(hash);
-    } else if (clientType === 'amule') {
-      // aMule: File handle release not required for shared files
+  _getManagerForOp(operation) {
+    const manager = registry.get(operation.instanceId);
+    if (!manager || !manager.isConnected()) {
+      throw new Error(`${operation.clientType} instance "${operation.instanceId || 'default'}" not connected`);
     }
+    return manager;
+  }
+
+  /**
+   * Pause/close a download to release file handles
+   * Skipped for clients that don't need it (e.g. aMule shared files)
+   * @param {Object} operation - Operation record
+   */
+  async pauseDownload(operation) {
+    if (!clientMeta.hasCapability(operation.clientType, 'pauseBeforeMove')) return;
+    const manager = this._getManagerForOp(operation);
+    await manager.stop(operation.hash);
   }
 
   /**
    * Resume a download after move
-   * @param {string} hash - Download hash
-   * @param {string} clientType - Client type
+   * Skipped for clients that don't need it (e.g. aMule shared files)
+   * @param {Object} operation - Operation record
    */
-  async resumeDownload(hash, clientType) {
-    if (clientType === 'rtorrent') {
-      if (!rtorrentManager) {
-        throw new Error('rtorrent manager not available');
-      }
-      await rtorrentManager.startDownload(hash);
-    } else if (clientType === 'qbittorrent') {
-      if (!qbittorrentManager) {
-        throw new Error('qBittorrent manager not available');
-      }
-      await qbittorrentManager.startDownload(hash);
-    } else if (clientType === 'amule') {
-      // aMule: Resume not required for shared files
-    }
+  async resumeDownload(operation) {
+    if (!clientMeta.hasCapability(operation.clientType, 'pauseBeforeMove')) return;
+    const manager = this._getManagerForOp(operation);
+    await manager.resume(operation.hash);
   }
 
   /**
    * Update client's directory setting for a download
-   * @param {string} hash - Download hash
+   * Each manager handles its own client API (no-op for aMule)
+   * @param {Object} operation - Operation record
    * @param {string} newPath - New directory path
-   * @param {string} clientType - Client type
    */
-  async updateClientDirectory(hash, newPath, clientType) {
-    if (clientType === 'rtorrent') {
-      if (!rtorrentManager) {
-        throw new Error('rtorrent manager not available');
-      }
-      await rtorrentManager.getClient().call('d.directory.set', [hash, newPath]);
-    } else if (clientType === 'qbittorrent') {
-      if (!qbittorrentManager) {
-        throw new Error('qBittorrent manager not available');
-      }
-      // qBittorrent: Update the torrent's save location
-      await qbittorrentManager.getClient().setLocation(hash, newPath);
-    } else if (clientType === 'amule') {
-      // aMule: Directory update handled automatically for shared files
-    }
+  async updateClientDirectory(operation, newPath) {
+    const manager = this._getManagerForOp(operation);
+    await manager.updateDirectory(operation.hash, newPath);
   }
 
   /**
@@ -423,7 +407,7 @@ class MoveOperationManager extends BaseModule {
    * @returns {boolean} True if rename was used (source already moved), false if copy was used
    */
   async moveSingleFile(operation) {
-    const { hash, name, sourcePath, destPath, totalSize } = operation;
+    const { hash, instanceId, name, sourcePath, destPath, totalSize } = operation;
 
     // For single-file torrents:
     // - sourcePath is the torrent's DIRECTORY (e.g., /home/.../temp)
@@ -437,12 +421,12 @@ class MoveOperationManager extends BaseModule {
 
     // Try rename first (instant, same filesystem)
     // Falls back to copy if cross-filesystem (EXDEV error)
-    const usedCopy = await this.moveOrCopyFile(sourceFilePath, destFilePath, hash, 0);
+    const usedCopy = await this.moveOrCopyFile(sourceFilePath, destFilePath, operation, 0);
 
     // Update progress to 100% if rename was used (no progress events)
     if (!usedCopy) {
-      this.db.updateProgress(hash, totalSize);
-      this.updateActiveOperation(hash);
+      this.db.updateProgress(hash, instanceId, totalSize);
+      this.updateActiveOperation(hash, instanceId);
     }
 
     return !usedCopy; // Return true if rename was used
@@ -454,7 +438,7 @@ class MoveOperationManager extends BaseModule {
    * @returns {boolean} True if rename was used for entire directory, false if copy was used
    */
   async moveDirectory(operation) {
-    const { hash, name, sourcePath, destPath, totalSize } = operation;
+    const { hash, instanceId, name, sourcePath, destPath, totalSize } = operation;
 
     // Destination is category path + torrent name (preserve the directory name)
     const destDir = path.join(destPath, name);
@@ -466,8 +450,8 @@ class MoveOperationManager extends BaseModule {
     try {
       await fs.rename(sourcePath, destDir);
       // Update progress to 100%
-      this.db.update(hash, { bytesMoved: totalSize, filesTotal: 1, filesMoved: 1 });
-      this.updateActiveOperation(hash);
+      this.db.update(hash, instanceId, { bytesMoved: totalSize, filesTotal: 1, filesMoved: 1 });
+      this.updateActiveOperation(hash, instanceId);
       return true; // Rename was used - source directory no longer exists
     } catch (err) {
       if (err.code !== 'EXDEV') {
@@ -479,8 +463,8 @@ class MoveOperationManager extends BaseModule {
 
     // Fall back to file-by-file copy for cross-filesystem moves
     const files = await this.listFilesRecursive(sourcePath);
-    this.db.update(hash, { filesTotal: files.length });
-    this.updateActiveOperation(hash);
+    this.db.update(hash, instanceId, { filesTotal: files.length });
+    this.updateActiveOperation(hash, instanceId);
 
     let totalBytesMoved = 0;
 
@@ -490,26 +474,26 @@ class MoveOperationManager extends BaseModule {
       const destFile = path.join(destDir, relPath);
 
       // Update current file being moved
-      this.db.update(hash, { currentFile: relPath, filesMoved: i });
-      this.updateActiveOperation(hash);
+      this.db.update(hash, instanceId, { currentFile: relPath, filesMoved: i });
+      this.updateActiveOperation(hash, instanceId);
 
       // Ensure destination directory exists
       await fs.mkdir(path.dirname(destFile), { recursive: true });
 
       // Try rename, fall back to copy (for cross-fs, rename per-file will also fail)
-      const usedCopy = await this.moveOrCopyFile(file.path, destFile, hash, totalBytesMoved);
+      const usedCopy = await this.moveOrCopyFile(file.path, destFile, operation, totalBytesMoved);
 
       totalBytesMoved += file.size;
       if (!usedCopy) {
         // Update progress since rename doesn't emit events
-        this.db.updateProgress(hash, totalBytesMoved);
-        this.updateActiveOperation(hash);
+        this.db.updateProgress(hash, instanceId, totalBytesMoved);
+        this.updateActiveOperation(hash, instanceId);
       }
     }
 
     // Final update
-    this.db.update(hash, { filesMoved: files.length, bytesMoved: totalBytesMoved });
-    this.updateActiveOperation(hash);
+    this.db.update(hash, instanceId, { filesMoved: files.length, bytesMoved: totalBytesMoved });
+    this.updateActiveOperation(hash, instanceId);
 
     return false; // Copy was used - source files need cleanup
   }
@@ -518,11 +502,11 @@ class MoveOperationManager extends BaseModule {
    * Move or copy a file (tries rename first, falls back to copy)
    * @param {string} src - Source file path
    * @param {string} dest - Destination file path
-   * @param {string} hash - Torrent hash for progress updates
+   * @param {Object} operation - Operation record (for hash/instanceId progress updates)
    * @param {number} baseBytes - Bytes already moved (for progress)
    * @returns {boolean} True if copy was used, false if rename was used
    */
-  async moveOrCopyFile(src, dest, hash, baseBytes) {
+  async moveOrCopyFile(src, dest, operation, baseBytes) {
     try {
       // Try rename first (instant, same filesystem)
       await fs.rename(src, dest);
@@ -533,7 +517,7 @@ class MoveOperationManager extends BaseModule {
       }
       // Fall back to copy for cross-filesystem
       this.log(`⚠️ File rename failed (${err.code}: ${err.message}), falling back to copy: ${path.basename(src)}`);
-      await this.copyFileWithProgress(src, dest, hash, baseBytes);
+      await this.copyFileWithProgress(src, dest, operation, baseBytes);
       return true; // Copy was used
     }
   }
@@ -567,11 +551,12 @@ class MoveOperationManager extends BaseModule {
    * Copy a file with progress tracking
    * @param {string} src - Source file path
    * @param {string} dest - Destination file path
-   * @param {string} hash - Torrent hash for progress updates
+   * @param {Object} operation - Operation record (for hash/instanceId progress updates)
    * @param {number} baseBytes - Bytes already moved (for multi-file)
    * @returns {number} Total bytes moved including this file
    */
-  async copyFileWithProgress(src, dest, hash, baseBytes) {
+  async copyFileWithProgress(src, dest, operation, baseBytes) {
+    const { hash, instanceId } = operation;
     return new Promise((resolve, reject) => {
       const readStream = fsSync.createReadStream(src);
       const writeStream = fsSync.createWriteStream(dest);
@@ -585,8 +570,8 @@ class MoveOperationManager extends BaseModule {
         // Throttle DB updates to every 500ms
         const now = Date.now();
         if (now - lastUpdate > 500) {
-          this.db.updateProgress(hash, baseBytes + bytesCopied);
-          this.updateActiveOperation(hash);
+          this.db.updateProgress(hash, instanceId, baseBytes + bytesCopied);
+          this.updateActiveOperation(hash, instanceId);
           lastUpdate = now;
         }
       });
@@ -726,18 +711,18 @@ class MoveOperationManager extends BaseModule {
       const clientType = op.clientType || 'rtorrent';
 
       if (op.status === 'pending') {
-        // Pending operations can be re-queued
-        this.activeOperations.set(op.hash.toLowerCase(), op);
+        // Pending operations can be re-queued (compound key)
+        this.activeOperations.set(itemKey(op.instanceId, op.hash), op);
         this.log(`📦 Re-queued pending operation: ${op.name} (${clientType})`);
       } else if (op.status === 'moving' || op.status === 'verifying') {
         // Interrupted mid-move - mark as failed and cleanup
         this.log(`📦 Marking interrupted operation as failed: ${op.name} (${clientType})`);
-        this.db.updateStatus(op.hash, 'failed', 'Operation interrupted by restart');
+        this.db.updateStatus(op.hash, op.instanceId, 'failed', 'Operation interrupted by restart');
         await this.cleanupPartialDest(op);
 
         // Try to resume download at original location
         try {
-          await this.resumeDownload(op.hash, clientType);
+          await this.resumeDownload(op);
         } catch (err) {
           this.log(`⚠️ Could not resume download: ${err.message}`);
         }
@@ -751,11 +736,12 @@ class MoveOperationManager extends BaseModule {
   /**
    * Update active operation cache from database
    * @param {string} hash - Torrent hash
+   * @param {string} instanceId - Instance ID
    */
-  updateActiveOperation(hash) {
-    const op = this.db.getByHash(hash);
+  updateActiveOperation(hash, instanceId) {
+    const op = this.db.getByHash(hash, instanceId);
     if (op) {
-      this.activeOperations.set(hash.toLowerCase(), op);
+      this.activeOperations.set(itemKey(instanceId, hash), op);
     }
   }
 
@@ -788,7 +774,29 @@ class MoveOperationManager extends BaseModule {
         // Lazy require to avoid circular dependency (DataFetchService imports MoveOperationManager)
         const dataFetchService = require('./DataFetchService');
         const batchData = await dataFetchService.getBatchData();
-        this.broadcast({ type: 'batch-update', data: { items: batchData.items } });
+        this.broadcast({ type: 'batch-update', data: { items: batchData.items } }, {
+          transform: (msg, user) => {
+            const items = msg.data.items || [];
+            if (!user || user.isAdmin || user.capabilities?.includes('view_all_downloads')) {
+              // Annotate items with ownership flag for frontend mutation gating
+              if (!user?.userId || !this.userManager || user?.isAdmin) {
+                return { ...msg, data: { ...msg.data, items: items.map(i => ({ ...i, ownedByMe: true })) } };
+              }
+              const ownedKeys = this.userManager.getOwnedKeys(user.userId);
+              return { ...msg, data: { ...msg.data, items: items.map(i => ({ ...i, ownedByMe: ownedKeys.has(itemKey(i.instanceId, i.hash)) })) } };
+            }
+            // Ownership-filtered — all surviving items are owned
+            if (!user.userId || !this.userManager) return msg;
+            const ownedKeys = this.userManager.getOwnedKeys(user.userId);
+            return {
+              ...msg,
+              data: {
+                ...msg.data,
+                items: items.filter(item => ownedKeys.has(itemKey(item.instanceId, item.hash))).map(i => ({ ...i, ownedByMe: true }))
+              }
+            };
+          }
+        });
       }
     } catch (err) {
       this.log(`⚠️ Could not trigger batch update: ${err.message}`);

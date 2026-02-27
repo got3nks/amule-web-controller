@@ -1,128 +1,15 @@
 /**
  * Network Status Utilities
  *
- * Shared helpers for determining ED2K and KAD network connection status
+ * CSS class and icon helpers for network status display.
+ * Status parsing is done server-side (computeInstanceNetworkStatus in autoRefreshManager)
+ * and shipped per-instance via combinedStats.instances[id].networkStatus.
  */
 
 /**
  * Status types for network connections
  * @typedef {'green' | 'yellow' | 'red'} StatusColor
  */
-
-/**
- * Network status result
- * @typedef {object} NetworkStatus
- * @property {StatusColor} status - Status color (green/yellow/red)
- * @property {string} label - Short label (ED2K/KAD)
- * @property {string} text - Status text (High ID, Low ID, OK, Firewalled, Disconnected)
- * @property {boolean} connected - Whether the network is connected
- */
-
-/**
- * Get ED2K network status from stats
- * @param {object} stats - Stats object from WebSocket
- * @returns {NetworkStatus} ED2K status information
- */
-export const getED2KStatus = (stats) => {
-  if (!stats) {
-    return { status: 'red', label: 'ED2K', text: 'Disconnected', connected: false };
-  }
-
-  const connState = stats.EC_TAG_CONNSTATE || {};
-  const server = connState.EC_TAG_SERVER || {};
-  const ed2kConnected = server?.EC_TAG_SERVER_PING > 0;
-  const clientId = connState.EC_TAG_CLIENT_ID;
-  const isHighId = clientId && clientId > 16777216;
-
-  if (!ed2kConnected) {
-    return { status: 'red', label: 'ED2K', text: 'Disconnected', connected: false };
-  }
-
-  return {
-    status: isHighId ? 'green' : 'yellow',
-    label: 'ED2K',
-    text: isHighId ? 'High ID' : 'Low ID',
-    connected: true,
-    serverName: server.EC_TAG_SERVER_NAME,
-    serverPing: server.EC_TAG_SERVER_PING
-  };
-};
-
-/**
- * Get KAD network status from stats
- * @param {object} stats - Stats object from WebSocket
- * @returns {NetworkStatus} KAD status information
- */
-export const getKADStatus = (stats) => {
-  if (!stats) {
-    return { status: 'red', label: 'KAD', text: 'Disconnected', connected: false };
-  }
-
-  const kadFirewalledValue = stats.EC_TAG_STATS_KAD_FIREWALLED_UDP;
-  const kadConnected = kadFirewalledValue !== undefined && kadFirewalledValue !== null;
-  const kadFirewalled = kadFirewalledValue === 1;
-
-  if (!kadConnected) {
-    return { status: 'red', label: 'KAD', text: 'Disconnected', connected: false };
-  }
-
-  return {
-    status: kadFirewalled ? 'yellow' : 'green',
-    label: 'KAD',
-    text: kadFirewalled ? 'Firewalled' : 'OK',
-    connected: true
-  };
-};
-
-/**
- * Get rTorrent network status from stats
- * @param {object} stats - Stats object from WebSocket
- * @returns {NetworkStatus} rTorrent status information
- */
-export const getRtorrentStatus = (stats) => {
-  const rtConnected = stats?.rtorrent?.connected;
-
-  if (!rtConnected) {
-    return { status: 'red', label: 'rTorrent', text: 'Disconnected', connected: false };
-  }
-
-  const portOpen = stats.rtorrent?.portOpen;
-  const listenPort = stats.rtorrent?.listenPort;
-
-  return {
-    status: portOpen ? 'green' : 'yellow',
-    label: 'rTorrent',
-    text: portOpen ? 'OK' : 'Firewalled',
-    connected: true,
-    listenPort
-  };
-};
-
-/**
- * Get qBittorrent network status from stats
- * Maps connection_status: "connected" → green, "firewalled" → yellow, "disconnected" → red
- * @param {object} stats - Stats object from WebSocket
- * @returns {NetworkStatus} qBittorrent status information
- */
-export const getQbittorrentStatus = (stats) => {
-  const qbConnected = stats?.qbittorrent?.connected;
-
-  if (!qbConnected) {
-    return { status: 'red', label: 'qBittorrent', text: 'Disconnected', connected: false };
-  }
-
-  const connectionStatus = stats.qbittorrent?.connectionStatus || 'disconnected';
-  const listenPort = stats.qbittorrent?.listenPort;
-
-  switch (connectionStatus) {
-    case 'connected':
-      return { status: 'green', label: 'qBittorrent', text: 'OK', connected: true, listenPort };
-    case 'firewalled':
-      return { status: 'yellow', label: 'qBittorrent', text: 'Firewalled', connected: true, listenPort };
-    default:
-      return { status: 'red', label: 'qBittorrent', text: 'Disconnected', connected: true, listenPort };
-  }
-};
 
 /**
  * Get CSS class for status dot color

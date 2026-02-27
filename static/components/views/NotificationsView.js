@@ -208,53 +208,41 @@ const NotificationsView = () => {
       defaultOpen: true
     },
       // Services grid
-      hasServices
-        ? h('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-4 mb-4' },
-            services.map(service =>
-              h(ServiceCard, {
-                key: service.id,
-                service,
-                onEdit: handleEditService,
-                onDelete: handleDeleteService,
-                onTest: handleTestService,
-                onToggle: handleToggleService,
-                loading
-              })
-            )
-          )
-        : h(AlertBox, { type: 'info', className: 'mb-4' },
-            h('p', {}, 'No notification services configured. Add a service to start receiving notifications.')
-          ),
+      h('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-4 mb-4' },
+        hasServices && services.map(service =>
+          h(ServiceCard, {
+            key: service.id,
+            service,
+            onEdit: handleEditService,
+            onDelete: handleDeleteService,
+            onTest: handleTestService,
+            onToggle: handleToggleService,
+            loading
+          })
+        ),
 
-      // Add service button
-      h('button', {
-        onClick: handleAddService,
-        disabled: loading,
-        className: 'flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-blue-500 hover:text-blue-500 dark:hover:border-blue-500 dark:hover:text-blue-500 transition-colors w-full justify-center'
-      },
-        h(Icon, { name: 'plus', size: 18 }),
-        'Add Service'
+        // Add service card
+        h('button', {
+          onClick: handleAddService,
+          disabled: loading,
+          className: 'border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 flex flex-col items-center justify-center gap-2 text-gray-500 dark:text-gray-400 hover:border-blue-500 dark:hover:border-blue-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-colors md:min-h-[160px] disabled:opacity-50 disabled:cursor-not-allowed'
+        },
+          h(Icon, { name: 'plus', size: 24 }),
+          h('span', { className: 'text-sm font-medium' }, 'Add Service')
+        )
+      ),
+
+      !hasServices && h(AlertBox, { type: 'info', className: 'mb-4' },
+        h('p', {}, 'No notification services configured. Add a service to start receiving notifications.')
       )
     ),
 
-    // Test all section (only when enabled and has services)
-    isEnabled && hasServices && hasEnabledServices && h('div', { className: 'mt-6' },
-      h('button', {
-        onClick: handleTestAll,
-        disabled: loading,
-        className: 'flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors'
-      },
-        loading ? h(LoadingSpinner, { size: 18, color: 'white' }) : h(Icon, { name: 'bell', size: 18 }),
-        'Test All Services'
-      ),
-
-      // Test result
-      testResult && h('div', { className: 'mt-4' },
-        h(TestResultIndicator, {
-          result: testResult,
-          label: 'Notification Test'
-        })
-      )
+    // Test result
+    testResult && h('div', { className: 'mt-4' },
+      h(TestResultIndicator, {
+        result: testResult,
+        label: 'Notification Test'
+      })
     ),
 
     // Error message
@@ -267,22 +255,44 @@ const NotificationsView = () => {
       h('p', {}, 'Configuration saved successfully!')
     ),
 
-    // Save button (for config changes)
-    hasChanges && h('div', { className: 'flex gap-3 mt-6' },
-      h(Button, {
-        variant: 'success',
+    // Action buttons (always visible, muted when disabled)
+    h('div', { className: 'flex gap-3 mt-6 pb-4' },
+      h('button', {
+        onClick: handleTestAll,
+        disabled: !isEnabled || !hasServices || !hasEnabledServices || loading,
+        className: `flex-1 px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium rounded-lg
+          ${!isEnabled || !hasServices || !hasEnabledServices || loading
+            ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
+            : 'bg-blue-600 hover:bg-blue-700 text-white'}
+          transition-colors`
+      }, h('span', { className: 'flex items-center justify-center gap-1.5' },
+        h(Icon, { name: 'bell', size: 15 }),
+        loading ? 'Testing...' : 'Test All Notifications'
+      )),
+      h('button', {
         onClick: handleSaveConfig,
-        disabled: loading
-      }, loading ? 'Saving...' : 'Save Changes'),
-      h(Button, {
-        variant: 'secondary',
+        disabled: !hasChanges || loading,
+        className: `flex-1 px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium rounded-lg
+          ${!hasChanges || loading
+            ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
+            : 'bg-green-600 hover:bg-green-700 text-white'}
+          transition-colors`
+      }, h('span', { className: 'flex items-center justify-center gap-1.5' },
+        h(Icon, { name: 'check', size: 15 }),
+        loading ? 'Saving...' : 'Save Changes'
+      )),
+      h('button', {
         onClick: () => {
           setLocalConfig({ ...config });
           setHasChanges(false);
           clearError();
         },
-        disabled: loading
-      }, 'Cancel')
+        disabled: loading,
+        className: 'flex-1 px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 transition-colors'
+      }, h('span', { className: 'flex items-center justify-center gap-1.5' },
+        h(Icon, { name: 'x', size: 15 }),
+        'Cancel'
+      ))
     ),
 
     // Service modal

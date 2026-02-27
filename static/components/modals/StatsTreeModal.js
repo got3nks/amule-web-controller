@@ -1,34 +1,51 @@
 /**
  * StatsTreeModal Component
  *
- * Modal dialog for displaying the ED2K Statistics Tree
+ * Modal dialog for displaying the ED2K Statistics Tree.
+ * Owns instance selection, data fetching, and auto-refresh internally.
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { StatsTree, Icon, ClientIcon } from '../common/index.js';
+import { StatsTree, Icon, ClientIcon, Portal, AmuleInstanceSelector } from '../common/index.js';
+import { useStaticData } from '../../contexts/StaticDataContext.js';
+import { useDataFetch } from '../../contexts/DataFetchContext.js';
+import { useAmuleInstanceSelector } from '../../hooks/useAmuleInstanceSelector.js';
 
-const { createElement: h, useEffect } = React;
+const { createElement: h, useEffect, useState } = React;
+
+const STATS_TREE_REFRESH_INTERVAL = 30000;
 
 /**
  * Stats Tree Modal component
  * @param {boolean} show - Whether to show the modal
  * @param {function} onClose - Close handler
- * @param {object} statsTree - Statistics tree data
- * @param {boolean} loading - Loading state
- * @param {object} expandedNodes - Controlled expanded nodes state
- * @param {function} onExpandedNodesChange - Handler for expanded nodes changes
  */
-const StatsTreeModal = ({ show, onClose, statsTree, loading, expandedNodes, onExpandedNodesChange }) => {
+const StatsTreeModal = ({ show, onClose }) => {
+  const { dataStatsTree: statsTree } = useStaticData();
+  const { fetchStatsTree } = useDataFetch();
+  const {
+    connectedInstances: amuleInstances,
+    showSelector: showAmuleSelector,
+    selectedId: effectiveInstance,
+    selectedInstance: selectedObj,
+    selectInstance
+  } = useAmuleInstanceSelector();
+
+  // Persist expanded nodes across open/close
+  const [expandedNodes, setExpandedNodes] = useState({});
+
+  // Fetch on open and when instance changes; auto-refresh while open
+  useEffect(() => {
+    if (!show) return;
+    fetchStatsTree(effectiveInstance);
+    const interval = setInterval(() => fetchStatsTree(effectiveInstance), STATS_TREE_REFRESH_INTERVAL);
+    return () => clearInterval(interval);
+  }, [show, effectiveInstance, fetchStatsTree]);
+
   // Handle escape key
   useEffect(() => {
     if (!show) return;
-
-    const handleEscape = (e) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-
+    const handleEscape = (e) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
   }, [show, onClose]);
@@ -40,21 +57,20 @@ const StatsTreeModal = ({ show, onClose, statsTree, loading, expandedNodes, onEx
     } else {
       document.body.style.overflow = '';
     }
-    return () => {
-      document.body.style.overflow = '';
-    };
+    return () => { document.body.style.overflow = ''; };
   }, [show]);
 
   if (!show) return null;
 
-  return h('div', {
-    className: 'fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50',
-    onClick: (e) => {
-      if (e.target === e.currentTarget) onClose();
-    }
-  },
+  const instanceName = selectedObj?.name || null;
+
+  return h(Portal, null,
     h('div', {
-      className: 'bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col'
+      className: 'fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50',
+      onClick: (e) => { if (e.target === e.currentTarget) onClose(); }
+    },
+    h('div', {
+      className: 'modal-full bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col'
     },
       // Header
       h('div', {
@@ -63,7 +79,7 @@ const StatsTreeModal = ({ show, onClose, statsTree, loading, expandedNodes, onEx
         h('div', { className: 'flex items-center gap-2' },
           h(ClientIcon, { client: 'amule', size: 24 }),
           h('h2', { className: 'text-lg font-semibold text-gray-800 dark:text-gray-100' },
-            'ED2K Statistics Tree'
+            instanceName ? `ED2K Statistics Tree \u2014 ${instanceName}` : 'ED2K Statistics Tree'
           )
         ),
         h('button', {
@@ -78,14 +94,22 @@ const StatsTreeModal = ({ show, onClose, statsTree, loading, expandedNodes, onEx
       h('div', { className: 'flex-1 overflow-y-auto p-4' },
         h(StatsTree, {
           statsTree,
-          loading,
+          loading: statsTree === null,
           showHeader: false,
           expandedNodes,
-          onExpandedNodesChange
+          onExpandedNodesChange: setExpandedNodes,
+          toolbarPrefix: h(AmuleInstanceSelector, {
+            connectedInstances: amuleInstances,
+            selectedId: effectiveInstance,
+            onSelect: selectInstance,
+            showSelector: showAmuleSelector,
+            variant: 'dropdown',
+            className: 'text-sm'
+          })
         })
       )
     )
-  );
+  ));
 };
 
 export default StatsTreeModal;

@@ -2,7 +2,7 @@
 
 aMuTorrent can be installed using Docker (recommended) or natively.
 
-**Prerequisites:** At least one of: aMule with External Connections enabled, rTorrent with XML-RPC over HTTP, or qBittorrent with WebUI enabled.
+**Prerequisites:** At least one of: aMule with External Connections enabled, rTorrent with XML-RPC over HTTP, qBittorrent with WebUI enabled, Deluge with WebUI enabled, or Transmission with RPC enabled.
 
 ## Docker Installation (Recommended)
 
@@ -56,7 +56,7 @@ Open `http://localhost:4000` and follow the setup wizard to configure your downl
 
 ### Prerequisites
 
-- Node.js 18 or later
+- Node.js 20 or later
 - npm
 
 ### Steps
@@ -87,8 +87,8 @@ node server/server.js
 
 On first launch, aMuTorrent will display a setup wizard to configure:
 
-- **Download clients** - Enable at least one: aMule, rTorrent, qBittorrent, or any combination
-- **Web authentication** (optional) - Protect the web interface with a password
+- **Download clients** - Enable at least one: aMule, rTorrent, qBittorrent, Deluge, Transmission, or any combination
+- **Web authentication** (optional) - Protect the web interface with a password, optionally with multi-user accounts
 
 ## Next Steps
 
@@ -96,7 +96,7 @@ After completing the setup wizard, explore additional features:
 
 > **Configuration:** Settings, environment variables, and Docker networking. See [Configuration](./CONFIGURATION.md).
 >
-> **Download Clients:** Detailed setup for [aMule](./AMULE.md), [rTorrent](./RTORRENT.md), and [qBittorrent](./QBITTORRENT.md).
+> **Download Clients:** Detailed setup for [aMule](./AMULE.md), [rTorrent](./RTORRENT.md), [qBittorrent](./QBITTORRENT.md), [Deluge](./DELUGE.md), and [Transmission](./TRANSMISSION.md).
 >
 > **Prowlarr:** Search torrents directly from the web UI. See [Prowlarr Setup](./PROWLARR.md).
 >
@@ -107,3 +107,5 @@ After completing the setup wizard, explore additional features:
 > **Scripting:** Run custom scripts on download events. See [Scripting](../scripts/README.md).
 >
 > **GeoIP:** Display peer locations on a map. See [GeoIP Setup](./GEOIP.md).
+>
+> **User Management:** Multi-user authentication, capabilities, and SSO. See [User Management](./USERS.md).

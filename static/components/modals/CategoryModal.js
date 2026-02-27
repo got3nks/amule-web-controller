@@ -8,11 +8,13 @@ import React from 'https://esm.sh/react@18.2.0';
 import { categoryColorToHex, hexToCategoryColor } from '../../utils/index.js';
 import Portal from '../common/Portal.js';
 import { Button, Input, Select, AlertBox, IconButton } from '../common/index.js';
+import { ConfigField } from '../settings/index.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useModal } from '../../hooks/useModal.js';
 import DirectoryBrowserModal from './DirectoryBrowserModal.js';
+import { CLIENT_NAMES } from '../../utils/constants.js';
 
-const { createElement: h, useState, useEffect, useCallback, useRef } = React;
+const { createElement: h, useState, useEffect, useCallback, useRef, useMemo } = React;
 
 // Debounce delay for path validation (ms)
 const PATH_CHECK_DEBOUNCE = 500;
@@ -42,28 +44,67 @@ const CategoryModal = ({
   setError,
   isDocker = false
 }) => {
-  // Get client connection status and default paths from StaticData
-  const { clientsConnected, clientDefaultPaths } = useStaticData();
-  const isAmuleEnabled = clientsConnected?.amule === true;
-  const isRtorrentEnabled = clientsConnected?.rtorrent === true;
-  const isQbittorrentEnabled = clientsConnected?.qbittorrent === true;
+  // Get default paths and instance metadata from StaticData
+  const { clientDefaultPaths, instances } = useStaticData();
+
+  // Build dynamic mapping entries from connected instances
+  // Single-instance types use clientType as key (backward compat), multi-instance use instanceId
+  const mappingEntries = useMemo(() => {
+    const entries = [];
+    const typeInstances = {};
+
+    for (const [id, inst] of Object.entries(instances)) {
+      if (!inst.connected) continue;
+      if (!typeInstances[inst.type]) typeInstances[inst.type] = [];
+      typeInstances[inst.type].push({ instanceId: id, name: inst.name, color: inst.color, capabilities: inst.capabilities });
+    }
+
+    for (const [type, insts] of Object.entries(typeInstances)) {
+      if (insts.length === 1) {
+        entries.push({
+          key: type,
+          instanceId: insts[0].instanceId,
+          type,
+          label: insts[0].name || CLIENT_NAMES[type]?.name || type,
+          isMulti: false,
+          hasNativeMove: !!insts[0].capabilities?.nativeMove
+        });
+      } else {
+        for (const inst of insts) {
+          entries.push({
+            key: inst.instanceId,
+            instanceId: inst.instanceId,
+            type,
+            label: inst.name,
+            color: inst.color,
+            isMulti: true,
+            hasNativeMove: !!inst.capabilities?.nativeMove
+          });
+        }
+      }
+    }
+
+    return entries;
+  }, [instances]);
+
+  const hasAnyClient = mappingEntries.length > 0;
+  const nonNativeMoveEntries = useMemo(() => mappingEntries.filter(e => !e.hasNativeMove), [mappingEntries]);
+  const hasNativeMoveEntries = mappingEntries.some(e => e.hasNativeMove);
 
   // Local state for path mapping
   const [enablePathMapping, setEnablePathMapping] = useState(false);
-  const [pathMappings, setPathMappings] = useState({ amule: '', rtorrent: '', qbittorrent: '' });
+  const [pathMappings, setPathMappings] = useState({});
 
   // Path permission warning state
   const [pathWarning, setPathWarning] = useState(null);
-  const [mappingWarnings, setMappingWarnings] = useState({ amule: null, rtorrent: null, qbittorrent: null });
+  const [mappingWarnings, setMappingWarnings] = useState({});
 
   // Track if we're in the initialization phase (to prevent clearing warnings on init)
   const isInitializingRef = useRef(false);
 
   // Debounce timers for path validation
   const pathDebounceRef = useRef(null);
-  const amuleDebounceRef = useRef(null);
-  const rtorrentDebounceRef = useRef(null);
-  const qbittorrentDebounceRef = useRef(null);
+  const mappingDebounceRefs = useRef({});
 
   // Directory browser modal state
   const {
@@ -73,11 +114,13 @@ const CategoryModal = ({
   } = useModal({ target: null, initialPath: '' });
 
   // Handle path mapping changes
-  const handleMappingChange = useCallback((clientType, value) => {
-    setPathMappings(prev => ({
-      ...prev,
-      [clientType]: value
-    }));
+  const handleMappingChange = useCallback((key, value) => {
+    setPathMappings(prev => ({ ...prev, [key]: value }));
+    // Clear warning immediately when value changes
+    setMappingWarnings(prev => {
+      if (prev[key] === null || prev[key] === undefined) return prev;
+      return { ...prev, [key]: null };
+    });
   }, []);
 
   // Check path permissions (called on blur or after debounce)
@@ -125,35 +168,38 @@ const CategoryModal = ({
 
   // Debounced path permission check - waits until user stops typing
   const checkPathPermissionsDebounced = useCallback((pathToCheck, warningKey = null) => {
-    // Choose the appropriate debounce ref based on warningKey
-    const debounceRef = warningKey === 'amule' ? amuleDebounceRef
-      : warningKey === 'rtorrent' ? rtorrentDebounceRef
-      : warningKey === 'qbittorrent' ? qbittorrentDebounceRef
-      : pathDebounceRef;
-
-    // Clear existing timer
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
+    if (warningKey) {
+      if (mappingDebounceRefs.current[warningKey]) {
+        clearTimeout(mappingDebounceRefs.current[warningKey]);
+      }
+      mappingDebounceRefs.current[warningKey] = setTimeout(() => {
+        checkPathPermissionsImmediate(pathToCheck, warningKey);
+        delete mappingDebounceRefs.current[warningKey];
+      }, PATH_CHECK_DEBOUNCE);
+    } else {
+      if (pathDebounceRef.current) {
+        clearTimeout(pathDebounceRef.current);
+      }
+      pathDebounceRef.current = setTimeout(() => {
+        checkPathPermissionsImmediate(pathToCheck, warningKey);
+        pathDebounceRef.current = null;
+      }, PATH_CHECK_DEBOUNCE);
     }
-
-    // Set new timer
-    debounceRef.current = setTimeout(() => {
-      checkPathPermissionsImmediate(pathToCheck, warningKey);
-      debounceRef.current = null;
-    }, PATH_CHECK_DEBOUNCE);
   }, [checkPathPermissionsImmediate]);
 
   // Immediate check (for blur and browser selection)
   const checkPathPermissions = useCallback((pathToCheck, warningKey = null) => {
     // Cancel any pending debounced check
-    const debounceRef = warningKey === 'amule' ? amuleDebounceRef
-      : warningKey === 'rtorrent' ? rtorrentDebounceRef
-      : warningKey === 'qbittorrent' ? qbittorrentDebounceRef
-      : pathDebounceRef;
-
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-      debounceRef.current = null;
+    if (warningKey) {
+      if (mappingDebounceRefs.current[warningKey]) {
+        clearTimeout(mappingDebounceRefs.current[warningKey]);
+        delete mappingDebounceRefs.current[warningKey];
+      }
+    } else {
+      if (pathDebounceRef.current) {
+        clearTimeout(pathDebounceRef.current);
+        pathDebounceRef.current = null;
+      }
     }
 
     // Check immediately
@@ -166,18 +212,10 @@ const CategoryModal = ({
       onFormDataChange({ ...formData, path: selectedPath });
       // Check path permissions immediately after selection
       checkPathPermissions(selectedPath);
-    } else if (browserModal.target === 'amule') {
-      handleMappingChange('amule', selectedPath);
-      // Check path permissions immediately after selection
-      checkPathPermissions(selectedPath, 'amule');
-    } else if (browserModal.target === 'rtorrent') {
-      handleMappingChange('rtorrent', selectedPath);
-      // Check path permissions immediately after selection
-      checkPathPermissions(selectedPath, 'rtorrent');
-    } else if (browserModal.target === 'qbittorrent') {
-      handleMappingChange('qbittorrent', selectedPath);
-      // Check path permissions immediately after selection
-      checkPathPermissions(selectedPath, 'qbittorrent');
+    } else {
+      // Target is a mapping entry key (clientType or instanceId)
+      handleMappingChange(browserModal.target, selectedPath);
+      checkPathPermissions(selectedPath, browserModal.target);
     }
   }, [browserModal.target, formData, onFormDataChange, handleMappingChange, checkPathPermissions]);
 
@@ -185,9 +223,10 @@ const CategoryModal = ({
   useEffect(() => {
     if (!show) {
       if (pathDebounceRef.current) clearTimeout(pathDebounceRef.current);
-      if (amuleDebounceRef.current) clearTimeout(amuleDebounceRef.current);
-      if (rtorrentDebounceRef.current) clearTimeout(rtorrentDebounceRef.current);
-      if (qbittorrentDebounceRef.current) clearTimeout(qbittorrentDebounceRef.current);
+      for (const timer of Object.values(mappingDebounceRefs.current)) {
+        clearTimeout(timer);
+      }
+      mappingDebounceRefs.current = {};
     }
   }, [show]);
 
@@ -199,33 +238,52 @@ const CategoryModal = ({
 
       if (category?.pathMappings) {
         setEnablePathMapping(true);
-        setPathMappings({
-          amule: category.pathMappings.amule || '',
-          rtorrent: category.pathMappings.rtorrent || '',
-          qbittorrent: category.pathMappings.qbittorrent || ''
-        });
+        const initial = {};
+        const usedTypeFallbacks = new Set();
+        for (const entry of mappingEntries) {
+          if (entry.hasNativeMove) continue;
+          // Try exact key first
+          let val = category.pathMappings[entry.key];
+          // Migration fallback: if entry uses instanceId key and not found, try clientType key
+          // Only give the fallback to the first instance of that type
+          if (!val && entry.isMulti && !usedTypeFallbacks.has(entry.type)) {
+            val = category.pathMappings[entry.type];
+            if (val) usedTypeFallbacks.add(entry.type);
+          }
+          initial[entry.key] = val || '';
+        }
+        setPathMappings(initial);
       } else {
         setEnablePathMapping(false);
-        setPathMappings({ amule: '', rtorrent: '', qbittorrent: '' });
+        const empty = {};
+        for (const entry of mappingEntries) {
+          if (entry.hasNativeMove) continue;
+          empty[entry.key] = '';
+        }
+        setPathMappings(empty);
       }
 
       // Reset warnings - will be re-checked via API below
       setPathWarning(null);
-      setMappingWarnings({ amule: null, rtorrent: null, qbittorrent: null });
+      setMappingWarnings({});
 
       // Clear initialization flag after a tick (after clear effects have run)
       setTimeout(() => {
         isInitializingRef.current = false;
       }, 0);
     }
-  }, [show, category]);
+  }, [show, category, mappingEntries]);
 
   // Re-check path permissions when modal opens (to get fresh warnings with Docker hints)
   // Note: Only runs on modal open, not on every path keystroke
   useEffect(() => {
     if (show && mode === 'edit' && category) {
       const isDefaultCategory = category.name === 'Default' || category.title === 'Default';
-      const hasPathMappings = category.pathMappings && (category.pathMappings.amule || category.pathMappings.rtorrent);
+      // Build set of keys for native-move clients (no path mapping needed)
+      const nativeMoveKeys = new Set(mappingEntries.filter(e => e.hasNativeMove).map(e => e.key));
+      // Check for any non-native-move path mapping
+      const hasPathMappings = category.pathMappings &&
+        Object.entries(category.pathMappings).some(([k, v]) => v && !nativeMoveKeys.has(k));
 
       // Check main path (only for non-Default categories without path mapping)
       // Use category.path (original value) not formData.path to avoid re-running on every keystroke
@@ -233,13 +291,12 @@ const CategoryModal = ({
         checkPathPermissions(category.path);
       }
 
-      // Check path mappings if enabled (qBittorrent excluded - uses native API)
+      // Check path mappings if enabled (native-move clients excluded)
       if (hasPathMappings) {
-        if (category.pathMappings.amule) {
-          checkPathPermissions(category.pathMappings.amule, 'amule');
-        }
-        if (category.pathMappings.rtorrent) {
-          checkPathPermissions(category.pathMappings.rtorrent, 'rtorrent');
+        for (const [key, val] of Object.entries(category.pathMappings)) {
+          if (val && !nativeMoveKeys.has(key)) {
+            checkPathPermissions(val, key);
+          }
         }
       }
     }
@@ -250,34 +307,20 @@ const CategoryModal = ({
     const isDefaultCategory = category?.name === 'Default' || category?.title === 'Default';
     if (!isDefaultCategory && !formData.path?.trim()) {
       setEnablePathMapping(false);
-      setPathMappings({ amule: '', rtorrent: '', qbittorrent: '' });
+      const empty = {};
+      for (const entry of mappingEntries) {
+        if (!entry.hasNativeMove) empty[entry.key] = '';
+      }
+      setPathMappings(empty);
     }
-  }, [formData.path, category]);
+  }, [formData.path, category, mappingEntries]);
 
-  // Clear warnings when paths change or path mapping is enabled (but not during initialization)
+  // Clear main path warning when path changes or path mapping is toggled (but not during initialization)
   useEffect(() => {
     if (!isInitializingRef.current) {
       setPathWarning(null);
     }
   }, [formData.path, enablePathMapping]);
-
-  useEffect(() => {
-    if (!isInitializingRef.current) {
-      setMappingWarnings(prev => ({ ...prev, amule: null }));
-    }
-  }, [pathMappings.amule]);
-
-  useEffect(() => {
-    if (!isInitializingRef.current) {
-      setMappingWarnings(prev => ({ ...prev, rtorrent: null }));
-    }
-  }, [pathMappings.rtorrent]);
-
-  useEffect(() => {
-    if (!isInitializingRef.current) {
-      setMappingWarnings(prev => ({ ...prev, qbittorrent: null }));
-    }
-  }, [pathMappings.qbittorrent]);
 
   if (!show) return null;
 
@@ -299,14 +342,11 @@ const CategoryModal = ({
     const canHavePathMapping = isDefault || !!formData.path?.trim();
     if (enablePathMapping && canHavePathMapping) {
       const mappings = {};
-      if (pathMappings.amule?.trim()) {
-        mappings.amule = pathMappings.amule.trim();
-      }
-      if (pathMappings.rtorrent?.trim()) {
-        mappings.rtorrent = pathMappings.rtorrent.trim();
-      }
-      if (pathMappings.qbittorrent?.trim()) {
-        mappings.qbittorrent = pathMappings.qbittorrent.trim();
+      for (const entry of nonNativeMoveEntries) {
+        const val = pathMappings[entry.key]?.trim();
+        if (val) {
+          mappings[entry.key] = val;
+        }
       }
       if (Object.keys(mappings).length > 0) {
         finalPathMappings = mappings;
@@ -315,7 +355,7 @@ const CategoryModal = ({
 
     if (isEdit) {
       onUpdate(
-        category.id,
+        category.name,
         formData.title,
         formData.path,
         formData.comment,
@@ -341,7 +381,7 @@ const CategoryModal = ({
       onClick: onClose
     },
       h('div', {
-        className: 'bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full max-h-[85vh] sm:max-h-[90vh] flex flex-col overflow-hidden',
+        className: 'modal-full bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full max-h-[85vh] sm:max-h-[90vh] flex flex-col overflow-hidden',
         onClick: (e) => e.stopPropagation()
       },
       // Header
@@ -354,23 +394,60 @@ const CategoryModal = ({
       h('div', { className: 'flex-1 overflow-y-auto p-3 sm:p-4' },
       h('form', { onSubmit: handleSubmit, className: 'space-y-3 sm:space-y-4' },
         // Title (not editable for Default category)
-        h('div', null,
-          h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
-            'Title *'
-          ),
-          h(Input, {
-            type: 'text',
-            value: formData.title,
-            onChange: (e) => onFormDataChange({ ...formData, title: e.target.value }),
-            placeholder: 'e.g., Movies, Music, Software',
-            className: 'w-full',
-            required: true,
-            disabled: isDefault
-          }),
-          isDefault && h('p', { className: 'text-xs text-gray-500 dark:text-gray-400 mt-1' },
-            'The Default category cannot be renamed'
+        h(ConfigField, {
+          label: 'Title',
+          description: isDefault ? 'The Default category cannot be renamed' : undefined,
+          value: formData.title,
+          onChange: (value) => onFormDataChange({ ...formData, title: value }),
+          placeholder: 'e.g., Movies, Music, Software',
+          required: true,
+          disabled: isDefault
+        }),
+
+        // Comment
+        h(ConfigField, {
+          label: 'Comment',
+          value: formData.comment,
+          onChange: (value) => onFormDataChange({ ...formData, comment: value }),
+          placeholder: 'Optional description'
+        }),
+
+        // Color
+        h(ConfigField, { label: 'Color' },
+          h('div', { className: 'flex items-center' },
+            h('input', {
+              type: 'color',
+              value: categoryColorToHex(formData.color),
+              onChange: (e) => {
+                onFormDataChange({ ...formData, color: hexToCategoryColor(e.target.value) });
+              },
+              className: 'w-10 h-10 rounded cursor-pointer border border-gray-300 dark:border-gray-600'
+            })
           )
         ),
+
+        // Priority (not editable for Default category)
+        h(ConfigField, {
+          label: 'Priority',
+          description: isDefault ? 'Priority is managed by each client for the Default category' : undefined,
+          disabled: isDefault
+        },
+          h(Select, {
+            value: formData.priority,
+            onChange: (e) => onFormDataChange({ ...formData, priority: parseInt(e.target.value) }),
+            options: [
+              { value: 0, label: 'Normal' },
+              { value: 1, label: 'High' },
+              { value: 2, label: 'Low' },
+              { value: 3, label: 'Auto' }
+            ],
+            className: 'w-full',
+            disabled: isDefault
+          })
+        ),
+
+        // Separator before paths
+        h('div', { className: 'border-t border-gray-200 dark:border-gray-700' }),
 
         // Download Path (not editable for Default category)
         h('div', null,
@@ -382,22 +459,18 @@ const CategoryModal = ({
                 h('p', { className: 'text-sm text-gray-600 dark:text-gray-400 italic' },
                   'Each client uses its own configured default path:'
                 ),
-                isAmuleEnabled && h('div', { className: 'flex items-center gap-2 text-sm' },
-                  h('span', { className: 'font-medium text-gray-500 dark:text-gray-400' }, 'aMule:'),
-                  h('span', { className: 'font-mono text-gray-600 dark:text-gray-400' },
-                    clientDefaultPaths?.amule || '(not available)'
-                  )
-                ),
-                isRtorrentEnabled && h('div', { className: 'flex items-center gap-2 text-sm' },
-                  h('span', { className: 'font-medium text-gray-500 dark:text-gray-400' }, 'rTorrent:'),
-                  h('span', { className: 'font-mono text-gray-600 dark:text-gray-400' },
-                    clientDefaultPaths?.rtorrent || '(not available)'
-                  )
-                ),
-                isQbittorrentEnabled && h('div', { className: 'flex items-center gap-2 text-sm' },
-                  h('span', { className: 'font-medium text-gray-500 dark:text-gray-400' }, 'qBittorrent:'),
-                  h('span', { className: 'font-mono text-gray-600 dark:text-gray-400' },
-                    clientDefaultPaths?.qbittorrent || '(not available)'
+                mappingEntries.map(entry =>
+                  h('div', { key: entry.key, className: 'flex items-center gap-2 text-sm' },
+                    entry.isMulti && entry.color && h('span', {
+                      className: 'w-2 h-2 rounded-full flex-shrink-0',
+                      style: { backgroundColor: entry.color }
+                    }),
+                    h('span', { className: 'font-medium text-gray-500 dark:text-gray-400' },
+                      `${entry.label}:`
+                    ),
+                    h('span', { className: 'font-mono text-gray-600 dark:text-gray-400' },
+                      clientDefaultPaths?.[entry.instanceId] || '(not available)'
+                    )
                   )
                 )
               )
@@ -434,7 +507,7 @@ const CategoryModal = ({
         ),
 
         // Path Mapping Section (only show for Default category or when path is specified)
-        showPathMapping && h('div', { className: 'border-t border-gray-200 dark:border-gray-700 pt-4' },
+        showPathMapping && h('div', {},
           // Path mapping checkbox
           h('label', { className: 'flex items-center gap-2 cursor-pointer' },
             h('input', {
@@ -464,165 +537,81 @@ const CategoryModal = ({
 
           // Per-client path inputs (shown when checkbox enabled)
           enablePathMapping && h('div', { className: 'mt-3 space-y-3' },
-            // aMule mapping (if aMule enabled)
-            isAmuleEnabled && h('div', null,
-              h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
-                'aMule → App path'
-              ),
-              h('div', { className: 'flex gap-2' },
-                h(Input, {
-                  type: 'text',
-                  value: pathMappings.amule,
-                  onChange: (e) => {
-                    handleMappingChange('amule', e.target.value);
-                    checkPathPermissionsDebounced(e.target.value, 'amule');
-                  },
-                  onBlur: (e) => checkPathPermissions(e.target.value, 'amule'),
-                  placeholder: isDefault ? '/mnt/amule-incoming' : '/mnt/amule-data/category-path',
-                  className: 'flex-1 font-mono'
-                }),
-                h(IconButton, {
-                  type: 'button',
-                  icon: 'folder',
-                  variant: 'secondary',
-                  onClick: () => openBrowserModal({ target: 'amule', initialPath: pathMappings.amule || '/' }),
-                  title: 'Browse directories'
-                })
-              ),
-              h('p', { className: 'text-xs text-gray-500 dark:text-gray-400 mt-1' },
-                isDefault
-                  ? 'Path where this app can access aMule\'s default incoming directory'
-                  : 'Path as this app sees aMule files for this category'
-              ),
-              mappingWarnings.amule && h(AlertBox, { type: 'warning', className: 'mt-2' }, mappingWarnings.amule)
+            // Non-qBittorrent entries: show path input fields
+            nonNativeMoveEntries.map(entry =>
+              h('div', { key: entry.key },
+                h('label', { className: 'flex items-center gap-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
+                  entry.isMulti && entry.color && h('span', {
+                    className: 'w-2 h-2 rounded-full flex-shrink-0',
+                    style: { backgroundColor: entry.color }
+                  }),
+                  `${entry.label} \u2192 App path`
+                ),
+                h('div', { className: 'flex gap-2' },
+                  h(Input, {
+                    type: 'text',
+                    value: pathMappings[entry.key] || '',
+                    onChange: (e) => {
+                      handleMappingChange(entry.key, e.target.value);
+                      checkPathPermissionsDebounced(e.target.value, entry.key);
+                    },
+                    onBlur: (e) => checkPathPermissions(e.target.value, entry.key),
+                    placeholder: isDefault
+                      ? `/mnt/${entry.type}-incoming`
+                      : `/mnt/${entry.type}-data/category-path`,
+                    className: 'flex-1 font-mono'
+                  }),
+                  h(IconButton, {
+                    type: 'button',
+                    icon: 'folder',
+                    variant: 'secondary',
+                    onClick: () => openBrowserModal({ target: entry.key, initialPath: pathMappings[entry.key] || '/' }),
+                    title: 'Browse directories'
+                  })
+                ),
+                h('p', { className: 'text-xs text-gray-500 dark:text-gray-400 mt-1' },
+                  isDefault
+                    ? `Path where this app can access ${entry.label}'s default download directory`
+                    : `Path as this app sees ${entry.label} files for this category`
+                ),
+                mappingWarnings[entry.key] && h(AlertBox, { type: 'warning', className: 'mt-2' }, mappingWarnings[entry.key])
+              )
             ),
 
-            // rTorrent mapping (if rTorrent enabled)
-            isRtorrentEnabled && h('div', null,
+            // Native-move clients info (shown when any client with nativeMove capability is connected)
+            hasNativeMoveEntries && h('div', null,
               h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
-                'rTorrent → App path'
-              ),
-              h('div', { className: 'flex gap-2' },
-                h(Input, {
-                  type: 'text',
-                  value: pathMappings.rtorrent,
-                  onChange: (e) => {
-                    handleMappingChange('rtorrent', e.target.value);
-                    checkPathPermissionsDebounced(e.target.value, 'rtorrent');
-                  },
-                  onBlur: (e) => checkPathPermissions(e.target.value, 'rtorrent'),
-                  placeholder: isDefault ? '/mnt/rtorrent-downloads' : '/mnt/rtorrent-data/category-path',
-                  className: 'flex-1 font-mono'
-                }),
-                h(IconButton, {
-                  type: 'button',
-                  icon: 'folder',
-                  variant: 'secondary',
-                  onClick: () => openBrowserModal({ target: 'rtorrent', initialPath: pathMappings.rtorrent || '/' }),
-                  title: 'Browse directories'
-                })
-              ),
-              h('p', { className: 'text-xs text-gray-500 dark:text-gray-400 mt-1' },
-                isDefault
-                  ? 'Path where this app can access rTorrent\'s default download directory'
-                  : 'Path as this app sees rTorrent files for this category'
-              ),
-              mappingWarnings.rtorrent && h(AlertBox, { type: 'warning', className: 'mt-2' }, mappingWarnings.rtorrent)
-            ),
-
-            // qBittorrent info message (shown when qBittorrent is enabled)
-            isQbittorrentEnabled && h('div', null,
-              h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
-                'qBittorrent → App path'
+                mappingEntries.filter(e => e.hasNativeMove).map(e => e.label).join(', '),
+                ' \u2192 App path'
               ),
               h('p', { className: 'text-sm text-gray-600 dark:text-gray-400 italic' },
-                'Not required — file operations use qBittorrent\'s native API.'
+                'Not required \u2014 file operations use the client\'s native API.'
               )
             ),
 
             // Message if no clients need path mapping
-            !isAmuleEnabled && !isRtorrentEnabled && !isQbittorrentEnabled && h('p', {
+            !hasAnyClient && h('p', {
               className: 'text-sm text-gray-500 dark:text-gray-400 italic'
             }, 'No download clients connected. Connect clients to configure path mappings.')
           )
         ),
 
-        // Divider before Comment (only show when path mapping section is shown)
-        showPathMapping && h('div', { className: 'border-t border-gray-200 dark:border-gray-700' }),
-
-        // Comment
-        h('div', null,
-          h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
-            'Comment'
-          ),
-          h(Input, {
-            type: 'text',
-            value: formData.comment,
-            onChange: (e) => onFormDataChange({ ...formData, comment: e.target.value }),
-            placeholder: 'Optional description',
-            className: 'w-full'
-          })
-        ),
-
-        // Color
-        h('div', null,
-          h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
-            'Color'
-          ),
-          h('div', { className: 'flex gap-2' },
-            h('input', {
-              type: 'color',
-              value: categoryColorToHex(formData.color),
-              onChange: (e) => {
-                onFormDataChange({ ...formData, color: hexToCategoryColor(e.target.value) });
-              },
-              className: 'w-16 h-9 sm:h-10 rounded-lg border border-gray-300 dark:border-gray-600 cursor-pointer'
-            }),
-            h(Input, {
-              type: 'text',
-              value: categoryColorToHex(formData.color).toUpperCase(),
-              readOnly: true,
-              className: 'flex-1 font-mono bg-gray-50 dark:bg-gray-700'
-            })
-          )
-        ),
-
-        // Priority (not editable for Default category)
-        h('div', null,
-          h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
-            'Priority'
-          ),
-          h(Select, {
-            value: formData.priority,
-            onChange: (e) => onFormDataChange({ ...formData, priority: parseInt(e.target.value) }),
-            options: [
-              { value: 0, label: 'Normal' },
-              { value: 1, label: 'High' },
-              { value: 2, label: 'Low' },
-              { value: 3, label: 'Auto' }
-            ],
-            className: 'w-full',
-            disabled: isDefault
-          }),
-          isDefault && h('p', { className: 'text-xs text-gray-500 dark:text-gray-400 mt-1' },
-            'Priority is managed by each client for the Default category'
-          )
-        ),
-
-        // Buttons
-        h('div', { className: 'flex gap-3 justify-end pt-4' },
-          h(Button, {
-            type: 'button',
-            variant: 'secondary',
-            onClick: onClose
-          }, 'Cancel'),
-          h(Button, {
-            type: 'submit',
-            variant: 'primary'
-          }, isEdit ? 'Update Category' : 'Create Category')
-        )
       )
       ), // Close scrollable content div
+
+      // Footer
+      h('div', { className: 'p-3 sm:p-4 border-t border-gray-200 dark:border-gray-700 flex gap-3 justify-end' },
+        h(Button, {
+          type: 'button',
+          variant: 'secondary',
+          onClick: onClose
+        }, 'Cancel'),
+        h(Button, {
+          type: 'button',
+          variant: 'primary',
+          onClick: handleSubmit
+        }, isEdit ? 'Update Category' : 'Create Category')
+      ),
 
       // Directory browser modal
       h(DirectoryBrowserModal, {

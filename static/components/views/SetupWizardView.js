@@ -8,6 +8,7 @@ import React from 'https://esm.sh/react@18.2.0';
 const { createElement: h, useState, useEffect } = React;
 
 import { useConfig } from '../../hooks/index.js';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { LoadingSpinner, Icon, AlertBox, Button, Select } from '../common/index.js';
 import {
   ConfigField,
@@ -48,7 +49,10 @@ const SetupWizardView = ({ onComplete }) => {
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [securityValidationError, setSecurityValidationError] = useState(null);
   const [stepValidationError, setStepValidationError] = useState(null);
+  const [clientTestResults, setClientTestResults] = useState({});
   const [interfaces, setInterfaces] = useState([{ value: '0.0.0.0', label: 'All Interfaces (0.0.0.0)' }]);
+  const debouncedAuthPassword = useDebouncedValue(formData?.server?.auth?.password || '');
+  const debouncedPasswordConfirm = useDebouncedValue(passwordConfirm);
 
   const steps = ['Welcome', 'Security', 'aMule', 'BitTorrent', 'Directories', 'Integrations', 'Review'];
 
@@ -73,8 +77,8 @@ const SetupWizardView = ({ onComplete }) => {
         },
         amule: {
           ...defaults.amule,
-          // Both clients enabled by default in wizard, unless env var explicitly says otherwise
-          enabled: meta?.fromEnv?.amuleEnabled ? defaults.amule.enabled : true
+          // Disabled by default unless explicitly enabled via env var
+          enabled: meta?.fromEnv?.amuleEnabled ? defaults.amule.enabled : false
         },
         rtorrent: {
           ...defaults.rtorrent,
@@ -85,6 +89,16 @@ const SetupWizardView = ({ onComplete }) => {
           ...defaults.qbittorrent,
           // Disabled by default unless explicitly enabled via env var
           enabled: meta?.fromEnv?.qbittorrentEnabled ? defaults.qbittorrent.enabled : false
+        },
+        deluge: {
+          ...defaults.deluge,
+          // Disabled by default unless explicitly enabled via env var
+          enabled: meta?.fromEnv?.delugeEnabled ? defaults.deluge.enabled : false
+        },
+        transmission: {
+          ...defaults.transmission,
+          // Disabled by default unless explicitly enabled via env var
+          enabled: meta?.fromEnv?.transmissionEnabled ? defaults.transmission.enabled : false
         },
         directories: { ...defaults.directories },
         integrations: {
@@ -106,6 +120,7 @@ const SetupWizardView = ({ onComplete }) => {
       }
     }));
     clearTestResults();
+    setClientTestResults({});
     setStepValidationError(null); // Clear validation error when fields change
   };
 
@@ -122,6 +137,7 @@ const SetupWizardView = ({ onComplete }) => {
       }
     }));
     clearTestResults();
+    setClientTestResults({});
     setStepValidationError(null); // Clear validation error when fields change
   };
 
@@ -131,6 +147,15 @@ const SetupWizardView = ({ onComplete }) => {
       // Validate security step before proceeding (step 1)
       if (currentStep === 1) {
         // Only validate if authentication is enabled and password is not from environment
+        if (formData.server.auth.enabled) {
+          // Validate admin username
+          const adminUsername = formData.server.auth.adminUsername || 'admin';
+          if (!/^[a-zA-Z0-9_]{3,32}$/.test(adminUsername)) {
+            setSecurityValidationError('Admin username must be 3-32 characters (letters, numbers, underscore)');
+            return;
+          }
+        }
+
         if (formData.server.auth.enabled && !meta?.fromEnv.serverAuthPassword) {
           // Check if password is provided
           if (!formData.server.auth.password) {
@@ -192,14 +217,26 @@ const SetupWizardView = ({ onComplete }) => {
           if (!formData.qbittorrent.port && !meta?.fromEnv.qbittorrentPort) errors.push('qBittorrent port is required');
         }
 
+        // Validate Deluge if enabled
+        if (formData.deluge?.enabled) {
+          if (!formData.deluge.host && !meta?.fromEnv.delugeHost) errors.push('Deluge host is required');
+          if (!formData.deluge.port && !meta?.fromEnv.delugePort) errors.push('Deluge port is required');
+        }
+
+        // Validate Transmission if enabled
+        if (formData.transmission?.enabled) {
+          if (!formData.transmission.host && !meta?.fromEnv.transmissionHost) errors.push('Transmission host is required');
+          if (!formData.transmission.port && !meta?.fromEnv.transmissionPort) errors.push('Transmission port is required');
+        }
+
         if (errors.length > 0) {
           setStepValidationError(errors.join(', '));
           return;
         }
 
         // Cross-validation: at least one client must be enabled
-        if (formData.amule.enabled === false && !formData.rtorrent.enabled && !formData.qbittorrent?.enabled) {
-          setStepValidationError('At least one download client (aMule, rTorrent, or qBittorrent) must be enabled');
+        if (formData.amule.enabled === false && !formData.rtorrent.enabled && !formData.qbittorrent?.enabled && !formData.deluge?.enabled && !formData.transmission?.enabled) {
+          setStepValidationError('At least one download client (aMule, rTorrent, qBittorrent, Deluge, or Transmission) must be enabled');
           return;
         }
         setStepValidationError(null);
@@ -243,6 +280,7 @@ const SetupWizardView = ({ onComplete }) => {
 
       setCurrentStep(currentStep + 1);
       clearTestResults();
+      setClientTestResults({});
     }
   };
 
@@ -252,6 +290,7 @@ const SetupWizardView = ({ onComplete }) => {
       setCurrentStep(currentStep - 1);
       setSaveError('');
       clearTestResults();
+      setClientTestResults({});
       setSecurityValidationError(null); // Clear validation errors when navigating
       setStepValidationError(null);
     }
@@ -266,7 +305,13 @@ const SetupWizardView = ({ onComplete }) => {
       if (currentStep === 2) {
         // Test aMule (step 2) - only if enabled
         if (formData.amule.enabled !== false) {
-          await testConfig({ amule: formData.amule });
+          const data = await testConfig({ amule: formData.amule });
+          if (data?.results?.amule) {
+            setClientTestResults(prev => ({
+              ...prev,
+              amule: { ...data.results.amule, _label: 'aMule Connection' }
+            }));
+          }
         }
       } else if (currentStep === 3) {
         // Test BitTorrent clients (step 3) - test enabled clients
@@ -277,8 +322,28 @@ const SetupWizardView = ({ onComplete }) => {
         if (formData.qbittorrent?.enabled) {
           testPayload.qbittorrent = formData.qbittorrent;
         }
+        if (formData.deluge?.enabled) {
+          testPayload.deluge = formData.deluge;
+        }
+        if (formData.transmission?.enabled) {
+          testPayload.transmission = formData.transmission;
+        }
         if (Object.keys(testPayload).length > 0) {
-          await testConfig(testPayload);
+          const data = await testConfig(testPayload);
+          const newResults = {};
+          if (data?.results?.rtorrent) {
+            newResults.rtorrent = { ...data.results.rtorrent, _label: 'rTorrent Connection' };
+          }
+          if (data?.results?.qbittorrent) {
+            newResults.qbittorrent = { ...data.results.qbittorrent, _label: 'qBittorrent Connection' };
+          }
+          if (data?.results?.deluge) {
+            newResults.deluge = { ...data.results.deluge, _label: 'Deluge Connection' };
+          }
+          if (data?.results?.transmission) {
+            newResults.transmission = { ...data.results.transmission, _label: 'Transmission Connection' };
+          }
+          setClientTestResults(prev => ({ ...prev, ...newResults }));
         }
       } else if (currentStep === 4) {
         // Test directories (step 4)
@@ -312,8 +377,17 @@ const SetupWizardView = ({ onComplete }) => {
 
     setIsTesting(true);
     try {
-      const payload = buildTestPayload(formData);
-      await testConfig(payload);
+      const clients = buildClientsFromFormData();
+      const payload = buildTestPayload({ clients, directories: formData.directories, integrations: formData.integrations });
+      const data = await testConfig(payload);
+      // Extract client results into clientTestResults
+      const newClientResults = {};
+      if (data?.results?.amule) newClientResults.amule = { ...data.results.amule, _label: 'aMule Connection' };
+      if (data?.results?.rtorrent) newClientResults.rtorrent = { ...data.results.rtorrent, _label: 'rTorrent Connection' };
+      if (data?.results?.qbittorrent) newClientResults.qbittorrent = { ...data.results.qbittorrent, _label: 'qBittorrent Connection' };
+      if (data?.results?.deluge) newClientResults.deluge = { ...data.results.deluge, _label: 'Deluge Connection' };
+      if (data?.results?.transmission) newClientResults.transmission = { ...data.results.transmission, _label: 'Transmission Connection' };
+      setClientTestResults(newClientResults);
     } catch (err) {
       // Error handled by useConfig
     } finally {
@@ -322,7 +396,7 @@ const SetupWizardView = ({ onComplete }) => {
   };
 
   // Check if there are any test errors
-  const hasTestErrors = () => checkTestErrors(testResults, formData);
+  const hasTestErrors = () => checkTestErrors(testResults, clientTestResults);
 
 
   // Save and complete setup
@@ -338,29 +412,8 @@ const SetupWizardView = ({ onComplete }) => {
       setIsTesting(true);
       let results;
       try {
-        const testPayload = {
-          directories: formData.directories
-        };
-
-        if (formData.amule.enabled !== false) {
-          testPayload.amule = formData.amule;
-        }
-        if (formData.rtorrent.enabled) {
-          testPayload.rtorrent = formData.rtorrent;
-        }
-        if (formData.qbittorrent?.enabled) {
-          testPayload.qbittorrent = formData.qbittorrent;
-        }
-        if (formData.integrations.sonarr.enabled) {
-          testPayload.sonarr = formData.integrations.sonarr;
-        }
-        if (formData.integrations.radarr.enabled) {
-          testPayload.radarr = formData.integrations.radarr;
-        }
-        if (formData.integrations.prowlarr?.enabled) {
-          testPayload.prowlarr = formData.integrations.prowlarr;
-        }
-
+        const clients = buildClientsFromFormData();
+        const testPayload = buildTestPayload({ clients, directories: formData.directories, integrations: formData.integrations });
         results = await testConfig(testPayload);
       } catch (err) {
         setSaveError('Configuration test failed. Please review the errors and fix them before completing setup.');
@@ -371,8 +424,17 @@ const SetupWizardView = ({ onComplete }) => {
       setIsTesting(false);
       setIsSaving(false);
 
+      // Extract client results for per-instance tracking
+      const newClientResults = {};
+      if (results?.results?.amule) newClientResults.amule = { ...results.results.amule, _label: 'aMule Connection' };
+      if (results?.results?.rtorrent) newClientResults.rtorrent = { ...results.results.rtorrent, _label: 'rTorrent Connection' };
+      if (results?.results?.qbittorrent) newClientResults.qbittorrent = { ...results.results.qbittorrent, _label: 'qBittorrent Connection' };
+      if (results?.results?.deluge) newClientResults.deluge = { ...results.results.deluge, _label: 'Deluge Connection' };
+      if (results?.results?.transmission) newClientResults.transmission = { ...results.results.transmission, _label: 'Transmission Connection' };
+      setClientTestResults(newClientResults);
+
       // Check results directly from the return value
-      if (checkResultsForErrors(results, formData)) {
+      if (checkResultsForErrors(results, newClientResults)) {
         setSaveError('Configuration test failed. Please fix the errors and click Complete Setup again.');
         return;
       }
@@ -390,10 +452,15 @@ const SetupWizardView = ({ onComplete }) => {
     }
 
     try {
+      const clients = buildClientsFromFormData();
+
       await saveConfig({
         version: '1.0',
         firstRunCompleted: true,
-        ...formData
+        server: formData.server,
+        directories: formData.directories,
+        integrations: formData.integrations,
+        clients
       });
 
       // Success! Reload page to initialize services
@@ -425,6 +492,42 @@ const SetupWizardView = ({ onComplete }) => {
   const isDocker = configStatus?.isDocker;
   const meta = defaults?._meta;
 
+  // Build a clients array from flat formData (used by test and save paths)
+  const buildClientsFromFormData = () => {
+    const clients = [];
+    if (formData.amule.enabled !== false) {
+      const { enabled, ...fields } = formData.amule;
+      const entry = { type: 'amule', enabled, ...fields };
+      if (meta?.fromEnv.amuleHost) entry.source = 'env';
+      clients.push(entry);
+    }
+    if (formData.rtorrent.enabled) {
+      const { enabled, ...fields } = formData.rtorrent;
+      const entry = { type: 'rtorrent', enabled, ...fields };
+      if (meta?.fromEnv.rtorrentHost) entry.source = 'env';
+      clients.push(entry);
+    }
+    if (formData.qbittorrent?.enabled) {
+      const { enabled, ...fields } = formData.qbittorrent;
+      const entry = { type: 'qbittorrent', enabled, ...fields };
+      if (meta?.fromEnv.qbittorrentHost) entry.source = 'env';
+      clients.push(entry);
+    }
+    if (formData.deluge?.enabled) {
+      const { enabled, ...fields } = formData.deluge;
+      const entry = { type: 'deluge', enabled, ...fields };
+      if (meta?.fromEnv.delugeHost) entry.source = 'env';
+      clients.push(entry);
+    }
+    if (formData.transmission?.enabled) {
+      const { enabled, ...fields } = formData.transmission;
+      const entry = { type: 'transmission', enabled, ...fields };
+      if (meta?.fromEnv.transmissionHost) entry.source = 'env';
+      clients.push(entry);
+    }
+    return clients;
+  };
+
   // Wizard steps content
   const WelcomeStep = () => h('div', { className: 'text-center max-w-2xl mx-auto' },
     h('div', { className: 'mb-6' },
@@ -450,7 +553,7 @@ const SetupWizardView = ({ onComplete }) => {
           h(Icon, { name: 'plugConnect', size: 20, className: 'text-blue-600 dark:text-blue-400 mt-0.5' }),
           h('div', {},
             h('p', { className: 'font-medium text-gray-900 dark:text-gray-100' }, 'Download Clients'),
-            h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, 'Connect aMule and/or rTorrent with optional integrations')
+            h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, 'Set up your ED2K and BitTorrent clients with optional integrations')
           )
         ),
         h('li', { className: 'flex items-start gap-3' },
@@ -473,10 +576,11 @@ const SetupWizardView = ({ onComplete }) => {
   );
 
   const SecurityStep = () => {
-    const passwordErrors = formData.server.auth.enabled && formData.server.auth.password
-      ? validatePassword(formData.server.auth.password)
+    const passwordErrors = formData.server.auth.enabled && debouncedAuthPassword
+      ? validatePassword(debouncedAuthPassword)
       : [];
-    const passwordMismatch = formData.server.auth.enabled && formData.server.auth.password !== passwordConfirm;
+    const passwordMismatch = formData.server.auth.enabled && debouncedAuthPassword && debouncedPasswordConfirm
+      && debouncedAuthPassword !== debouncedPasswordConfirm;
 
     return h('div', {},
       h('h2', { className: 'text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2' }, 'Server & Security'),
@@ -515,6 +619,26 @@ const SetupWizardView = ({ onComplete }) => {
       }),
 
       formData.server.auth.enabled && h('div', { className: 'mt-6 space-y-4' },
+        // Admin username field
+        h(ConfigField, {
+          label: 'Admin Username',
+          description: 'Username for the administrator account (3-32 characters, alphanumeric and underscore only)',
+          fromEnv: meta?.fromEnv.serverAuthAdminUsername
+        },
+          h('input', {
+            type: 'text',
+            value: formData.server.auth.adminUsername || 'admin',
+            onChange: (e) => {
+              updateNestedField('server', 'auth', 'adminUsername', e.target.value);
+              setSecurityValidationError(null);
+            },
+            className: 'appearance-none block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white text-sm transition-colors',
+            placeholder: 'admin',
+            pattern: '[a-zA-Z0-9_]{3,32}',
+            title: '3-32 characters: letters, numbers, underscore'
+          })
+        ),
+
         // Show warning if password from environment
         meta?.fromEnv.serverAuthPassword && h(AlertBox, { type: 'warning' },
           h('p', {}, 'Password is set via WEB_AUTH_PASSWORD environment variable and cannot be changed here. To change the password, update the environment variable and restart the server.')
@@ -566,8 +690,8 @@ const SetupWizardView = ({ onComplete }) => {
             })
           ),
 
-          // Real-time validation feedback
-          formData.server.auth.password && h('div', {},
+          // Real-time validation feedback (debounced)
+          debouncedAuthPassword && h('div', {},
             passwordErrors.length > 0 && h(AlertBox, { type: 'error' },
               h('div', {},
                 h('p', { className: 'font-medium mb-1' }, 'Password requirements not met:'),
@@ -577,11 +701,11 @@ const SetupWizardView = ({ onComplete }) => {
               )
             ),
 
-            passwordMismatch && passwordConfirm && h(AlertBox, { type: 'error' },
+            passwordMismatch && h(AlertBox, { type: 'error' },
               h('p', {}, 'Passwords do not match')
             ),
 
-            passwordErrors.length === 0 && !passwordMismatch && passwordConfirm && h(AlertBox, { type: 'success' },
+            passwordErrors.length === 0 && !passwordMismatch && debouncedPasswordConfirm && h(AlertBox, { type: 'success' },
               h('p', {}, 'Password meets all requirements and matches')
             )
           )
@@ -671,18 +795,18 @@ const SetupWizardView = ({ onComplete }) => {
         h(TestButton, {
           onClick: handleTestCurrentStep,
           loading: isTesting,
-          disabled: !formData.amule.host || !formData.amule.port || !formData.amule.password
+          disabled: !formData.amule.host || !formData.amule.port || (!formData.amule.password && !meta?.fromEnv.amulePassword)
         }, 'Test aMule Connection')
       ),
 
-      testResults?.results?.amule && h(TestResultIndicator, {
-        result: testResults.results.amule,
+      clientTestResults.amule && h(TestResultIndicator, {
+        result: clientTestResults.amule,
         label: 'aMule Connection Test'
       })
     ),
 
     formData.amule.enabled === false && h(AlertBox, { type: 'info', className: 'mt-4' },
-      h('p', {}, 'aMule integration is optional. You can skip this step if you only want to use rTorrent.')
+      h('p', {}, 'aMule integration is optional. You can skip this step if you only want to use other clients.')
     ),
 
     // Validation error message
@@ -692,7 +816,7 @@ const SetupWizardView = ({ onComplete }) => {
   );
 
   const BitTorrentStep = () => {
-    const hasAnyBitTorrentClient = formData.rtorrent.enabled || formData.qbittorrent?.enabled;
+    const hasAnyBitTorrentClient = formData.rtorrent.enabled || formData.qbittorrent?.enabled || formData.deluge?.enabled || formData.transmission?.enabled;
 
     return h('div', {},
       h('h2', { className: 'text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2' }, 'BitTorrent Integration'),
@@ -770,8 +894,8 @@ const SetupWizardView = ({ onComplete }) => {
             h('p', {}, 'rTorrent password is set via RTORRENT_PASSWORD environment variable.')
           ),
 
-          testResults?.results?.rtorrent && h(TestResultIndicator, {
-            result: testResults.results.rtorrent,
+          clientTestResults.rtorrent && h(TestResultIndicator, {
+            result: clientTestResults.rtorrent,
             label: 'rTorrent Connection Test'
           })
         )
@@ -843,9 +967,155 @@ const SetupWizardView = ({ onComplete }) => {
             onChange: (enabled) => updateField('qbittorrent', 'useSsl', enabled)
           }),
 
-          testResults?.results?.qbittorrent && h(TestResultIndicator, {
-            result: testResults.results.qbittorrent,
+          clientTestResults.qbittorrent && h(TestResultIndicator, {
+            result: clientTestResults.qbittorrent,
             label: 'qBittorrent Connection Test'
+          })
+        )
+      ),
+
+      // Deluge Section
+      h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mb-6' },
+        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4' }, 'Deluge (WebUI JSON-RPC)'),
+
+        h(EnableToggle, {
+          label: 'Enable Deluge',
+          description: 'Connect to Deluge for managing BitTorrent downloads via WebUI JSON-RPC',
+          enabled: formData.deluge?.enabled || false,
+          onChange: (enabled) => updateField('deluge', 'enabled', enabled)
+        }),
+
+        formData.deluge?.enabled && h('div', { className: 'mt-4 space-y-4' },
+          h(ConfigField, {
+            label: 'Host',
+            description: 'Deluge Web UI host address',
+            value: formData.deluge?.host || '',
+            onChange: (value) => updateField('deluge', 'host', value),
+            placeholder: '127.0.0.1',
+            required: formData.deluge?.enabled,
+            fromEnv: meta?.fromEnv.delugeHost
+          }),
+
+          h(ConfigField, {
+            label: 'Port',
+            description: 'Deluge Web UI port (default: 8112)',
+            value: formData.deluge?.port || 8112,
+            onChange: (value) => updateField('deluge', 'port', parseInt(value, 10) || 8112),
+            type: 'number',
+            placeholder: '8112',
+            required: formData.deluge?.enabled,
+            fromEnv: meta?.fromEnv.delugePort
+          }),
+
+          !meta?.fromEnv.delugePassword && h(ConfigField, {
+            label: 'Password',
+            description: 'Deluge Web UI password',
+            fromEnv: meta?.fromEnv.delugePassword
+          },
+            h(PasswordField, {
+              value: formData.deluge?.password || '',
+              onChange: (value) => updateField('deluge', 'password', value),
+              placeholder: 'Enter Deluge password',
+              disabled: meta?.fromEnv.delugePassword
+            })
+          ),
+
+          meta?.fromEnv.delugePassword && h(AlertBox, { type: 'warning' },
+            h('p', {}, 'Deluge password is set via DELUGE_PASSWORD environment variable.')
+          ),
+
+          h(EnableToggle, {
+            label: 'Use SSL (HTTPS)',
+            description: 'Connect to Deluge using HTTPS',
+            enabled: formData.deluge?.useSsl || false,
+            onChange: (enabled) => updateField('deluge', 'useSsl', enabled)
+          }),
+
+          clientTestResults.deluge && h(TestResultIndicator, {
+            result: clientTestResults.deluge,
+            label: 'Deluge Connection Test'
+          })
+        )
+      ),
+
+      // Transmission Section
+      h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mb-6' },
+        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4' }, 'Transmission (HTTP RPC)'),
+
+        h(EnableToggle, {
+          label: 'Enable Transmission',
+          description: 'Connect to Transmission for managing BitTorrent downloads via HTTP RPC',
+          enabled: formData.transmission?.enabled || false,
+          onChange: (enabled) => updateField('transmission', 'enabled', enabled)
+        }),
+
+        formData.transmission?.enabled && h('div', { className: 'mt-4 space-y-4' },
+          h(ConfigField, {
+            label: 'Host',
+            description: 'Transmission RPC host address',
+            value: formData.transmission?.host || '',
+            onChange: (value) => updateField('transmission', 'host', value),
+            placeholder: '127.0.0.1',
+            required: formData.transmission?.enabled,
+            fromEnv: meta?.fromEnv.transmissionHost
+          }),
+
+          h(ConfigField, {
+            label: 'Port',
+            description: 'Transmission RPC port (default: 9091)',
+            value: formData.transmission?.port || 9091,
+            onChange: (value) => updateField('transmission', 'port', parseInt(value, 10) || 9091),
+            type: 'number',
+            placeholder: '9091',
+            required: formData.transmission?.enabled,
+            fromEnv: meta?.fromEnv.transmissionPort
+          }),
+
+          h(ConfigField, {
+            label: 'RPC Path',
+            description: 'Transmission RPC path (default: /transmission/rpc)',
+            value: formData.transmission?.path || '/transmission/rpc',
+            onChange: (value) => updateField('transmission', 'path', value),
+            placeholder: '/transmission/rpc',
+            fromEnv: meta?.fromEnv.transmissionPath
+          }),
+
+          !meta?.fromEnv.transmissionUsername && h(ConfigField, {
+            label: 'Username',
+            description: 'Transmission RPC username (optional)',
+            value: formData.transmission?.username || '',
+            onChange: (value) => updateField('transmission', 'username', value),
+            placeholder: 'Enter username',
+            fromEnv: meta?.fromEnv.transmissionUsername
+          }),
+
+          !meta?.fromEnv.transmissionPassword && h(ConfigField, {
+            label: 'Password',
+            description: 'Transmission RPC password',
+            fromEnv: meta?.fromEnv.transmissionPassword
+          },
+            h(PasswordField, {
+              value: formData.transmission?.password || '',
+              onChange: (value) => updateField('transmission', 'password', value),
+              placeholder: 'Enter Transmission password',
+              disabled: meta?.fromEnv.transmissionPassword
+            })
+          ),
+
+          (meta?.fromEnv.transmissionUsername || meta?.fromEnv.transmissionPassword) && h(AlertBox, { type: 'warning' },
+            h('p', {}, 'Transmission credentials are set via environment variables.')
+          ),
+
+          h(EnableToggle, {
+            label: 'Use SSL (HTTPS)',
+            description: 'Connect to Transmission using HTTPS',
+            enabled: formData.transmission?.useSsl || false,
+            onChange: (enabled) => updateField('transmission', 'useSsl', enabled)
+          }),
+
+          clientTestResults.transmission && h(TestResultIndicator, {
+            result: clientTestResults.transmission,
+            label: 'Transmission Connection Test'
           })
         )
       ),
@@ -856,7 +1126,9 @@ const SetupWizardView = ({ onComplete }) => {
           onClick: handleTestCurrentStep,
           loading: isTesting,
           disabled: (formData.rtorrent.enabled && (!formData.rtorrent.host || !formData.rtorrent.port)) ||
-                    (formData.qbittorrent?.enabled && (!formData.qbittorrent.host || !formData.qbittorrent.port))
+                    (formData.qbittorrent?.enabled && (!formData.qbittorrent.host || !formData.qbittorrent.port)) ||
+                    (formData.deluge?.enabled && (!formData.deluge.host || !formData.deluge.port)) ||
+                    (formData.transmission?.enabled && (!formData.transmission.host || !formData.transmission.port))
         }, 'Test BitTorrent Connections')
       ),
 
@@ -900,7 +1172,7 @@ const SetupWizardView = ({ onComplete }) => {
       ),
 
       !hasAnyBitTorrentClient && h(AlertBox, { type: 'info', className: 'mt-4' },
-        h('p', {}, 'BitTorrent integration is optional. You can skip this step if you only want to use aMule. At least one download client must be enabled.')
+        h('p', {}, 'BitTorrent integration is optional. You can skip this step if you only want to use other clients. At least one download client must be enabled.')
       ),
 
       // Validation error message
@@ -1219,7 +1491,7 @@ const SetupWizardView = ({ onComplete }) => {
     h('div', { className: 'mt-4' },
       h(TestSummary, {
         testResults,
-        formData,
+        clientTestResults,
         showDetails: true
       })
     ),

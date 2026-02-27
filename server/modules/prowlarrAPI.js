@@ -11,10 +11,10 @@ const BaseModule = require('../lib/BaseModule');
 const config = require('./config');
 const ProwlarrHandler = require('../lib/prowlarr/ProwlarrHandler');
 const response = require('../lib/responseFormatter');
+const { requireCapability } = require('../middleware/capabilities');
 
-// Singleton managers - imported directly instead of injected
-const rtorrentManager = require('./rtorrentManager');
-const qbittorrentManager = require('./qbittorrentManager');
+// Client registry - replaces direct singleton manager imports
+const registry = require('../lib/ClientRegistry');
 const categoryManager = require('../lib/CategoryManager');
 
 class ProwlarrAPI extends BaseModule {
@@ -259,63 +259,44 @@ class ProwlarrAPI extends BaseModule {
     let tempFile = null;
 
     try {
-      const { downloadUrl, title, label, clientId = 'rtorrent' } = req.body;
+      const { downloadUrl, title, label, clientId = 'rtorrent', instanceId } = req.body;
 
-      // Check if the selected client is available
-      if (clientId === 'qbittorrent') {
-        if (!qbittorrentManager || !qbittorrentManager.isConnected()) {
-          return response.badRequest(res, 'qBittorrent is not connected');
-        }
+      // Find client manager — prefer specific instance, fall back to first of type
+      let clientManager;
+      if (instanceId) {
+        clientManager = registry.get(instanceId);
       } else {
-        if (!rtorrentManager || !rtorrentManager.isConnected()) {
-          return response.badRequest(res, 'rTorrent is not connected');
-        }
+        clientManager = registry.getByType(clientId).find(m => m.isConnected());
+        if (clientManager) this.log(`⚠️ [ProwlarrAPI.addTorrent] No instanceId provided, falling back to first ${clientId} instance "${clientManager.instanceId}"`);
+      }
+      if (!clientManager || !clientManager.isConnected()) {
+        return response.badRequest(res, `${clientManager?.displayName || clientId} is not connected`);
       }
 
       if (!downloadUrl) {
         return response.badRequest(res, 'Download URL is required');
       }
 
-      // Get username from configurable header (for proxy auth like Authelia)
-      const historyConfig = config.getConfig()?.history || {};
-      const usernameHeader = (historyConfig.usernameHeader || '').toLowerCase();
-      const username = usernameHeader ? req.headers[usernameHeader] || null : null;
+      // Get username from session (populated by form login or SSO middleware)
+      const username = req.session?.username || null;
 
       // Look up category path from CategoryManager
       const category = label ? categoryManager.getByName(label) : null;
       const directory = category?.path || null;
 
-      const clientName = clientId === 'qbittorrent' ? 'qBittorrent' : 'rTorrent';
+      const clientName = clientManager.displayName || clientId;
       this.log(`➕ Adding torrent to ${clientName}: ${title || downloadUrl.substring(0, 50)}...${directory ? ` (path: ${directory})` : ''}${username ? ` (user: ${username})` : ''}`);
 
-      // Helper to add to the selected client
-      const addMagnetToClient = async (magnetUri) => {
-        if (clientId === 'qbittorrent') {
-          await qbittorrentManager.addMagnet(magnetUri, {
-            category: label || '',
-            savepath: directory,
-            username
-          });
-        } else {
-          await rtorrentManager.addMagnet(magnetUri, { label, directory, username });
-        }
-      };
+      const addOptions = { categoryName: label || '', savePath: directory, start: true, username };
 
-      const addTorrentBufferToClient = async (buffer) => {
-        if (clientId === 'qbittorrent') {
-          await qbittorrentManager.addTorrentRaw(buffer, {
-            category: label || '',
-            savepath: directory,
-            username
-          });
-        } else {
-          await rtorrentManager.addTorrentRaw(buffer, { label, directory, username });
-        }
-      };
+      // Track magnet URI for ownership recording and hash for frontend
+      let effectiveMagnet = null;
+      let infoHash = null;
 
       // Check if it's a magnet link
       if (downloadUrl.startsWith('magnet:')) {
-        await addMagnetToClient(downloadUrl);
+        effectiveMagnet = downloadUrl;
+        await clientManager.addMagnet(downloadUrl, addOptions);
       } else {
         // It's a torrent file URL - download and add using raw buffer
         this.log(`📥 Downloading torrent file from ${downloadUrl.substring(0, 50)}...`);
@@ -324,11 +305,37 @@ class ProwlarrAPI extends BaseModule {
         // Check if Prowlarr redirected to a magnet link
         if (result && typeof result === 'object' && result.magnet) {
           this.log(`🧲 Prowlarr redirected to magnet link`);
-          await addMagnetToClient(result.magnet);
+          effectiveMagnet = result.magnet;
+          await clientManager.addMagnet(result.magnet, addOptions);
         } else {
           tempFile = result;
           const torrentBuffer = await fs.readFile(tempFile);
-          await addTorrentBufferToClient(torrentBuffer);
+          await clientManager.addTorrentRaw(torrentBuffer, addOptions);
+
+          // Extract hash from torrent buffer for ownership + frontend tracking
+          try {
+            const { parseTorrentBuffer } = require('../lib/torrentUtils');
+            const { hash } = parseTorrentBuffer(torrentBuffer);
+            if (hash) {
+              infoHash = hash;
+              if (req.session?.userId && this.userManager) {
+                const { itemKey } = require('../lib/itemKey');
+                this.userManager.recordOwnership(itemKey(clientManager.instanceId, hash), req.session.userId);
+              }
+            }
+          } catch (e) { /* best-effort */ }
+        }
+      }
+
+      // Extract hash from magnet URI for ownership + frontend tracking
+      if (effectiveMagnet) {
+        const hashMatch = effectiveMagnet.match(/xt=urn:btih:([a-fA-F0-9]{40})/i);
+        if (hashMatch) {
+          infoHash = hashMatch[1].toLowerCase();
+          if (req.session?.userId && this.userManager) {
+            const { itemKey } = require('../lib/itemKey');
+            this.userManager.recordOwnership(itemKey(clientManager.instanceId, infoHash), req.session.userId);
+          }
         }
       }
 
@@ -336,7 +343,8 @@ class ProwlarrAPI extends BaseModule {
 
       res.json({
         success: true,
-        message: `Torrent added to ${clientName}`
+        message: `Torrent added to ${clientName}`,
+        ...(infoHash && { hash: infoHash })
       });
     } catch (err) {
       this.log('❌ Error adding torrent:', err.message);
@@ -363,16 +371,16 @@ class ProwlarrAPI extends BaseModule {
     router.use(express.json());
 
     // GET /api/prowlarr/status - Get Prowlarr configuration status
-    router.get('/status', this.getStatus.bind(this));
+    router.get('/status', requireCapability('search'), this.getStatus.bind(this));
 
     // GET /api/prowlarr/indexers - Get list of indexers
-    router.get('/indexers', this.getIndexers.bind(this));
+    router.get('/indexers', requireCapability('search'), this.getIndexers.bind(this));
 
     // POST /api/prowlarr/search - Search for torrents
-    router.post('/search', this.search.bind(this));
+    router.post('/search', requireCapability('search'), this.search.bind(this));
 
-    // POST /api/prowlarr/add - Add torrent to rtorrent
-    router.post('/add', this.addTorrent.bind(this));
+    // POST /api/prowlarr/add - Add torrent to client
+    router.post('/add', requireCapability('add_downloads'), this.addTorrent.bind(this));
 
     // Mount router
     app.use('/api/prowlarr', router);

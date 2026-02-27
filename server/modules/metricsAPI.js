@@ -6,6 +6,9 @@
 const BaseModule = require('../lib/BaseModule');
 const timeRange = require('../lib/timeRange');
 const response = require('../lib/responseFormatter');
+const clientMeta = require('../lib/clientMeta');
+const registry = require('../lib/ClientRegistry');
+const { requireCapability } = require('../middleware/capabilities');
 
 const VALID_RANGES = ['24h', '7d', '30d'];
 
@@ -15,141 +18,168 @@ class MetricsAPI extends BaseModule {
   }
 
   /**
-   * Format raw metrics to API response format
+   * Check if the client has disconnected (e.g. AbortController).
+   * @param {object} req - Express request
+   * @returns {boolean} true if aborted (caller should return early)
+   * @private
+   */
+  _isAborted(req) {
+    if (!req.socket.destroyed) return false;
+    this.log(`📊 Metrics request aborted by client: ${req.path}`);
+    return true;
+  }
+
+  /**
+   * Yield to the event loop so pending I/O callbacks (e.g. socket close) can be processed.
+   * Synchronous better-sqlite3 queries block the event loop, preventing Node.js from
+   * detecting client disconnections. Calling this between queries lets the socket
+   * teardown event fire, making _isAborted() checks effective.
+   * @returns {Promise<void>}
+   * @private
+   */
+  _tick() {
+    return new Promise(resolve => setImmediate(resolve));
+  }
+
+  /**
+   * Parse instanceIds query param into an array or null
+   * @param {object} req - Express request
+   * @returns {string[]|null}
+   * @private
+   */
+  _parseInstanceIds(req) {
+    const raw = req.query.instanceIds;
+    if (raw) return raw.split(',').filter(Boolean);
+    // Default to enabled instances only — excludes disabled clients
+    const ids = registry.getEnabled().map(m => m.instanceId);
+    return ids.length > 0 ? ids : null;
+  }
+
+  /**
+   * Format raw metrics to API response format.
+   * Loops over clientMeta.getMetricsConfig() — new client types auto-participate.
+   * @param {Array<object>} metrics - Raw metric records from database
+   * @returns {Array<object>} Formatted records with per-networkType and combined speeds/deltas
    * @private
    */
   _formatMetrics(metrics) {
-    return metrics.map(m => ({
-      timestamp: m.bucket,
-      // Combined speeds (all clients)
-      uploadSpeed: Math.round((m.avg_upload_speed || 0) + (m.avg_rt_upload_speed || 0) + (m.avg_qb_upload_speed || 0)),
-      downloadSpeed: Math.round((m.avg_download_speed || 0) + (m.avg_rt_download_speed || 0) + (m.avg_qb_download_speed || 0)),
-      // Per-client speeds
-      amuleUploadSpeed: Math.round(m.avg_upload_speed || 0),
-      amuleDownloadSpeed: Math.round(m.avg_download_speed || 0),
-      rtorrentUploadSpeed: Math.round(m.avg_rt_upload_speed || 0),
-      rtorrentDownloadSpeed: Math.round(m.avg_rt_download_speed || 0),
-      qbittorrentUploadSpeed: Math.round(m.avg_qb_upload_speed || 0),
-      qbittorrentDownloadSpeed: Math.round(m.avg_qb_download_speed || 0),
-      // BitTorrent combined (rtorrent + qbittorrent)
-      bittorrentUploadSpeed: Math.round((m.avg_rt_upload_speed || 0) + (m.avg_qb_upload_speed || 0)),
-      bittorrentDownloadSpeed: Math.round((m.avg_rt_download_speed || 0) + (m.avg_qb_download_speed || 0)),
-      // Combined deltas (all clients)
-      uploadedDelta: (m.uploaded_delta || 0) + (m.rt_uploaded_delta || 0) + (m.qb_uploaded_delta || 0),
-      downloadedDelta: (m.downloaded_delta || 0) + (m.rt_downloaded_delta || 0) + (m.qb_downloaded_delta || 0),
-      // Per-client deltas
-      amuleUploadedDelta: m.uploaded_delta || 0,
-      amuleDownloadedDelta: m.downloaded_delta || 0,
-      rtorrentUploadedDelta: m.rt_uploaded_delta || 0,
-      rtorrentDownloadedDelta: m.rt_downloaded_delta || 0,
-      qbittorrentUploadedDelta: m.qb_uploaded_delta || 0,
-      qbittorrentDownloadedDelta: m.qb_downloaded_delta || 0,
-      // BitTorrent combined deltas (rtorrent + qbittorrent)
-      bittorrentUploadedDelta: (m.rt_uploaded_delta || 0) + (m.qb_uploaded_delta || 0),
-      bittorrentDownloadedDelta: (m.rt_downloaded_delta || 0) + (m.qb_downloaded_delta || 0)
-    }));
+    const mc = clientMeta.getMetricsConfig();
+    const nts = clientMeta.getNetworkTypes();
+
+    return metrics.map(m => {
+      const ntUp = {}, ntDown = {}, ntUpDelta = {}, ntDownDelta = {};
+      for (const nt of nts) { ntUp[nt] = 0; ntDown[nt] = 0; ntUpDelta[nt] = 0; ntDownDelta[nt] = 0; }
+
+      for (const { type, networkType } of mc) {
+        ntUp[networkType] += m[`avg_${type}_upload_speed`] || 0;
+        ntDown[networkType] += m[`avg_${type}_download_speed`] || 0;
+        ntUpDelta[networkType] += m[`${type}_uploaded_delta`] || 0;
+        ntDownDelta[networkType] += m[`${type}_downloaded_delta`] || 0;
+      }
+
+      const result = { timestamp: m.bucket };
+      let totalUp = 0, totalDown = 0, totalUpDelta = 0, totalDownDelta = 0;
+      for (const nt of nts) {
+        totalUp += ntUp[nt];
+        totalDown += ntDown[nt];
+        totalUpDelta += ntUpDelta[nt];
+        totalDownDelta += ntDownDelta[nt];
+        result[`${nt}UploadSpeed`] = Math.round(ntUp[nt]);
+        result[`${nt}DownloadSpeed`] = Math.round(ntDown[nt]);
+        result[`${nt}UploadedDelta`] = ntUpDelta[nt];
+        result[`${nt}DownloadedDelta`] = ntDownDelta[nt];
+      }
+      result.uploadSpeed = Math.round(totalUp);
+      result.downloadSpeed = Math.round(totalDown);
+      result.uploadedDelta = totalUpDelta;
+      result.downloadedDelta = totalDownDelta;
+      return result;
+    });
   }
 
   /**
    * Get metrics data for a given time range and bucket size
+   * @param {string} range - Time range label (e.g. '24h', '7d', '30d')
+   * @param {number} startTime - Start timestamp in milliseconds
+   * @param {number} endTime - End timestamp in milliseconds
+   * @param {number} bucketSize - Bucket size in milliseconds
+   * @param {string[]|null} instanceIds - Instance IDs to include, or null for all
+   * @returns {object} { range, data: Array }
    * @private
    */
-  _getMetricsData(range, startTime, endTime, bucketSize) {
-    const metrics = this.metricsDB.getAggregatedMetrics(startTime, endTime, bucketSize);
+  _getMetricsData(range, startTime, endTime, bucketSize, instanceIds) {
+    const metrics = this.metricsDB.getAggregatedInstanceMetrics(startTime, endTime, bucketSize, instanceIds);
     return { range, data: this._formatMetrics(metrics) };
   }
 
   /**
-   * Calculate stats from metrics in time range
+   * Build stats response from per-networkType totals and peaks.
+   * @param {string} range - Time range label
+   * @param {object} ntTotals - Per-networkType totals { ed2k: {up,down}, bittorrent: {up,down} }
+   * @param {number} timeRangeSeconds - Duration of the time range in seconds
+   * @param {object} peaks - Peak speeds from getInstancePeakSpeeds()
+   * @returns {object} Stats response with per-networkType and combined stats
    * @private
    */
-  _getStatsData(range, startTime, endTime) {
-    const firstMetric = this.metricsDB.getFirstMetric(startTime, endTime);
-    const lastMetric = this.metricsDB.getLastMetric(startTime, endTime);
+  _buildStatsResponse(range, ntTotals, timeRangeSeconds, peaks) {
+    const nts = clientMeta.getNetworkTypes();
+    const result = { range };
+    let totalUp = 0, totalDown = 0;
 
-    if (!firstMetric || !lastMetric) {
-      return null;
+    for (const nt of nts) {
+      const t = ntTotals[nt] || { up: 0, down: 0 };
+      totalUp += t.up;
+      totalDown += t.down;
+      result[nt] = {
+        totalUploaded: t.up,
+        totalDownloaded: t.down,
+        avgUploadSpeed: Math.round(timeRangeSeconds > 0 ? t.up / timeRangeSeconds : 0),
+        avgDownloadSpeed: Math.round(timeRangeSeconds > 0 ? t.down / timeRangeSeconds : 0),
+        peakUploadSpeed: Math.round(peaks[nt]?.peakUploadSpeed || 0),
+        peakDownloadSpeed: Math.round(peaks[nt]?.peakDownloadSpeed || 0)
+      };
     }
 
-    const timeRangeSeconds = (lastMetric.timestamp - firstMetric.timestamp) / 1000;
+    result.totalUploaded = totalUp;
+    result.totalDownloaded = totalDown;
+    result.avgUploadSpeed = Math.round(timeRangeSeconds > 0 ? totalUp / timeRangeSeconds : 0);
+    result.avgDownloadSpeed = Math.round(timeRangeSeconds > 0 ? totalDown / timeRangeSeconds : 0);
+    result.peakUploadSpeed = Math.round(peaks.peakUploadSpeed);
+    result.peakDownloadSpeed = Math.round(peaks.peakDownloadSpeed);
+    return result;
+  }
 
-    // Calculate totals from first and last records
-    const amuleTotalUploaded = (lastMetric.total_uploaded || 0) - (firstMetric.total_uploaded || 0);
-    const amuleTotalDownloaded = (lastMetric.total_downloaded || 0) - (firstMetric.total_downloaded || 0);
-    const amuleAvgUploadSpeed = timeRangeSeconds > 0 ? amuleTotalUploaded / timeRangeSeconds : 0;
-    const amuleAvgDownloadSpeed = timeRangeSeconds > 0 ? amuleTotalDownloaded / timeRangeSeconds : 0;
+  /**
+   * Calculate stats from instance_metrics in time range
+   * @param {string} range - Time range label
+   * @param {number} startTime - Start timestamp in milliseconds
+   * @param {number} endTime - End timestamp in milliseconds
+   * @param {string[]|null} instanceIds - Instance IDs to include, or null for all
+   * @returns {object|null} Stats response or null if no data
+   * @private
+   */
+  _getStatsData(range, startTime, endTime, instanceIds) {
+    const totals = this.metricsDB.getInstanceTotals(startTime, endTime, instanceIds);
+    if (!totals.firstTimestamp || !totals.lastTimestamp) return null;
 
-    const rtTotalUploaded = (lastMetric.rt_total_uploaded || 0) - (firstMetric.rt_total_uploaded || 0);
-    const rtTotalDownloaded = (lastMetric.rt_total_downloaded || 0) - (firstMetric.rt_total_downloaded || 0);
-    const rtAvgUploadSpeed = timeRangeSeconds > 0 ? rtTotalUploaded / timeRangeSeconds : 0;
-    const rtAvgDownloadSpeed = timeRangeSeconds > 0 ? rtTotalDownloaded / timeRangeSeconds : 0;
+    const timeRangeSeconds = (totals.lastTimestamp - totals.firstTimestamp) / 1000;
+    const peaks = this.metricsDB.getInstancePeakSpeeds(startTime, endTime, instanceIds);
 
-    const qbTotalUploaded = (lastMetric.qb_total_uploaded || 0) - (firstMetric.qb_total_uploaded || 0);
-    const qbTotalDownloaded = (lastMetric.qb_total_downloaded || 0) - (firstMetric.qb_total_downloaded || 0);
-    const qbAvgUploadSpeed = timeRangeSeconds > 0 ? qbTotalUploaded / timeRangeSeconds : 0;
-    const qbAvgDownloadSpeed = timeRangeSeconds > 0 ? qbTotalDownloaded / timeRangeSeconds : 0;
-
-    // BitTorrent combined (rtorrent + qbittorrent)
-    const btTotalUploaded = rtTotalUploaded + qbTotalUploaded;
-    const btTotalDownloaded = rtTotalDownloaded + qbTotalDownloaded;
-    const btAvgUploadSpeed = rtAvgUploadSpeed + qbAvgUploadSpeed;
-    const btAvgDownloadSpeed = rtAvgDownloadSpeed + qbAvgDownloadSpeed;
-
-    const peaks = this.metricsDB.getPeakSpeeds(startTime, endTime);
-
-    return {
-      range,
-      // Combined stats (all clients)
-      totalUploaded: amuleTotalUploaded + btTotalUploaded,
-      totalDownloaded: amuleTotalDownloaded + btTotalDownloaded,
-      avgUploadSpeed: Math.round(amuleAvgUploadSpeed + btAvgUploadSpeed),
-      avgDownloadSpeed: Math.round(amuleAvgDownloadSpeed + btAvgDownloadSpeed),
-      peakUploadSpeed: Math.round(peaks.peakUploadSpeed),
-      peakDownloadSpeed: Math.round(peaks.peakDownloadSpeed),
-      // Per-client stats
-      amule: {
-        totalUploaded: amuleTotalUploaded,
-        totalDownloaded: amuleTotalDownloaded,
-        avgUploadSpeed: Math.round(amuleAvgUploadSpeed),
-        avgDownloadSpeed: Math.round(amuleAvgDownloadSpeed),
-        peakUploadSpeed: Math.round(peaks.amule?.peakUploadSpeed || 0),
-        peakDownloadSpeed: Math.round(peaks.amule?.peakDownloadSpeed || 0)
-      },
-      rtorrent: {
-        totalUploaded: rtTotalUploaded,
-        totalDownloaded: rtTotalDownloaded,
-        avgUploadSpeed: Math.round(rtAvgUploadSpeed),
-        avgDownloadSpeed: Math.round(rtAvgDownloadSpeed),
-        peakUploadSpeed: Math.round(peaks.rtorrent?.peakUploadSpeed || 0),
-        peakDownloadSpeed: Math.round(peaks.rtorrent?.peakDownloadSpeed || 0)
-      },
-      qbittorrent: {
-        totalUploaded: qbTotalUploaded,
-        totalDownloaded: qbTotalDownloaded,
-        avgUploadSpeed: Math.round(qbAvgUploadSpeed),
-        avgDownloadSpeed: Math.round(qbAvgDownloadSpeed),
-        peakUploadSpeed: Math.round(peaks.qbittorrent?.peakUploadSpeed || 0),
-        peakDownloadSpeed: Math.round(peaks.qbittorrent?.peakDownloadSpeed || 0)
-      },
-      // BitTorrent combined (for charts)
-      bittorrent: {
-        totalUploaded: btTotalUploaded,
-        totalDownloaded: btTotalDownloaded,
-        avgUploadSpeed: Math.round(btAvgUploadSpeed),
-        avgDownloadSpeed: Math.round(btAvgDownloadSpeed),
-        peakUploadSpeed: Math.round(peaks.bittorrent?.peakUploadSpeed || 0),
-        peakDownloadSpeed: Math.round(peaks.bittorrent?.peakDownloadSpeed || 0)
-      }
-    };
+    return this._buildStatsResponse(range, totals, timeRangeSeconds, peaks);
   }
 
   // GET /api/metrics/history - coarser granularity for data transfer charts
-  getHistory(req, res) {
+  async getHistory(req, res) {
     try {
       const range = this._validateRange(req, res);
       if (!range) return;
+      await this._tick();
+      if (this._isAborted(req)) return;
+      const instanceIds = this._parseInstanceIds(req);
       const { startTime, endTime, bucketSize } = timeRange.parseTimeRange(range);
-      res.json(this._getMetricsData(range, startTime, endTime, bucketSize));
+      const data = this._getMetricsData(range, startTime, endTime, bucketSize, instanceIds);
+      if (this._isAborted(req)) return;
+      res.json(data);
     } catch (err) {
       this.log('Error fetching metrics:', err);
       response.serverError(res, 'Failed to fetch metrics');
@@ -157,12 +187,17 @@ class MetricsAPI extends BaseModule {
   }
 
   // GET /api/metrics/speed-history - finer granularity for speed charts
-  getSpeedHistory(req, res) {
+  async getSpeedHistory(req, res) {
     try {
       const range = this._validateRange(req, res);
       if (!range) return;
+      await this._tick();
+      if (this._isAborted(req)) return;
+      const instanceIds = this._parseInstanceIds(req);
       const { startTime, endTime, speedBucketSize } = timeRange.parseTimeRange(range);
-      res.json(this._getMetricsData(range, startTime, endTime, speedBucketSize));
+      const data = this._getMetricsData(range, startTime, endTime, speedBucketSize, instanceIds);
+      if (this._isAborted(req)) return;
+      res.json(data);
     } catch (err) {
       this.log('Error fetching speed metrics:', err);
       response.serverError(res, 'Failed to fetch speed metrics');
@@ -170,12 +205,17 @@ class MetricsAPI extends BaseModule {
   }
 
   // GET /api/metrics/stats - aggregate statistics
-  getStats(req, res) {
+  async getStats(req, res) {
     try {
       const range = this._validateRange(req, res);
       if (!range) return;
+      await this._tick();
+      if (this._isAborted(req)) return;
+      const instanceIds = this._parseInstanceIds(req);
       const { startTime, endTime } = timeRange.parseTimeRange(range);
-      res.json(this._getStatsData(range, startTime, endTime));
+      const data = this._getStatsData(range, startTime, endTime, instanceIds);
+      if (this._isAborted(req)) return;
+      res.json(data);
     } catch (err) {
       this.log('Error fetching stats:', err);
       response.serverError(res, 'Failed to fetch stats');
@@ -183,17 +223,29 @@ class MetricsAPI extends BaseModule {
   }
 
   // GET /api/metrics/dashboard - combined endpoint for dashboard views
-  getDashboard(req, res) {
+  async getDashboard(req, res) {
     try {
       const range = this._validateRange(req, res);
       if (!range) return;
+      const instanceIds = this._parseInstanceIds(req);
       const { startTime, endTime, bucketSize, speedBucketSize } = timeRange.parseTimeRange(range);
 
-      res.json({
-        speedData: this._getMetricsData(range, startTime, endTime, speedBucketSize),
-        historicalData: this._getMetricsData(range, startTime, endTime, bucketSize),
-        historicalStats: this._getStatsData(range, startTime, endTime)
-      });
+      // Each _get* call runs synchronous SQLite queries that block the event loop.
+      // _tick() yields between them so Node.js can process socket close events,
+      // making _isAborted() checks effective for client-side AbortController cancellations.
+      if (this._isAborted(req)) return;
+      const speedData = this._getMetricsData(range, startTime, endTime, speedBucketSize, instanceIds);
+      await this._tick();
+      if (this._isAborted(req)) return;
+
+      const historicalData = this._getMetricsData(range, startTime, endTime, bucketSize, instanceIds);
+      await this._tick();
+      if (this._isAborted(req)) return;
+
+      const historicalStats = this._getStatsData(range, startTime, endTime, instanceIds);
+      if (this._isAborted(req)) return;
+
+      res.json({ speedData, historicalData, historicalStats });
     } catch (err) {
       this.log('Error fetching dashboard metrics:', err);
       response.serverError(res, 'Failed to fetch dashboard metrics');
@@ -212,10 +264,11 @@ class MetricsAPI extends BaseModule {
 
   // Register all metrics routes
   registerRoutes(app) {
-    app.get('/api/metrics/dashboard', (req, res) => this.getDashboard(req, res));
-    app.get('/api/metrics/history', (req, res) => this.getHistory(req, res));
-    app.get('/api/metrics/speed-history', (req, res) => this.getSpeedHistory(req, res));
-    app.get('/api/metrics/stats', (req, res) => this.getStats(req, res));
+    const viewStats = requireCapability('view_statistics');
+    app.get('/api/metrics/dashboard', viewStats, (req, res) => this.getDashboard(req, res));
+    app.get('/api/metrics/history', viewStats, (req, res) => this.getHistory(req, res));
+    app.get('/api/metrics/speed-history', viewStats, (req, res) => this.getSpeedHistory(req, res));
+    app.get('/api/metrics/stats', viewStats, (req, res) => this.getStats(req, res));
   }
 }
 

@@ -10,7 +10,7 @@
 import React from 'https://esm.sh/react@18.2.0';
 import { Table, MobileSortButton, Button, IconButton, Icon, ClientIcon, AlertBox, Tooltip } from '../common/index.js';
 import { DEFAULT_SORT_CONFIG, VIEW_TITLE_STYLES } from '../../utils/index.js';
-import { useModal, useTableState } from '../../hooks/index.js';
+import { useModal, useTableState, useCapabilities } from '../../hooks/index.js';
 import { useStickyToolbar } from '../../contexts/StickyHeaderContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useDataFetch } from '../../contexts/DataFetchContext.js';
@@ -20,12 +20,23 @@ import DeleteCategoryModal from '../modals/DeleteCategoryModal.js';
 
 const { createElement: h, useState, useEffect, useCallback, useMemo, useRef } = React;
 
+const PRIORITY_MAP = {
+  0: { label: 'Normal', color: 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200' },
+  1: { label: 'High', color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300' },
+  2: { label: 'Low', color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' },
+  3: { label: 'Auto', color: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300' }
+};
+
 /**
  * Categories view component - now uses contexts directly
  */
 const CategoriesView = () => {
+  // Capability gating
+  const { hasCap } = useCapabilities();
+  const canManage = hasCap('manage_categories');
+
   // Get data from contexts
-  const { dataCategories, dataLoaded, clientDefaultPaths, hasCategoryPathWarnings } = useStaticData();
+  const { dataCategories, dataLoaded, clientDefaultPaths, hasCategoryPathWarnings, instances, multiInstanceTypes } = useStaticData();
   const { fetchCategories } = useDataFetch();
   const actions = useActions();
 
@@ -64,7 +75,6 @@ const CategoriesView = () => {
   // keepDefaultFirst ensures Default category is always at the top
   const {
     sortedData: sortedCategories,
-    loadedData,
     sortConfig,
     onSortChange,
     loadedCount,
@@ -92,9 +102,8 @@ const CategoriesView = () => {
 
   // Aliases for readability
   const categories = dataCategories;
-  const categoryState = { formData: categoryFormData }; // For modal compatibility
-
-  const [error, setError] = useState(null);
+  const hasMulti = multiInstanceTypes.size > 0;
+  const [, setError] = useState(null);
 
   // Modal state management
   const { modal: categoryEditModal, open: openCategoryEditModal, close: closeCategoryEditModal } = useModal({
@@ -104,7 +113,6 @@ const CategoriesView = () => {
 
   const { modal: categoryDeleteModal, open: openCategoryDeleteModal, close: closeCategoryDeleteModal } = useModal({
     categoryName: '',
-    categoryId: null,
     categoryDisplayName: ''
   });
 
@@ -134,7 +142,7 @@ const CategoriesView = () => {
   };
 
   const handleDeleteCategory = (categoryName, displayName) => {
-    openCategoryDeleteModal({ categoryName, categoryId: null, categoryDisplayName: displayName });
+    openCategoryDeleteModal({ categoryName, categoryDisplayName: displayName });
   };
 
   const handleCategoryCreate = (...args) => {
@@ -153,22 +161,21 @@ const CategoriesView = () => {
     closeCategoryDeleteModal();
   };
 
-  const priorityMap = {
-    0: { label: 'Normal', color: 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200' },
-    1: { label: 'High', color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300' },
-    2: { label: 'Low', color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' },
-    3: { label: 'Auto', color: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300' }
-  };
-
   // Helper to format path mappings for display
   // Note: qBittorrent excluded - it handles moves/deletes natively via API
+  // Keys may be clientType ('amule') or instanceId ('amule-host-4712')
   const formatPathMappings = useCallback((pathMappings) => {
     if (!pathMappings) return null;
     const parts = [];
-    if (pathMappings.amule) parts.push({ client: 'amule', path: pathMappings.amule });
-    if (pathMappings.rtorrent) parts.push({ client: 'rtorrent', path: pathMappings.rtorrent });
+    for (const [key, path] of Object.entries(pathMappings)) {
+      if (!path) continue;
+      if (key === 'qbittorrent' || key.startsWith('qbittorrent-')) continue;
+      const inst = instances[key] || Object.values(instances).find(i => i?.type === key);
+      if (!inst?.connected) continue; // skip mappings for disconnected/disabled instances
+      parts.push({ key, client: inst.type, path, name: inst.name, color: inst.color });
+    }
     return parts.length > 0 ? parts : null;
-  }, []);
+  }, [instances]);
 
   // Helper to render path warning indicator (inline icon only, message in tooltip)
   const renderPathWarningIcon = useCallback((warning) => {
@@ -208,31 +215,28 @@ const CategoriesView = () => {
         const isDefault = (item.name || item.title) === 'Default';
         const pathWarning = item.pathWarnings?.path;
         const mappingWarnings = item.pathWarnings?.mappings || {};
-        const hasPathMapping = item.pathMappings && (item.pathMappings.amule || item.pathMappings.rtorrent);
-        // For Default category, show client default paths with icons
-        // Only show warnings here if path mapping is NOT enabled (otherwise warnings show in Mappings column)
-        if (isDefault && (clientDefaultPaths?.amule || clientDefaultPaths?.rtorrent || clientDefaultPaths?.qbittorrent)) {
+        const hasMapping = !!formatPathMappings(item.pathMappings);
+
+        // Default category: per-instance paths with client icons
+        const defaultPathEntries = isDefault ? Object.entries(clientDefaultPaths).filter(([, p]) => p) : [];
+        if (isDefault && defaultPathEntries.length > 0) {
           return h('div', { className: 'text-xs space-y-0.5' },
-            clientDefaultPaths?.amule && h('div', { className: 'flex items-center gap-1', title: clientDefaultPaths.amule },
-              h(ClientIcon, { client: 'amule', size: 14 }),
-              h('span', { className: 'font-mono text-gray-600 dark:text-gray-400 truncate' }, clientDefaultPaths.amule),
-              !hasPathMapping && renderPathWarningIcon(mappingWarnings.amule)
-            ),
-            clientDefaultPaths?.rtorrent && h('div', { className: 'flex items-center gap-1', title: clientDefaultPaths.rtorrent },
-              h(ClientIcon, { client: 'rtorrent', size: 14 }),
-              h('span', { className: 'font-mono text-gray-600 dark:text-gray-400 truncate' }, clientDefaultPaths.rtorrent),
-              !hasPathMapping && renderPathWarningIcon(mappingWarnings.rtorrent)
-            ),
-            clientDefaultPaths?.qbittorrent && h('div', { className: 'flex items-center gap-1', title: clientDefaultPaths.qbittorrent },
-              h(ClientIcon, { client: 'qbittorrent', size: 14 }),
-              h('span', { className: 'font-mono text-gray-600 dark:text-gray-400 truncate' }, clientDefaultPaths.qbittorrent),
-              !hasPathMapping && renderPathWarningIcon(mappingWarnings.qbittorrent)
-            )
+            defaultPathEntries.map(([instanceId, path]) => {
+              const inst = instances[instanceId];
+              const client = inst?.type || 'unknown';
+              return h('div', { key: instanceId, className: 'flex items-center gap-1', title: path },
+                h(ClientIcon, { client, size: 14 }),
+                hasMulti && inst?.name && h('span', { className: 'text-gray-500 dark:text-gray-400 text-[10px] whitespace-nowrap' }, inst.name),
+                h('span', { className: 'font-mono truncate' }, path),
+                !hasMapping && renderPathWarningIcon(mappingWarnings[instanceId])
+              );
+            })
           );
         }
+
         return h('div', { className: 'flex items-center gap-1.5' },
           h('span', {
-            className: 'text-sm text-gray-600 dark:text-gray-400 truncate font-mono',
+            className: 'text-sm truncate font-mono',
             title: item.path
           }, item.path || '(default path)'),
           renderPathWarningIcon(pathWarning)
@@ -251,12 +255,13 @@ const CategoriesView = () => {
           return h('span', { className: 'text-sm text-gray-400 dark:text-gray-500' }, '-');
         }
         return h('div', { className: 'text-xs space-y-0.5' },
-          mappings.map(({ client, path }) => {
-            const warning = mappingWarnings[client];
-            return h('div', { key: client, className: 'flex items-center gap-1', title: path },
+          mappings.map(({ key, client, path, name }) => {
+            const warning = mappingWarnings[key];
+            return h('div', { key, className: 'flex items-center gap-1', title: path },
               h(ClientIcon, { client, size: 14 }),
-              h('span', { className: 'text-gray-500 dark:text-gray-400' }, '→'),
-              h('span', { className: 'font-mono text-gray-600 dark:text-gray-400 truncate' }, path),
+              hasMulti && name && h('span', { className: 'text-gray-500 dark:text-gray-400 text-[10px] whitespace-nowrap' }, name),
+              h('span', { className: 'text-gray-500 dark:text-gray-400' }, '\u2192'),
+              h('span', { className: 'font-mono truncate' }, path),
               renderPathWarningIcon(warning)
             );
           })
@@ -278,7 +283,7 @@ const CategoriesView = () => {
       sortable: true,
       width: 'auto',
       render: (item) => {
-        const p = priorityMap[item.priority] || priorityMap[0];
+        const p = PRIORITY_MAP[item.priority] || PRIORITY_MAP[0];
         return h('span', {
           className: `px-2 py-1 rounded text-xs font-medium ${p.color}`
         }, p.label);
@@ -290,6 +295,7 @@ const CategoriesView = () => {
       sortable: false,
       width: 'auto',
       render: (item) => {
+        if (!canManage) return null;
         const isDefault = (item.name || item.title) === 'Default';
         return h('div', { className: 'flex gap-1' },
           // Edit button - shown for all categories including Default (for path mappings)
@@ -321,10 +327,10 @@ const CategoriesView = () => {
     const displayColor = item.hexColor || '#CCCCCC';
     const isDefault = displayName === 'Default';
     const mappings = formatPathMappings(item.pathMappings);
-    const hasPathMapping = item.pathMappings && (item.pathMappings.amule || item.pathMappings.rtorrent);
     const pathWarning = item.pathWarnings?.path;
     const mappingWarnings = item.pathWarnings?.mappings || {};
     const hasAnyWarning = pathWarning || Object.keys(mappingWarnings).length > 0;
+    const mobileDefaultPathEntries = isDefault ? Object.entries(clientDefaultPaths).filter(([, p]) => p) : [];
 
     return h('div', {
       className: `rounded-lg overflow-hidden border ${hasAnyWarning ? 'border-amber-400 dark:border-amber-600' : 'border-gray-200 dark:border-gray-700'}`
@@ -343,8 +349,8 @@ const CategoriesView = () => {
             )
           )
         ),
-        // Action buttons on the right
-        h('div', { className: 'flex gap-1 flex-shrink-0' },
+        // Action buttons on the right (only for users with manage_categories)
+        canManage && h('div', { className: 'flex gap-1 flex-shrink-0' },
           // Edit button - shown for all categories including Default
           h(IconButton, {
             variant: 'primary',
@@ -367,43 +373,44 @@ const CategoriesView = () => {
       ),
       // Body with details
       h('div', { className: 'p-2 space-y-1 text-xs bg-white dark:bg-gray-800' },
-        // Path - for Default category, show client default paths with icons
-        isDefault && (clientDefaultPaths?.amule || clientDefaultPaths?.rtorrent || clientDefaultPaths?.qbittorrent)
+        // Path (with inline mappings) - for Default category, show per-instance paths
+        isDefault && mobileDefaultPathEntries.length > 0
           ? h('div', { className: 'text-gray-700 dark:text-gray-300' },
               h('span', { className: 'font-medium text-gray-600 dark:text-gray-400' }, 'Path: '),
               h('div', { className: 'pl-2 space-y-0.5' },
-                clientDefaultPaths?.amule && h('div', { className: 'flex items-center gap-1' },
-                  h(ClientIcon, { client: 'amule', size: 14 }),
-                  h('span', { className: 'font-mono' }, clientDefaultPaths.amule),
-                  !hasPathMapping && renderPathWarningIcon(mappingWarnings.amule)
-                ),
-                clientDefaultPaths?.rtorrent && h('div', { className: 'flex items-center gap-1' },
-                  h(ClientIcon, { client: 'rtorrent', size: 14 }),
-                  h('span', { className: 'font-mono' }, clientDefaultPaths.rtorrent),
-                  !hasPathMapping && renderPathWarningIcon(mappingWarnings.rtorrent)
-                ),
-                clientDefaultPaths?.qbittorrent && h('div', { className: 'flex items-center gap-1' },
-                  h(ClientIcon, { client: 'qbittorrent', size: 14 }),
-                  h('span', { className: 'font-mono' }, clientDefaultPaths.qbittorrent),
-                  !hasPathMapping && renderPathWarningIcon(mappingWarnings.qbittorrent)
-                )
+                mobileDefaultPathEntries.map(([instanceId, path]) => {
+                  const inst = instances[instanceId];
+                  const client = inst?.type || 'unknown';
+                  const mapping = mappings?.find(m => m.key === instanceId || m.key === client);
+                  return h('div', { key: instanceId, className: 'flex items-center gap-1 min-w-0' },
+                    h(ClientIcon, { client, size: 14, className: 'flex-shrink-0' }),
+                    hasMulti && inst?.name && h('span', { className: 'text-gray-500 dark:text-gray-400 text-[10px] flex-shrink-0' }, inst.name),
+                    h('span', { className: 'font-mono truncate' }, path),
+                    mapping && h('span', { className: 'text-gray-500 dark:text-gray-400 flex-shrink-0' }, '\u2192'),
+                    mapping && h('span', { className: 'font-mono truncate' }, mapping.path),
+                    renderPathWarningIcon(mappingWarnings[instanceId])
+                  );
+                })
               )
             )
-          : h('div', { className: 'text-gray-700 dark:text-gray-300 flex items-center gap-1' },
-              h('span', { className: 'font-medium text-gray-600 dark:text-gray-400' }, 'Path: '),
-              h('span', { className: 'font-mono' }, item.path || '(default path)'),
-              renderPathWarningIcon(pathWarning)
+          : h('div', { className: 'text-gray-700 dark:text-gray-300' },
+              h('div', { className: 'flex items-center gap-1' },
+                h('span', { className: 'font-medium text-gray-600 dark:text-gray-400' }, 'Path: '),
+                h('span', { className: 'font-mono' }, item.path || '(default path)'),
+                renderPathWarningIcon(pathWarning)
+              ),
+              // Per-instance mapping rows below the path
+              mappings && mappings.map(({ key, client, path, name }) => {
+                const warning = mappingWarnings[key];
+                return h('div', { key, className: 'flex items-center gap-1 min-w-0 pl-2' },
+                  h(ClientIcon, { client, size: 14, className: 'flex-shrink-0' }),
+                  hasMulti && name && h('span', { className: 'text-gray-500 dark:text-gray-400 text-[10px] flex-shrink-0' }, name),
+                  h('span', { className: 'text-gray-500 dark:text-gray-400 flex-shrink-0' }, '\u2192'),
+                  h('span', { className: 'font-mono truncate' }, path),
+                  renderPathWarningIcon(warning)
+                );
+              })
             ),
-        // Path mappings (only show if present)
-        mappings && mappings.map(({ client, path }) => {
-          const warning = mappingWarnings[client];
-          return h('div', { key: client, className: 'text-gray-700 dark:text-gray-300 pl-2 flex items-center gap-1' },
-            h(ClientIcon, { client, size: 14 }),
-            h('span', { className: 'text-gray-500 dark:text-gray-400' }, '→'),
-            h('span', { className: 'font-mono' }, path),
-            renderPathWarningIcon(warning)
-          );
-        }),
         // Comment (only show if present)
         item.comment && h('div', { className: 'text-gray-700 dark:text-gray-300' },
           h('span', { className: 'font-medium text-gray-600 dark:text-gray-400' }, 'Comment: '),
@@ -413,12 +420,12 @@ const CategoriesView = () => {
         h('div', { className: 'text-gray-700 dark:text-gray-300' },
           h('span', { className: 'font-medium text-gray-600 dark:text-gray-400' }, 'Priority: '),
           h('span', {
-            className: `px-2 py-0.5 rounded text-xs font-medium ${(priorityMap[item.priority] || priorityMap[0]).color}`
-          }, (priorityMap[item.priority] || priorityMap[0]).label)
+            className: `px-2 py-0.5 rounded text-xs font-medium ${(PRIORITY_MAP[item.priority] || PRIORITY_MAP[0]).color}`
+          }, (PRIORITY_MAP[item.priority] || PRIORITY_MAP[0]).label)
         )
       )
     );
-  }, [handleEditCategory, handleDeleteCategory, priorityMap, formatPathMappings, clientDefaultPaths, renderPathWarningIcon]);
+  }, [handleEditCategory, handleDeleteCategory, hasMulti, formatPathMappings, clientDefaultPaths, instances, renderPathWarningIcon, canManage]);
 
   // ============================================================================
   // MOBILE HEADER CONTENT (shared between sticky toolbar and in-page header)
@@ -435,12 +442,12 @@ const CategoriesView = () => {
   [categories.length, columns, sortConfig, onSortChange]);
 
   const createButton = useMemo(() =>
-    h(Button, {
+    canManage && h(Button, {
       variant: 'success',
       onClick: handleCreateCategory,
       icon: 'plus'
     }, 'New Category'),
-  [handleCreateCategory]);
+  [handleCreateCategory, canManage]);
 
   const mobileHeaderContent = useMemo(() =>
     h('div', { className: 'flex items-center gap-2' },
@@ -518,7 +525,7 @@ const CategoriesView = () => {
       show: categoryEditModal.show,
       mode: categoryEditModal.mode,
       category: categoryEditModal.category,
-      formData: categoryState.formData,
+      formData: categoryFormData,
       onFormDataChange: setCategoryFormData,
       onCreate: handleCategoryCreate,
       onUpdate: handleCategoryUpdate,
@@ -529,7 +536,6 @@ const CategoriesView = () => {
 
     h(DeleteCategoryModal, {
       show: categoryDeleteModal.show,
-      categoryId: categoryDeleteModal.categoryId,
       categoryName: categoryDeleteModal.categoryDisplayName || categoryDeleteModal.categoryName,
       onConfirm: handleCategoryDeleteConfirm,
       onClose: closeCategoryDeleteModal

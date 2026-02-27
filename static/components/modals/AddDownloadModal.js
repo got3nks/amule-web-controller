@@ -7,17 +7,18 @@
 
 import React from 'https://esm.sh/react@18.2.0';
 import Portal from '../common/Portal.js';
-import { Button, Select, Textarea, Icon, Input, IconButton, ClientIcon, BitTorrentClientSelector } from '../common/index.js';
+import { Button, Select, Textarea, Icon, Input, IconButton, ClientIcon, BitTorrentClientSelector, AmuleInstanceSelector } from '../common/index.js';
 import { useClientFilter } from '../../contexts/ClientFilterContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useBitTorrentClientSelector } from '../../hooks/useBitTorrentClientSelector.js';
+import { useAmuleInstanceSelector } from '../../hooks/useAmuleInstanceSelector.js';
 
 const { createElement: h, useState, useRef, useCallback } = React;
 
 /**
  * Add download modal
  * @param {boolean} show - Whether to show the modal
- * @param {function} onAddEd2kLinks - Handler for ED2K links (links, categoryId)
+ * @param {function} onAddEd2kLinks - Handler for ED2K links (links, categoryName)
  * @param {function} onAddMagnetLinks - Handler for magnet links (links, label, clientId)
  * @param {function} onAddTorrentFile - Handler for .torrent file (file, label, clientId)
  * @param {function} onClose - Close handler
@@ -30,19 +31,36 @@ const AddDownloadModal = ({
   onClose
 }) => {
   // Get aMule connection status from context
-  const { amuleConnected } = useClientFilter();
-  // Get BitTorrent client selection state
+  const { ed2kConnected: amuleConnected } = useClientFilter();
+  // Get BitTorrent client selection state (instance-aware)
   const {
     connectedClients: btClients,
     hasBitTorrentClient,
     showClientSelector,
     selectedClientId,
-    selectClient,
-    rtorrentConnected,
-    qbittorrentConnected
+    selectedClient,
+    selectClient
   } = useBitTorrentClientSelector();
-  // Get unified categories from context
-  const { dataCategories: categories } = useStaticData();
+  // Get unified categories and instance metadata from context
+  const { dataCategories: categories, instances, isTypeConnected } = useStaticData();
+
+  // Build per-instance connection badges from instances metadata
+  const instanceBadges = React.useMemo(() => {
+    return Object.entries(instances || {})
+      .filter(([, inst]) => inst.connected)
+      .map(([id, inst]) => ({ id, name: inst.name || id, type: inst.type, color: inst.color, order: inst.order }))
+      .sort((a, b) => a.order - b.order);
+  }, [instances]);
+
+  // aMule instance selector for ED2K links
+  const {
+    connectedInstances: amuleInstances,
+    showSelector: showAmuleSelector,
+    selectedId: effectiveAmuleInstance,
+    selectedInstance: selectedAmuleObj,
+    selectInstance: selectAmuleInstance
+  } = useAmuleInstanceSelector();
+
   // State
   const [links, setLinks] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Default');
@@ -96,23 +114,20 @@ const AddDownloadModal = ({
     const finalCategory = getFinalCategory();
     const finalLabel = getFinalLabel();
 
-    // Add ED2K links if any (use category name - backend will resolve to amuleId)
+    // Add ED2K links if any (send category name - backend resolves to per-instance amuleId)
     if (ed2kLinks.length > 0 && amuleConnected && onAddEd2kLinks) {
-      // Find category by name to get ID for legacy API
-      const cat = categories.find(c => (c.name || c.title) === finalCategory);
-      const categoryId = cat?.id ?? 0;
-      onAddEd2kLinks(ed2kLinks, categoryId);
+      onAddEd2kLinks(ed2kLinks, finalCategory, false, effectiveAmuleInstance);
     }
 
-    // Add magnet links if any (use label from category name, pass selected client)
+    // Add magnet links if any (pass instanceId + clientType)
     if (magnetLinks.length > 0 && hasBitTorrentClient && onAddMagnetLinks) {
-      onAddMagnetLinks(magnetLinks, finalLabel, selectedClientId);
+      onAddMagnetLinks(magnetLinks, finalLabel, selectedClientId, selectedClient?.type);
     }
 
-    // Add torrent files if any (pass selected client)
+    // Add torrent files if any (pass instanceId + clientType)
     if (torrentFiles.length > 0 && hasBitTorrentClient && onAddTorrentFile) {
       torrentFiles.forEach(file => {
-        onAddTorrentFile(file, finalLabel, selectedClientId);
+        onAddTorrentFile(file, finalLabel, selectedClientId, selectedClient?.type);
       });
     }
 
@@ -195,18 +210,22 @@ const AddDownloadModal = ({
     }
   };
 
-  // Summary of what will be added
-  const getSummary = () => {
+  // Summary of what will be added (returns array of strings, one per line)
+  const getSummaryParts = () => {
     const parts = [];
     const finalCategory = getFinalCategory();
-    const selectedClientName = btClients.find(c => c.id === selectedClientId)?.name || 'BitTorrent';
+    const selectedClientName = selectedClient?.name || 'BitTorrent';
+    const effectiveAmuleName = selectedAmuleObj?.name || 'aMule';
 
     if (ed2kLinks.length > 0) {
       let ed2kPart = `${ed2kLinks.length} ED2K link${ed2kLinks.length > 1 ? 's' : ''}`;
       if (!amuleConnected) {
         ed2kPart += ' (aMule offline)';
-      } else if (finalCategory && finalCategory !== 'Default') {
-        ed2kPart += ` → ${finalCategory}`;
+      } else {
+        ed2kPart += ` → ${effectiveAmuleName}`;
+        if (finalCategory && finalCategory !== 'Default') {
+          ed2kPart += ` (${finalCategory})`;
+        }
       }
       parts.push(ed2kPart);
     }
@@ -235,7 +254,7 @@ const AddDownloadModal = ({
     if (invalidLinks.length > 0) {
       parts.push(`${invalidLinks.length} invalid link${invalidLinks.length > 1 ? 's' : ''}`);
     }
-    return parts.join(', ');
+    return parts;
   };
 
   return h(Portal, null,
@@ -244,50 +263,46 @@ const AddDownloadModal = ({
       onClick: onClose
     },
       h('div', {
-        className: 'bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full p-6',
+        className: 'modal-full bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full flex flex-col overflow-hidden',
         onClick: (e) => e.stopPropagation()
       },
-        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4' },
-          'Add Download'
-        ),
-
-        // Connection status indicators with network icons
-        h('div', { className: 'flex flex-wrap gap-2 mb-4' },
-          h('span', {
-            className: `flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium ${
-              amuleConnected
-                ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
-                : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
-            }`,
-            title: `aMule: ${amuleConnected ? 'Connected' : 'Offline'}`
-          },
-            h(ClientIcon, { client: 'amule', size: 14, title: '' }),
-            amuleConnected ? 'Connected' : 'Offline'
+        // Header
+        h('div', { className: 'px-6 py-4 border-b border-gray-200 dark:border-gray-700' },
+          h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100' },
+            'Add Download'
           ),
-          h('span', {
-            className: `flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium ${
-              rtorrentConnected
-                ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
-                : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
-            }`,
-            title: `rTorrent: ${rtorrentConnected ? 'Connected' : 'Offline'}`
-          },
-            h(ClientIcon, { client: 'rtorrent', size: 14, title: '' }),
-            rtorrentConnected ? 'Connected' : 'Offline'
-          ),
-          h('span', {
-            className: `flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium ${
-              qbittorrentConnected
-                ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
-                : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
-            }`,
-            title: `qBittorrent: ${qbittorrentConnected ? 'Connected' : 'Offline'}`
-          },
-            h(ClientIcon, { client: 'qbittorrent', size: 14, title: '' }),
-            qbittorrentConnected ? 'Connected' : 'Offline'
-          )
-        ),
 
+          // Connection status indicators — per-instance badges
+          h('div', { className: 'flex flex-wrap gap-2 mt-3' },
+          // Show connected instances; if none, show offline placeholders per type
+          instanceBadges.length > 0
+            ? instanceBadges.map(inst =>
+                h('span', {
+                  key: inst.id,
+                  className: 'flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300',
+                  title: `${inst.name}: Connected`
+                },
+                  h(ClientIcon, { client: inst.type, size: 14, title: '' }),
+                  inst.name
+                )
+              )
+            : [...new Set(Object.values(instances || {}).map(i => i.type))]
+                .filter(type => !isTypeConnected(type))
+                .map(type =>
+                  h('span', {
+                    key: type,
+                    className: 'flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400',
+                    title: `${type}: Offline`
+                  },
+                    h(ClientIcon, { client: type, size: 14, title: '' }),
+                    'Offline'
+                  )
+                )
+        )
+        ), // Close header div
+
+        // Body - scrollable
+        h('div', { className: 'flex-1 overflow-y-auto px-6 py-4' },
         h('div', { className: 'space-y-4' },
           // Links textarea
           h('div', null,
@@ -361,7 +376,7 @@ const AddDownloadModal = ({
             )
           ),
 
-          // BitTorrent client selector - always visible when 2+ BT clients and BT downloads
+          // BitTorrent client selector - visible when 2+ BT instances and BT downloads
           (() => {
             const hasBtDownloads = magnetLinks.length > 0 || torrentFiles.length > 0;
             if (!hasBtDownloads || !showClientSelector) return null;
@@ -381,6 +396,20 @@ const AddDownloadModal = ({
               })
             );
           })(),
+
+          // aMule instance selector - visible when 2+ aMule instances and ED2K links
+          ed2kLinks.length > 0 && h('div', null,
+            showAmuleSelector && h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
+              'aMule Instance'
+            ),
+            h(AmuleInstanceSelector, {
+              connectedInstances: amuleInstances,
+              selectedId: effectiveAmuleInstance,
+              onSelect: selectAmuleInstance,
+              showSelector: showAmuleSelector,
+              label: null
+            })
+          ),
 
           // Category options toggle - only show when content is entered and at least one client is connected
           (() => {
@@ -449,14 +478,15 @@ const AddDownloadModal = ({
             );
           })(),
 
-          // Summary
+          // Summary (one line per network type)
           (links.trim() || torrentFiles.length > 0) && h('div', {
-            className: 'text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/50 rounded p-2'
-          }, getSummary())
-        ),
+            className: 'text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/50 rounded p-2 space-y-0.5'
+          }, getSummaryParts().map((part, i) => h('div', { key: i }, part)))
+        )
+        ), // Close body scrollable div
 
-        // Action buttons
-        h('div', { className: 'flex gap-3 justify-end mt-6' },
+        // Footer
+        h('div', { className: 'px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex gap-3 justify-end' },
           h(Button, {
             variant: 'secondary',
             onClick: onClose
@@ -467,8 +497,8 @@ const AddDownloadModal = ({
             disabled: !canSubmit
           }, 'Add Download')
         )
-      )
-    )
+      ) // Close modal box
+    ) // Close overlay
   );
 };
 

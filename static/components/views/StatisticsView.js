@@ -10,13 +10,13 @@ import { Button, ClientIcon, SegmentedControl } from '../common/index.js';
 import { VIEW_TITLE_STYLES } from '../../utils/index.js';
 import { useAppState } from '../../contexts/AppStateContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
-import { useDataFetch } from '../../contexts/DataFetchContext.js';
 import { useTheme } from '../../contexts/ThemeContext.js';
+import { useClientFilter } from '../../contexts/ClientFilterContext.js';
 import { useClientChartConfig } from '../../hooks/useClientChartConfig.js';
 import { StatsTreeModal } from '../modals/index.js';
 import { StatsWidget, DashboardChartWidget } from '../dashboard/index.js';
 
-const { createElement: h, useState, useCallback, useEffect, lazy, Suspense } = React;
+const { createElement: h, useState, useCallback, useEffect, useMemo, useRef, lazy, Suspense } = React;
 
 // Lazy load chart components for better initial page load performance
 const ClientSpeedChart = lazy(() => import('../common/ClientSpeedChart.js'));
@@ -29,31 +29,49 @@ const StatisticsView = () => {
 
   // Get data from contexts
   const { appStatsState, setAppStatsState, addAppError } = useAppState();
-  const { dataStatsTree, clientsEnabled } = useStaticData();
-  const { fetchStatsTree } = useDataFetch();
+  const { hasType, instances } = useStaticData();
   const { theme } = useTheme();
+  const { disabledInstances } = useClientFilter();
+
+  // Compute instanceIds filter param — empty string means use legacy (all connected enabled)
+  const instanceIdsParam = useMemo(() => {
+    const connected = Object.entries(instances)
+      .filter(([, inst]) => inst.connected)
+      .map(([id]) => id);
+    if (connected.length === 0) return '';
+    const enabled = connected.filter(id => !disabledInstances.has(id));
+    if (enabled.length === connected.length) return '';
+    return enabled.join(',');
+  }, [instances, disabledInstances]);
+
+  // Names of enabled instances for the filter banner (null when not filtering)
+  const filteredInstanceNames = useMemo(() => {
+    if (!instanceIdsParam) return null;
+    const enabledIds = new Set(instanceIdsParam.split(','));
+    return Object.entries(instances)
+      .filter(([id, inst]) => inst.connected && enabledIds.has(id))
+      .map(([, inst]) => inst.name);
+  }, [instanceIdsParam, instances]);
 
   // Get client chart configuration from hook
   const {
-    amuleConnected,
-    isAmuleEnabled,
+    ed2kConnected,
+    isEd2kEnabled,
     showBothCharts,
     showSingleClient,
-    singleClientType,
-    singleClientName,
+    singleNetworkType,
+    singleNetworkName,
     shouldRenderCharts
   } = useClientChartConfig();
 
   // Check if aMule is enabled in config (not just connected)
-  const amuleConfigEnabled = clientsEnabled?.amule !== false;
+  const amuleConfigEnabled = hasType('amule');
 
   // Show ED2K stats tree button only when aMule is enabled in config, connected, and enabled in filter
-  const showAmuleStatsTree = amuleConfigEnabled && amuleConnected && isAmuleEnabled;
+  const showAmuleStatsTree = amuleConfigEnabled && ed2kConnected && isEd2kEnabled;
 
   // State for stats tree modal
   const [showStatsTreeModal, setShowStatsTreeModal] = useState(false);
-  // Persist expanded nodes state across modal open/close
-  const [statsTreeExpandedNodes, setStatsTreeExpandedNodes] = useState({});
   // Chart mode: 'speed' or 'transfer'
   const [chartMode, setChartMode] = useState('speed');
 
@@ -63,13 +81,20 @@ const StatisticsView = () => {
   const historicalStats = appStatsState.historicalStats;
   const speedData = appStatsState.speedData;
   const historicalData = appStatsState.historicalData;
-  const statsTree = dataStatsTree;
+  // Abort controller for in-flight metrics fetches — new fetch aborts the previous one
+  const metricsAbortRef = useRef(null);
 
   // Fetch historical data for statistics
   const fetchHistoricalData = useCallback(async (range, showLoading = true) => {
-    if (showLoading) setAppStatsState(prev => ({ ...prev, loadingHistory: true }));
+    if (metricsAbortRef.current) metricsAbortRef.current.abort();
+    const controller = new AbortController();
+    metricsAbortRef.current = controller;
+
+    if (showLoading) setAppStatsState(prev => ({ ...prev, loadingHistory: true, historicalRange: range }));
     try {
-      const response = await fetch(`/api/metrics/dashboard?range=${range}`);
+      let url = `/api/metrics/dashboard?range=${range}`;
+      if (instanceIdsParam) url += `&instanceIds=${instanceIdsParam}`;
+      const response = await fetch(url, { signal: controller.signal });
       const { speedData, historicalData, historicalStats } = await response.json();
 
       setAppStatsState({
@@ -80,61 +105,62 @@ const StatisticsView = () => {
         loadingHistory: false
       });
     } catch (err) {
+      if (err.name === 'AbortError') return; // Superseded by newer fetch
       console.error('Error fetching historical data:', err);
       addAppError('Failed to load historical data');
       if (showLoading) setAppStatsState(prev => ({ ...prev, loadingHistory: false }));
     }
-  }, [setAppStatsState, addAppError]);
+  }, [setAppStatsState, addAppError, instanceIdsParam]);
 
   // Local handlers
   const onFetchHistoricalData = fetchHistoricalData;
 
-  // Fetch initial data on mount only
+  // Fetch historical data on mount only
   useEffect(() => {
-    if (amuleConfigEnabled) {
-      fetchStatsTree();
-    }
     fetchHistoricalData(historicalRange, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run on mount
 
-  // Set up auto-refresh intervals (separate effect to avoid re-triggering on range change)
+  // Re-fetch when instance filter changes (skip initial mount)
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    if (!mountedRef.current) { mountedRef.current = true; return; }
+    fetchHistoricalData(historicalRange, true);
+  }, [instanceIdsParam]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-refresh historical data
   useEffect(() => {
     const STATISTICS_REFRESH_INTERVAL = 30000; // 30 seconds
-    const statsTreeInterval = amuleConfigEnabled
-      ? setInterval(fetchStatsTree, STATISTICS_REFRESH_INTERVAL)
-      : null;
-    const historicalDataInterval = setInterval(() => {
+    const interval = setInterval(() => {
       fetchHistoricalData(historicalRange, false);
     }, STATISTICS_REFRESH_INTERVAL);
-
-    return () => {
-      if (statsTreeInterval) clearInterval(statsTreeInterval);
-      clearInterval(historicalDataInterval);
-    };
-  }, [fetchStatsTree, fetchHistoricalData, historicalRange, amuleConfigEnabled]);
+    return () => clearInterval(interval);
+  }, [fetchHistoricalData, historicalRange]);
 
   // Check if we have data to render charts
   const hasSpeedData = speedData?.data?.length > 0;
   const hasHistoricalData = historicalData?.data?.length > 0;
 
-  // Loader placeholder for charts without data
+  // Empty placeholder for charts without data (outer loading overlay handles the spinner)
+  const chartPlaceholder = h('div', { className: 'h-full' });
+
+  // Suspense fallback with spinner (for lazy JS loading — outer overlay not shown in this state)
   const chartLoader = h('div', { className: 'h-full flex items-center justify-center' },
     h('div', { className: 'loader' })
   );
 
   // Helper to render chart content with loading state - only creates chart element when data exists
-  const renderSpeedChart = (clientType) => {
-    if (!shouldRenderCharts || !hasSpeedData) return chartLoader;
+  const renderSpeedChart = (networkType) => {
+    if (!shouldRenderCharts || !hasSpeedData) return chartPlaceholder;
     return h(Suspense, { fallback: chartLoader },
-      h(ClientSpeedChart, { speedData, clientType, theme, historicalRange })
+      h(ClientSpeedChart, { speedData, networkType, theme, historicalRange })
     );
   };
 
-  const renderTransferChart = (clientType) => {
-    if (!shouldRenderCharts || !hasHistoricalData) return chartLoader;
+  const renderTransferChart = (networkType) => {
+    if (!shouldRenderCharts || !hasHistoricalData) return chartPlaceholder;
     return h(Suspense, { fallback: chartLoader },
-      h(ClientTransferChart, { historicalData, clientType, theme, historicalRange })
+      h(ClientTransferChart, { historicalData, networkType, theme, historicalRange })
     );
   };
 
@@ -159,6 +185,16 @@ const StatisticsView = () => {
         onChange: (range) => onFetchHistoricalData(range, true),
         disabled: loadingHistory
       })
+    ),
+
+    // Instance filter banner (shown when some instances are disabled)
+    filteredInstanceNames && h('div', {
+      className: 'flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-700/40 rounded px-2.5 py-1.5'
+    },
+      h('svg', { className: 'w-3.5 h-3.5 flex-shrink-0', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: '2' },
+        h('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z' })
+      ),
+      h('span', null, `Showing data for: ${filteredInstanceNames.join(', ')}`)
     ),
 
     // Summary Statistics Cards with loading state
@@ -206,15 +242,15 @@ const StatisticsView = () => {
       ),
 
       // Charts content (always rendered, dimmed when loading)
-      h('div', { className: loadingHistory ? 'opacity-50 pointer-events-none' : '' },
+      h('div', { className: `space-y-2 sm:space-y-3${loadingHistory ? ' opacity-50 pointer-events-none' : ''}` },
         // BOTH CLIENTS: Show toggle-controlled charts
         showBothCharts && h(React.Fragment, null,
           // Speed charts (when chartMode === 'speed')
           chartMode === 'speed' && h(React.Fragment, null,
             h(DashboardChartWidget, {
-              title: chartTitle('aMule Speed', 'amule'),
+              title: chartTitle('aMule Speed', 'ed2k'),
               height: '225px'
-            }, renderSpeedChart('amule')),
+            }, renderSpeedChart('ed2k')),
             h(DashboardChartWidget, {
               title: chartTitle('BitTorrent Speed', 'bittorrent'),
               height: '225px'
@@ -223,9 +259,9 @@ const StatisticsView = () => {
           // Transfer charts (when chartMode === 'transfer')
           chartMode === 'transfer' && h(React.Fragment, null,
             h(DashboardChartWidget, {
-              title: chartTitle('aMule Data Transferred', 'amule'),
+              title: chartTitle('aMule Data Transferred', 'ed2k'),
               height: '225px'
-            }, renderTransferChart('amule')),
+            }, renderTransferChart('ed2k')),
             h(DashboardChartWidget, {
               title: chartTitle('BitTorrent Data Transferred', 'bittorrent'),
               height: '225px'
@@ -236,19 +272,19 @@ const StatisticsView = () => {
         // SINGLE CLIENT: Show both chart types (no toggle needed)
         showSingleClient && h(React.Fragment, null,
           h(DashboardChartWidget, {
-            title: chartTitle(`${singleClientName} Speed`, singleClientType),
+            title: chartTitle(`${singleNetworkName} Speed`, singleNetworkType),
             height: '225px'
-          }, renderSpeedChart(singleClientType)),
+          }, renderSpeedChart(singleNetworkType)),
           h(DashboardChartWidget, {
-            title: chartTitle(`${singleClientName} Data Transferred`, singleClientType),
+            title: chartTitle(`${singleNetworkName} Data Transferred`, singleNetworkType),
             height: '225px'
-          }, renderTransferChart(singleClientType))
+          }, renderTransferChart(singleNetworkType))
         )
       )
     ),
 
     // ED2K Statistics Tree button (only when aMule is connected and enabled)
-    showAmuleStatsTree && h('div', { className: 'flex justify-center pt-2' },
+    showAmuleStatsTree && h('div', { className: 'flex items-center justify-center pt-2' },
       h(Button, {
         variant: 'secondary',
         onClick: () => setShowStatsTreeModal(true),
@@ -262,11 +298,7 @@ const StatisticsView = () => {
     // Stats Tree Modal
     h(StatsTreeModal, {
       show: showStatsTreeModal,
-      onClose: () => setShowStatsTreeModal(false),
-      statsTree,
-      loading: statsTree === null,
-      expandedNodes: statsTreeExpandedNodes,
-      onExpandedNodesChange: setStatsTreeExpandedNodes
+      onClose: () => setShowStatsTreeModal(false)
     })
   );
 };

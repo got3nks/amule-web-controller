@@ -25,7 +25,7 @@ const CARD_BORDER = 'border-gray-200 dark:border-gray-600';
  * @param {React.ReactNode} props.children - Card content
  */
 const ItemMobileCard = ({ isSelected, isContextTarget, idx, categoryStyle, selectionMode, onSelectionToggle, children }) => {
-  const cardBase = 'rounded-xl border p-3 sm:p-3.5 transition-colors';
+  const cardBase = 'rounded-xl border p-3 sm:p-3.5 transition-colors shadow-md dark:shadow-lg dark:shadow-black/50';
   let cardColors;
   if (isSelected) {
     cardColors = 'bg-purple-50 dark:bg-purple-900/40 border-purple-300 dark:border-purple-700';

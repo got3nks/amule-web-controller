@@ -7,6 +7,9 @@
 
 import { useCallback } from 'https://esm.sh/react@18.2.0';
 import { getItemStatusInfo, getExportLink, getExportLinkLabel } from '../utils/index.js';
+import { itemKey } from '../utils/itemKey.js';
+import { useStaticData } from '../contexts/StaticDataContext.js';
+import { useCapabilities } from './useCapabilities.js';
 
 /**
  * Hook for building context menu items and handlers
@@ -47,6 +50,9 @@ export const useItemContextMenu = ({
   canShowInfo,
   deleteLabel = 'Delete'
 }) => {
+  const { getCapabilities } = useStaticData();
+  const { hasCap } = useCapabilities();
+
   const handleRowContextMenu = useCallback((e, item) => {
     if (selectionMode) return;
     openContextMenu(e, item);
@@ -55,16 +61,18 @@ export const useItemContextMenu = ({
   const getContextMenuItems = useCallback((item) => {
     if (!item) return [];
 
-    const isRtorrent = item.client === 'rtorrent';
-    const isQbittorrent = item.client === 'qbittorrent';
-    const isTorrentClient = isRtorrent || isQbittorrent;
+    const caps = getCapabilities(item.instanceId);
+    const isBittorrent = item.networkType === 'bittorrent';
     const status = getItemStatusInfo(item);
-    const items = [];
+    const menuItems = [];
+
+    // Ownership check: user can mutate if they have edit_all_downloads or own the item
+    const canMutate = hasCap('edit_all_downloads') || item.ownedByMe !== false;
 
     // Info item (shown if onShowInfo provided and canShowInfo passes)
     const showInfo = onShowInfo && (!canShowInfo || canShowInfo(item));
     if (showInfo) {
-      items.push({
+      menuItems.push({
         label: infoLabel,
         icon: 'info',
         iconColor: 'text-blue-600 dark:text-blue-400',
@@ -75,9 +83,9 @@ export const useItemContextMenu = ({
       });
     }
 
-    // Category item (optional)
-    if (onCategoryChange) {
-      items.push({
+    // Category item (optional, gated on ownership)
+    if (onCategoryChange && hasCap('assign_categories') && canMutate) {
+      menuItems.push({
         label: 'Change Category',
         icon: 'folder',
         iconColor: 'text-orange-600 dark:text-orange-400',
@@ -88,22 +96,22 @@ export const useItemContextMenu = ({
       });
     }
 
-    // Pause/Resume/Start (skip for checking/queued state)
-    // qBittorrent: only show Resume/Start (no Pause - use Stop instead)
-    const canShowPauseResume = actionsForBittorrentOnly ? isTorrentClient : true;
-    if (canShowPauseResume && onPause && onResume && status.key !== 'checking' && status.key !== 'hashing-queued') {
+    // Pause/Resume/Start (skip for checking/queued state, gated on ownership)
+    // Clients with stopReplacesPause: only show Resume/Start (no Pause - use Stop instead)
+    const canShowPauseResume = actionsForBittorrentOnly ? isBittorrent : true;
+    if (canShowPauseResume && onPause && onResume && hasCap('pause_resume') && canMutate && status.key !== 'checking' && status.key !== 'hashing-queued') {
       const needsResume = status.key === 'paused' || status.key === 'stopped' || status.key === 'error';
-      const showPauseResumeItem = !isQbittorrent || needsResume;
+      const showPauseResumeItem = !caps.stopReplacesPause || needsResume;
       if (showPauseResumeItem) {
-        items.push({
+        menuItems.push({
           label: (status.key === 'stopped' || status.key === 'error') ? 'Start' : (status.key === 'paused' ? 'Resume' : 'Pause'),
           icon: needsResume ? 'play' : 'pause',
           iconColor: needsResume ? 'text-green-600 dark:text-green-400' : 'text-yellow-600 dark:text-yellow-400',
           onClick: () => {
             if (needsResume) {
-              onResume(item.hash, item.client || 'amule', item.name);
+              onResume(item.hash, item.client, item.name, item.instanceId);
             } else {
-              onPause(item.hash, item.client || 'amule', item.name);
+              onPause(item.hash, item.client, item.name, item.instanceId);
             }
             closeContextMenu?.();
           }
@@ -111,26 +119,26 @@ export const useItemContextMenu = ({
       }
     }
 
-    // Stop (BitTorrent clients only, when not already stopped/errored)
-    if (onStop && isTorrentClient && status.key !== 'stopped' && status.key !== 'error') {
-      items.push({
+    // Stop (BitTorrent clients only, when not already stopped/errored, gated on ownership)
+    if (onStop && isBittorrent && hasCap('pause_resume') && canMutate && status.key !== 'stopped' && status.key !== 'error') {
+      menuItems.push({
         label: 'Stop',
         icon: 'stop',
         iconColor: 'text-gray-600 dark:text-gray-400',
         onClick: () => {
-          onStop(item.hash, item.client, item.name);
+          onStop(item.hash, item.client, item.name, item.instanceId);
           closeContextMenu?.();
         }
       });
     }
 
-    // Export link
+    // Export link (read-only action, not gated on ownership)
     if (onCopyLink) {
-      const hasExportLink = isTorrentClient || !!item.ed2kLink || !!getExportLink(item);
+      const hasExportLink = isBittorrent || !!item.ed2kLink || !!getExportLink(item);
       const isCopied = copiedHash === item.hash;
       const linkLabel = getExportLinkLabel(item);
 
-      items.push({
+      menuItems.push({
         label: isCopied ? 'Copied!' : `Export ${linkLabel}`,
         icon: isCopied ? 'check' : 'share',
         iconColor: isCopied ? 'text-green-600 dark:text-green-400' : 'text-cyan-600 dark:text-cyan-400',
@@ -142,33 +150,37 @@ export const useItemContextMenu = ({
       });
     }
 
-    // Select (enter selection mode with this item)
-    if (onSelect) {
-      items.push({
+    // Select (enter selection mode with this item, gated on ownership)
+    if (onSelect && canMutate && (hasCap('pause_resume') || hasCap('remove_downloads') || hasCap('assign_categories'))) {
+      menuItems.push({
         label: 'Select',
         icon: 'checkSquare',
         iconColor: 'text-purple-600 dark:text-purple-400',
         onClick: () => {
-          onSelect(item.hash);
+          onSelect(itemKey(item.instanceId, item.hash));
           closeContextMenu?.();
         }
       });
     }
 
-    // Divider + Delete
-    items.push({ divider: true });
-    items.push({
-      label: deleteLabel,
-      icon: 'trash',
-      iconColor: 'text-red-600 dark:text-red-400',
-      onClick: () => {
-        onDelete(item);
-        closeContextMenu?.();
-      }
-    });
+    // Divider + Delete (gated at call site + ownership)
+    if (onDelete && canMutate) {
+      menuItems.push({ divider: true });
+      menuItems.push({
+        label: deleteLabel,
+        icon: 'trash',
+        iconColor: 'text-red-600 dark:text-red-400',
+        onClick: () => {
+          onDelete(item);
+          closeContextMenu?.();
+        }
+      });
+    }
 
-    return items;
+    return menuItems;
   }, [
+    getCapabilities,
+    hasCap,
     infoLabel,
     onShowInfo,
     canShowInfo,

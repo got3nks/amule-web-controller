@@ -29,6 +29,7 @@ const useWebSocketActions = () => {
     searchQuery,
     searchType,
     searchDownloadCategory,
+    searchInstanceId,
     clearSearchError,
     setSearchLocked,
     setSearchResults,
@@ -53,10 +54,10 @@ const useWebSocketActions = () => {
     });
   };
 
-  const handleUpdateCategory = (categoryId, title, path, comment, color, priority, pathMappings = null) => {
+  const handleUpdateCategory = (categoryName, title, path, comment, color, priority, pathMappings = null) => {
     sendMessage({
       action: 'updateCategory',
-      categoryId,
+      name: categoryName,
       title,
       path,
       comment,
@@ -66,28 +67,23 @@ const useWebSocketActions = () => {
     });
   };
 
-  const handleDeleteCategory = (categoryNameOrId) => {
-    // Support both name-based (unified) and ID-based (legacy) deletion
-    if (categoryNameOrId === 'Default' || categoryNameOrId === 0) {
+  const handleDeleteCategory = (categoryName) => {
+    if (!categoryName || categoryName === 'Default') {
       addAppError('Cannot delete default category');
       return;
     }
 
-    const isNumericId = typeof categoryNameOrId === 'number';
     sendMessage({
       action: 'deleteCategory',
-      ...(isNumericId ? { categoryId: categoryNameOrId } : { name: categoryNameOrId })
+      name: categoryName
     });
   };
 
-  const handleSetFileCategory = (fileHashOrHashes, categoryNameOrId, options = {}) => {
-    const fileHashes = Array.isArray(fileHashOrHashes) ? fileHashOrHashes : [fileHashOrHashes];
-    // Support both name-based (unified) and ID-based (legacy) assignment
-    const isNumericId = typeof categoryNameOrId === 'number';
+  const handleSetFileCategory = (items, categoryName, options = {}) => {
     sendMessage({
       action: 'batchSetFileCategory',
-      fileHashes,
-      ...(isNumericId ? { categoryId: categoryNameOrId } : { categoryName: categoryNameOrId }),
+      items,
+      categoryName,
       moveFiles: options.moveFiles || false
     });
   };
@@ -96,23 +92,25 @@ const useWebSocketActions = () => {
   // SERVER MANAGEMENT
   // ============================================================================
 
-  const handleServerAction = (ipPort, action) => {
+  const handleServerAction = (ipPort, action, instanceId) => {
     const [ip, port] = ipPort.split(':');
     sendMessage({
       action: 'serverDoAction',
       ip,
       port: parseInt(port),
-      serverAction: action
+      serverAction: action,
+      ...(instanceId && { instanceId })
     });
   };
 
-  const handleServerRemove = (ipPort) => {
+  const handleServerRemove = (ipPort, instanceId) => {
     const [ip, port] = ipPort.split(':');
     sendMessage({
       action: 'serverDoAction',
       ip,
       port: parseInt(port),
-      serverAction: 'remove'
+      serverAction: 'remove',
+      ...(instanceId && { instanceId })
     });
   };
 
@@ -161,14 +159,15 @@ const useWebSocketActions = () => {
       action: 'search',
       query: searchQuery,
       type: searchType,
-      extension: null
+      extension: null,
+      ...(searchInstanceId && { instanceId: searchInstanceId })
     });
   };
 
   const handleBatchDownload = (fileHashes, categoryName = null) => {
     const downloadCategory = categoryName !== null ? categoryName : searchDownloadCategory;
     // Send category name to backend - it will look up the aMule ID if needed
-    sendMessage({ action: 'batchDownloadSearchResults', fileHashes, categoryName: downloadCategory });
+    sendMessage({ action: 'batchDownloadSearchResults', fileHashes, categoryName: downloadCategory, ...(searchInstanceId && { instanceId: searchInstanceId }) });
     setDataDownloadedFiles(prev => {
       const next = new Set(prev);
       fileHashes.forEach(h => next.add(h));
@@ -176,7 +175,7 @@ const useWebSocketActions = () => {
     });
   };
 
-  const handleAddEd2kLinks = (input, categoryId = 0, isServerList = false) => {
+  const handleAddEd2kLinks = (input, categoryName = 'Default', isServerList = false, instanceId = null) => {
     const links = extractEd2kLinks(input);
 
     if (links.length === 0) {
@@ -186,18 +185,24 @@ const useWebSocketActions = () => {
 
     // Track whether this was a server list addition (for response handling)
     lastEd2kWasServerListRef.current = isServerList;
-    sendMessage({ action: "addEd2kLinks", links, categoryId });
+    const effectiveInstanceId = instanceId || searchInstanceId || null;
+    sendMessage({
+      action: "addEd2kLinks",
+      links,
+      categoryName,
+      ...(effectiveInstanceId && { instanceId: effectiveInstanceId })
+    });
   };
 
-  const handleAddMagnetLinks = (links, label = '', clientId = 'rtorrent') => {
+  const handleAddMagnetLinks = (links, label = '', instanceId = null, clientType = 'rtorrent') => {
     if (!links || links.length === 0) {
       addAppError('No magnet links provided');
       return;
     }
-    sendMessage({ action: "addMagnetLinks", links, label, clientId });
+    sendMessage({ action: "addMagnetLinks", links, label, clientId: clientType, ...(instanceId && { instanceId }) });
   };
 
-  const handleAddTorrentFile = async (file, label = '', clientId = 'rtorrent') => {
+  const handleAddTorrentFile = async (file, label = '', instanceId = null, clientType = 'rtorrent') => {
     if (!file) {
       addAppError('No torrent file provided');
       return;
@@ -213,7 +218,8 @@ const useWebSocketActions = () => {
           fileData: base64Data,
           fileName: file.name,
           label,
-          clientId
+          clientId: clientType,
+          ...(instanceId && { instanceId })
         });
       };
       reader.onerror = () => {
@@ -226,7 +232,7 @@ const useWebSocketActions = () => {
   };
 
   // Add Prowlarr torrent to BitTorrent client
-  const handleAddProwlarrTorrent = async (item, label = '', clientId = 'rtorrent') => {
+  const handleAddProwlarrTorrent = async (item, label = '', instanceId = null, clientType = 'rtorrent') => {
     try {
       const downloadUrl = item.magnetUrl || item.downloadUrl;
       if (!downloadUrl) {
@@ -241,18 +247,19 @@ const useWebSocketActions = () => {
           downloadUrl,
           title: item.fileName,
           label,
-          clientId
+          clientId: clientType,
+          ...(instanceId && { instanceId })
         })
       });
       const data = await response.json();
       if (!data.success) {
         addAppError(data.error || 'Failed to add torrent');
-        return false;
+        return null;
       }
-      return true;
+      return data.hash || true;
     } catch (err) {
       addAppError(`Failed to add torrent: ${err.message}`);
-      return false;
+      return null;
     }
   };
 
@@ -260,43 +267,31 @@ const useWebSocketActions = () => {
   // FILE OPERATIONS (unified single/batch - always use batch action)
   // ============================================================================
 
-  const handlePauseDownload = (fileHashOrHashes, clientTypeOrDownloads = 'amule', fileName = null) => {
-    const items = Array.isArray(fileHashOrHashes)
-      ? fileHashOrHashes.map(fileHash => {
-          const download = (clientTypeOrDownloads || []).find(d => d.hash === fileHash);
-          return { fileHash, clientType: download?.client || 'amule', fileName: download?.name };
-        })
-      : [{ fileHash: fileHashOrHashes, clientType: clientTypeOrDownloads, fileName }];
+  const handlePauseDownload = (itemsOrHash, clientType = 'amule', fileName = null, instanceId = null) => {
+    const items = Array.isArray(itemsOrHash)
+      ? itemsOrHash
+      : [{ fileHash: itemsOrHash, clientType, fileName, instanceId }];
     sendMessage({ action: 'batchPause', items });
   };
 
-  const handleResumeDownload = (fileHashOrHashes, clientTypeOrDownloads = 'amule', fileName = null) => {
-    const items = Array.isArray(fileHashOrHashes)
-      ? fileHashOrHashes.map(fileHash => {
-          const download = (clientTypeOrDownloads || []).find(d => d.hash === fileHash);
-          return { fileHash, clientType: download?.client || 'amule', fileName: download?.name };
-        })
-      : [{ fileHash: fileHashOrHashes, clientType: clientTypeOrDownloads, fileName }];
+  const handleResumeDownload = (itemsOrHash, clientType = 'amule', fileName = null, instanceId = null) => {
+    const items = Array.isArray(itemsOrHash)
+      ? itemsOrHash
+      : [{ fileHash: itemsOrHash, clientType, fileName, instanceId }];
     sendMessage({ action: 'batchResume', items });
   };
 
-  const handleStopDownload = (fileHashOrHashes, clientTypeOrDownloads = 'rtorrent', fileName = null) => {
-    const items = Array.isArray(fileHashOrHashes)
-      ? fileHashOrHashes.map(fileHash => {
-          const download = (clientTypeOrDownloads || []).find(d => d.hash === fileHash);
-          return { fileHash, clientType: download?.client || 'rtorrent', fileName: download?.name };
-        })
-      : [{ fileHash: fileHashOrHashes, clientType: clientTypeOrDownloads, fileName }];
+  const handleStopDownload = (itemsOrHash, clientType = 'rtorrent', fileName = null, instanceId = null) => {
+    const items = Array.isArray(itemsOrHash)
+      ? itemsOrHash
+      : [{ fileHash: itemsOrHash, clientType, fileName, instanceId }];
     sendMessage({ action: 'batchStop', items });
   };
 
-  const handleDeleteFile = (fileHashOrHashes, clientTypeOrDownloads = 'amule', deleteFiles = false, source = 'downloads', fileName = null) => {
-    const items = Array.isArray(fileHashOrHashes)
-      ? fileHashOrHashes.map(fileHash => {
-          const download = (clientTypeOrDownloads || []).find(d => d.hash === fileHash);
-          return { fileHash, clientType: download?.client || 'amule', fileName: download?.name };
-        })
-      : [{ fileHash: fileHashOrHashes, clientType: clientTypeOrDownloads, fileName }];
+  const handleDeleteFile = (itemsOrHash, clientType = 'amule', deleteFiles = false, source = 'downloads', fileName = null, instanceId = null) => {
+    const items = Array.isArray(itemsOrHash)
+      ? itemsOrHash
+      : [{ fileHash: itemsOrHash, clientType, fileName, instanceId }];
     sendMessage({ action: 'batchDelete', items, deleteFiles, source });
   };
 

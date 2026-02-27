@@ -36,7 +36,7 @@ export const WebSocketProvider = ({ children }) => {
   }, []);
 
   // Get auth state
-  const { authEnabled, isAuthenticated } = useAuth();
+  const { authEnabled, isAuthenticated, checkAuthStatus } = useAuth();
 
   // Get setters from other contexts
   const {
@@ -58,11 +58,12 @@ export const WebSocketProvider = ({ children }) => {
     setDataServers,
     setDataCategories,
     setClientDefaultPaths,
-    setClientsEnabled,
-    setClientsConnected,
+    setProwlarrEnabled,
     setKnownTrackers,
     setHistoryTrackUsername,
     setHasCategoryPathWarnings,
+    setInstances,
+    hasMultiInstance,
     setDataLogs,
     setDataServerInfo,
     setDataAppLogs,
@@ -71,7 +72,9 @@ export const WebSocketProvider = ({ children }) => {
     setDataServersEd2kLinks,
     markDataLoaded: markStaticDataLoaded,
     resetDataLoaded: resetStaticDataLoaded,
-    lastEd2kWasServerListRef
+    lastEd2kWasServerListRef,
+    setDataDownloadedFiles,
+    downloadedAliasRef
   } = useStaticData();
 
   const {
@@ -79,7 +82,8 @@ export const WebSocketProvider = ({ children }) => {
     setSearchPreviousResultsLoaded,
     setSearchLocked,
     setSearchResults,
-    setSearchNoResultsError
+    setSearchNoResultsError,
+    setSearchInstanceId
   } = useSearch();
 
   // Send message through WebSocket
@@ -106,7 +110,12 @@ export const WebSocketProvider = ({ children }) => {
 
       if (failures.length > 0) {
         const truncate = (s, max = 35) => s && s.length > max ? s.slice(0, max) + '…' : s;
-        const details = failures.map(f => f.fileName ? `• ${truncate(f.fileName)}: "${f.error || 'unknown error'}"` : `• ${f.error}`).filter(Boolean);
+        const details = failures.map(f => {
+          const instanceLabel = hasMultiInstance && f.instanceName ? ` (${f.instanceName})` : '';
+          return f.fileName
+            ? `• ${truncate(f.fileName)}${instanceLabel}: "${f.error || 'unknown error'}"`
+            : `• ${f.error}`;
+        }).filter(Boolean);
         const msg = details.length > 0
           ? `Failed ${failures.length} ${actionName} action(s) on:\n${details.join('\n')}`
           : `Failed ${failures.length} ${actionName} action(s)`;
@@ -121,7 +130,11 @@ export const WebSocketProvider = ({ children }) => {
                           actionName === 'download' ? 'Downloading' :
                           actionName === 'category change' ? 'Changed category for' :
                           actionName === 'label change' ? 'Changed label for' : 'Completed';
-        addAppSuccess(`${actionVerb} ${successes.length} file${successes.length > 1 ? 's' : ''}`);
+        const instanceIds = new Set(successes.map(r => r.instanceId).filter(Boolean));
+        const suffix = hasMultiInstance && instanceIds.size > 1
+          ? ` across ${instanceIds.size} instances`
+          : '';
+        addAppSuccess(`${actionVerb} ${successes.length} file${successes.length > 1 ? 's' : ''}${suffix}`);
       }
     };
 
@@ -135,29 +148,31 @@ export const WebSocketProvider = ({ children }) => {
         // React 18 batches these setState calls within the same event
         if (batch.stats !== undefined) {
           setDataStats(batch.stats);
-          // Update clientsEnabled separately (rarely changes, prevents unnecessary re-renders)
-          if (batch.stats.clientsEnabled) {
-            setClientsEnabled(prev => {
-              const newEnabled = batch.stats.clientsEnabled;
-              if (prev.amule === newEnabled.amule &&
-                  prev.rtorrent === newEnabled.rtorrent &&
-                  prev.qbittorrent === newEnabled.qbittorrent &&
-                  prev.prowlarr === newEnabled.prowlarr) {
-                return prev; // Keep same reference
-              }
-              return newEnabled;
+          // Update prowlarr enabled status (rarely changes)
+          if (batch.stats.prowlarrEnabled !== undefined) {
+            setProwlarrEnabled(prev => {
+              const next = batch.stats.prowlarrEnabled === true;
+              return prev === next ? prev : next;
             });
           }
-          // Update clientsConnected separately (connection status, changes less frequently than stats)
-          if (batch.stats.clients) {
-            setClientsConnected(prev => {
-              const newConnected = batch.stats.clients;
-              if (prev.amule === newConnected.amule &&
-                  prev.rtorrent === newConnected.rtorrent &&
-                  prev.qbittorrent === newConnected.qbittorrent) {
+          // Update per-instance metadata (includes networkStatus)
+          if (batch.stats.instances) {
+            setInstances(prev => {
+              const next = batch.stats.instances;
+              const prevKeys = Object.keys(prev);
+              const nextKeys = Object.keys(next);
+              if (prevKeys.length === nextKeys.length &&
+                  nextKeys.every(k => prev[k]?.order === next[k]?.order &&
+                                      prev[k]?.connected === next[k]?.connected &&
+                                      prev[k]?.name === next[k]?.name &&
+                                      prev[k]?.color === next[k]?.color &&
+                                      prev[k]?.networkType === next[k]?.networkType &&
+                                      prev[k]?.error === next[k]?.error &&
+                                      prev[k]?.errorTime === next[k]?.errorTime &&
+                                      JSON.stringify(prev[k]?.networkStatus) === JSON.stringify(next[k]?.networkStatus))) {
                 return prev; // Keep same reference
               }
-              return newConnected;
+              return next;
             });
           }
           // Update historyTrackUsername if present in stats
@@ -183,10 +198,12 @@ export const WebSocketProvider = ({ children }) => {
           markStaticDataLoaded('categories');
         }
         if (batch.clientDefaultPaths !== undefined) {
-          // Only update if paths actually changed
+          // Only update if paths actually changed (generic shallow equality for per-instance keys)
           setClientDefaultPaths(prev => {
             const newPaths = batch.clientDefaultPaths || {};
-            if (prev.amule === newPaths.amule && prev.rtorrent === newPaths.rtorrent && prev.qbittorrent === newPaths.qbittorrent) {
+            const prevKeys = Object.keys(prev);
+            const nextKeys = Object.keys(newPaths);
+            if (prevKeys.length === nextKeys.length && prevKeys.every(k => prev[k] === newPaths[k])) {
               return prev; // Keep same reference
             }
             return newPaths;
@@ -228,9 +245,11 @@ export const WebSocketProvider = ({ children }) => {
       'previous-search-results': () => {
         setSearchPreviousResults(data.data || []);
         setSearchPreviousResultsLoaded(true);
+        if (data.instanceId) setSearchInstanceId(data.instanceId);
       },
       'search-lock': () => setSearchLocked(data.locked),
       'search-results': () => {
+        if (data.instanceId) setSearchInstanceId(data.instanceId);
         if (!data.data || data.data.length === 0) {
           setSearchNoResultsError();
         } else {
@@ -245,7 +264,28 @@ export const WebSocketProvider = ({ children }) => {
       'batch-pause-complete': () => handleBatchComplete('pause'),
       'batch-resume-complete': () => handleBatchComplete('resume'),
       'batch-stop-complete': () => handleBatchComplete('stop'),
-      'batch-delete-complete': () => handleBatchComplete('delete'),
+      'batch-delete-complete': () => {
+        handleBatchComplete('delete');
+        // Remove successfully deleted hashes from downloaded files set
+        // so search results can be re-downloaded
+        const deleted = (data.results || []).filter(r => r.success).map(r => r.fileHash);
+        if (deleted.length > 0) {
+          setDataDownloadedFiles(prev => {
+            const next = new Set(prev);
+            const aliases = downloadedAliasRef.current;
+            deleted.forEach(h => {
+              next.delete(h);
+              // Also remove aliased key (e.g. Prowlarr GUID mapped from real hash)
+              const alias = aliases.get(h);
+              if (alias) {
+                next.delete(alias);
+                aliases.delete(h);
+              }
+            });
+            return next;
+          });
+        }
+      },
       'batch-category-changed': () => handleBatchComplete('category change'),
       'batch-label-changed': () => handleBatchComplete('label change'),
       'servers-update': () => {
@@ -253,9 +293,9 @@ export const WebSocketProvider = ({ children }) => {
         markStaticDataLoaded('servers');
       },
       'server-action': () => {
-        // Refresh servers list after server action
+        // Refresh servers list after server action (same instance)
         resetStaticDataLoaded('servers');
-        sendMessage({ action: 'getServersList' });
+        sendMessage({ action: 'getServersList', ...(data.instanceId && { instanceId: data.instanceId }) });
       },
       'log-update': () => {
         setDataLogs(data.data?.EC_TAG_STRING || '');
@@ -279,10 +319,12 @@ export const WebSocketProvider = ({ children }) => {
       'categories-update': () => {
         setDataCategories(data.data || []);
         if (data.clientDefaultPaths) {
-          // Only update if paths actually changed
+          // Only update if paths actually changed (generic shallow equality for per-instance keys)
           setClientDefaultPaths(prev => {
             const newPaths = data.clientDefaultPaths;
-            if (prev.amule === newPaths.amule && prev.rtorrent === newPaths.rtorrent && prev.qbittorrent === newPaths.qbittorrent) {
+            const prevKeys = Object.keys(prev);
+            const nextKeys = Object.keys(newPaths);
+            if (prevKeys.length === nextKeys.length && prevKeys.every(k => prev[k] === newPaths[k])) {
               return prev;
             }
             return newPaths;
@@ -366,12 +408,13 @@ export const WebSocketProvider = ({ children }) => {
     setDataStats, setDataItems,
     markLiveDataLoaded,
     // Static data setters
-    setDataServers, setDataCategories, setClientDefaultPaths, setClientsEnabled, setClientsConnected,
-    setKnownTrackers, setHistoryTrackUsername, setDataLogs, setDataServerInfo, setDataQbittorrentLogs,
+    setDataServers, setDataCategories, setClientDefaultPaths, setProwlarrEnabled,
+    setKnownTrackers, setHistoryTrackUsername, setInstances, setDataLogs, setDataServerInfo, setDataQbittorrentLogs,
     setDataStatsTree, setDataServersEd2kLinks,
     markStaticDataLoaded, resetStaticDataLoaded,
     // Search setters
-    setSearchPreviousResults, setSearchPreviousResultsLoaded, setSearchLocked, setSearchResults, setSearchNoResultsError
+    setSearchPreviousResults, setSearchPreviousResultsLoaded, setSearchLocked, setSearchResults, setSearchNoResultsError, setSearchInstanceId,
+    hasMultiInstance
   ]); // lastEd2kWasServerListRef accessed via ref, no dep needed
 
   // Keep ref updated with latest handler (avoids stale closures in WebSocket)
@@ -392,9 +435,16 @@ export const WebSocketProvider = ({ children }) => {
         setWsConnected(true);
       };
 
-      wsRef.current.onclose = () => {
-        console.log('WebSocket disconnected');
+      wsRef.current.onclose = (event) => {
+        console.log('WebSocket disconnected, code:', event.code);
         setWsConnected(false);
+
+        // 4001 = session invalidated by server (capability change, password change, user disabled/deleted)
+        if (event.code === 4001) {
+          console.log('Session invalidated, refreshing auth status...');
+          checkAuthStatus();
+          return;
+        }
 
         // Attempt to reconnect after 2 seconds
         reconnectTimeoutRef.current = setTimeout(() => {

@@ -56,8 +56,9 @@ export const useViewFilters = ({
     filterCategoryId,
     hasBittorrent,
     hasAmule,
-    isAmuleEnabled,
-    isBittorrentEnabled
+    isEd2kEnabled,
+    isBittorrentEnabled,
+    disabledInstances
   } = useClientFilteredData({ data });
 
   // 2. Tracker filter
@@ -90,6 +91,7 @@ export const useViewFilters = ({
     isShownFullySelected: _isShownFullySelected,
     getSelectedHashes: _getSelectedHashes,
     frozenSortOrder: _frozenSortOrder,
+    getItemKey: _getItemKey,
     sortedDataRef: _sortedDataRef
   } = selectionResult;
 
@@ -157,14 +159,15 @@ export const useViewFilters = ({
     filterField,
     secondarySort,
     frozenOrder: frozenSortOrder || contextMenuFrozenOrder,
-    hashKey: rowKeyField
+    hashKey: rowKeyField,
+    getItemKey: disableSelection ? null : _getItemKey
   });
 
   // 10. Update sorted data ref for frozen sort order capture
   sortedDataRef.current = sortedData;
 
   // 11. Reset loaded items when client filter changes (header ED2K/BT toggles)
-  useClientFilterPageReset(resetLoaded, isAmuleEnabled, isBittorrentEnabled);
+  useClientFilterPageReset(resetLoaded, isEd2kEnabled, isBittorrentEnabled, disabledInstances);
 
   // 12. Reset loaded items when status filter changes (only if status filter is enabled)
   useEffect(() => {
@@ -188,7 +191,7 @@ export const useViewFilters = ({
     filterCategoryId,
     hasBittorrent,
     hasAmule,
-    isAmuleEnabled,
+    isEd2kEnabled,
     isBittorrentEnabled,
 
     // Tracker filter

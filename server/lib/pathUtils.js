@@ -7,6 +7,7 @@ const fs = require('fs').promises;
 const fsSync = require('fs');
 const path = require('path');
 const logger = require('./logger');
+const clientMeta = require('./clientMeta');
 
 // Lazy-loaded to avoid circular dependency (CategoryManager -> configTester -> pathUtils)
 let categoryManager = null;
@@ -195,8 +196,8 @@ function resolveItemPath(item) {
     return null;
   }
 
-  const clientType = item.client || 'amule';
-  const isAmuleShared = clientType === 'amule' && item.shared && !item.downloading;
+  const clientType = item.client;
+  const isAmuleShared = clientMeta.hasCapability(clientType, 'sharedFiles') && item.shared && !item.downloading;
 
   // Get base directory - aMule shared files use filePath, others use directory
   const baseDir = isAmuleShared ? item.filePath : item.directory;
@@ -208,11 +209,11 @@ function resolveItemPath(item) {
 
   // For single files, join with filename
   // aMule is always single file, rTorrent/qBittorrent depend on multiFile flag
-  const isMultiFile = (clientType === 'rtorrent' || clientType === 'qbittorrent') && item.multiFile;
+  const isMultiFile = clientMeta.hasCapability(clientType, 'multiFile') && item.multiFile;
   const remotePath = isMultiFile ? baseDir : path.join(baseDir, item.name);
 
-  // Translate path using category mappings
-  const localPath = getCategoryManager().translatePath(remotePath, clientType);
+  // Translate path using category mappings (per-instance when available)
+  const localPath = getCategoryManager().translatePath(remotePath, clientType, item.instanceId);
 
   logger.log(`[📦 resolveItemPath] ${clientType} "${item.name}" -> local: ${localPath}, remote: ${remotePath}`);
 
@@ -230,32 +231,34 @@ function resolveItemPath(item) {
  * Handles path mappings, Default category fallback, and client defaults
  * @param {Object} category - Target category object
  * @param {string} clientType - Client type ('amule', 'rtorrent', or 'qbittorrent')
+ * @param {string} instanceId - Instance ID for per-instance path mapping lookup
  * @returns {Object} Destination paths
  * @returns {string|null} .localPath - Local path (what app sees)
  * @returns {string|null} .remotePath - Remote path (what client sees)
  */
-function resolveCategoryDestPaths(category, clientType) {
+function resolveCategoryDestPaths(category, clientType, instanceId) {
   const categoryName = category?.name || category?.title || 'unknown';
+  const cm = getCategoryManager();
 
-  // In Docker: pathMappings[clientType] = local path (app sees), path = remote path (client sees)
+  // In Docker: pathMappings[instanceId|clientType] = local path (app sees), path = remote path (client sees)
   // Native: no pathMappings, path is used by both app and client
   // If category has no path, clients use Default category's path
-  let localPath = category?.pathMappings?.[clientType] || category?.path || null;
+  // Try instanceId key first, then clientType key for pathMappings
+  let localPath = (instanceId && category?.pathMappings?.[instanceId]) || category?.pathMappings?.[clientType] || category?.path || null;
   let remotePath = category?.path || null;
   let usedFallback = false;
 
   // Fall back to Default category for missing paths (check each independently)
   if (!localPath || !remotePath) {
-    const defaultCat = getCategoryManager().getByName('Default');
-    const clientDefaults = getCategoryManager().getClientDefaultPaths();
+    const defaultCat = cm.getByName('Default');
     if (defaultCat) {
       if (!localPath) {
-        localPath = defaultCat.pathMappings?.[clientType] || clientDefaults?.[clientType] || null;
+        localPath = (instanceId && defaultCat.pathMappings?.[instanceId]) || defaultCat.pathMappings?.[clientType] || cm.getClientDefaultPath(instanceId) || null;
         usedFallback = true;
       }
       if (!remotePath) {
         // Default category's path is null - use client's reported default directory
-        remotePath = defaultCat.path || clientDefaults?.[clientType] || null;
+        remotePath = defaultCat.path || cm.getClientDefaultPath(instanceId) || null;
         usedFallback = true;
       }
     }
@@ -263,7 +266,7 @@ function resolveCategoryDestPaths(category, clientType) {
   // Final fallback if remote path is still missing (native setup without Default)
   remotePath = remotePath || localPath;
 
-  logger.log(`[📦 resolveCategoryDestPaths]: category "${categoryName}" (${clientType})${usedFallback ? ' [fallback]' : ''} -> local: ${localPath}, remote: ${remotePath}`);
+  logger.log(`[📦 resolveCategoryDestPaths]: category "${categoryName}" (${clientType}/${instanceId})${usedFallback ? ' [fallback]' : ''} -> local: ${localPath}, remote: ${remotePath}`);
 
   return { localPath, remotePath };
 }

@@ -9,9 +9,8 @@ const QBittorrentHandler = require('../lib/qbittorrent/QBittorrentHandler');
 const config = require('./config');
 const { parseBasicAuth, verifyPassword } = require('../lib/authUtils');
 
-// Singleton managers - imported directly instead of injected
-const amuleManager = require('./amuleManager');
-const qbittorrentManager = require('./qbittorrentManager');
+// Client registry - replaces direct singleton manager imports
+const registry = require('../lib/ClientRegistry');
 
 class QBittorrentAPI extends BaseModule {
   constructor() {
@@ -21,42 +20,56 @@ class QBittorrentAPI extends BaseModule {
   }
 
   /**
-   * Middleware to check HTTP Basic Authentication for qBittorrent API
+   * Middleware to check HTTP Basic Authentication for qBittorrent API (admin-only)
+   * Supports: username+password via Basic Auth, or API key as password.
    */
   async checkBasicAuth(req, res, next) {
-    const authEnabled = config.getAuthEnabled();
-
-    if (!authEnabled) {
-      return next();
-    }
+    if (!config.getAuthEnabled()) return next();
 
     const credentials = parseBasicAuth(req.headers.authorization);
-
     if (!credentials) {
       res.setHeader('WWW-Authenticate', 'Basic realm="qBittorrent"');
       return res.status(401).send('Unauthorized: Authentication required');
     }
 
+    if (!credentials.password) {
+      res.setHeader('WWW-Authenticate', 'Basic realm="qBittorrent"');
+      return res.status(401).send('Unauthorized: Password required');
+    }
+
     try {
-      if (!credentials.password) {
-        res.setHeader('WWW-Authenticate', 'Basic realm="qBittorrent"');
-        return res.status(401).send('Unauthorized: Password required');
+      if (!this.userManager) {
+        return res.status(500).send('User management not available');
       }
 
-      const hashedPassword = config.getAuthPassword();
+      // Try username + password login
+      if (credentials.username) {
+        const user = this.userManager.getUserByUsername(credentials.username);
+        if (user && !user.disabled && user.password_hash) {
+          const isValid = await verifyPassword(credentials.password, user.password_hash);
+          if (isValid) {
+            if (!user.is_admin) {
+              return res.status(403).send('Forbidden: Admin access required');
+            }
+            req.apiUser = user;
+            return next();
+          }
+        }
+      }
 
-      if (!hashedPassword) {
+      // Try API key as password
+      const user = this.userManager.getUserByApiKey(credentials.password);
+      if (user && !user.disabled && user.is_admin) {
+        if (credentials.username && user.username !== credentials.username) {
+          res.setHeader('WWW-Authenticate', 'Basic realm="qBittorrent"');
+          return res.status(401).send('Unauthorized: Invalid credentials');
+        }
+        req.apiUser = user;
         return next();
       }
 
-      const isValid = await verifyPassword(credentials.password, hashedPassword);
-
-      if (isValid) {
-        next();
-      } else {
-        res.setHeader('WWW-Authenticate', 'Basic realm="qBittorrent"');
-        res.status(401).send('Unauthorized: Invalid credentials');
-      }
+      res.setHeader('WWW-Authenticate', 'Basic realm="qBittorrent"');
+      res.status(401).send('Unauthorized: Invalid credentials');
     } catch (err) {
       this.log('qBittorrent Basic Auth error:', err);
       res.status(500).send('Internal server error');
@@ -71,16 +84,39 @@ class QBittorrentAPI extends BaseModule {
     this.updateHandler();
   }
 
+  setUserManager(userManager) {
+    super.setUserManager(userManager);
+    this.updateHandler();
+  }
+
   /**
    * Update handler when all dependencies are available
    */
   updateHandler() {
-    if (amuleManager && this.hashStore) {
+    if (this.hashStore) {
+      const resolveAmuleManager = () => {
+        const configuredId = config.getConfig()?.integrations?.amuleInstanceId;
+        let amuleMgr;
+        if (configuredId) {
+          amuleMgr = registry.get(configuredId);
+          if (!amuleMgr) {
+            amuleMgr = registry.getByType('amule').find(m => m.isConnected());
+            if (amuleMgr) this.log(`⚠️ [QBittorrentAPI.getAmuleClient] Configured amuleInstanceId "${configuredId}" not found, falling back to "${amuleMgr.instanceId}"`);
+          }
+        } else {
+          amuleMgr = registry.getByType('amule').find(m => m.isConnected());
+        }
+        return amuleMgr;
+      };
+
       this.handler.setDependencies({
-        getAmuleClient: () => amuleManager.getClient(),
+        getAmuleClient: () => resolveAmuleManager()?.getClient() || null,
+        getAmuleInstanceId: () => resolveAmuleManager()?.instanceId || null,
         hashStore: this.hashStore,
         config: config,
-        isFirstRun: () => config.isFirstRun()
+        registry: registry,
+        isFirstRun: () => config.isFirstRun(),
+        userManager: this.userManager
       });
     }
   }
@@ -119,21 +155,25 @@ class QBittorrentAPI extends BaseModule {
     app.get('/api/qbittorrent/files/:hash', async (req, res) => {
       try {
         const { hash } = req.params;
+        const { instanceId } = req.query;
 
-        if (!qbittorrentManager || !qbittorrentManager.isConnected()) {
+        const qbMgr = registry.get(instanceId);
+        if (!qbMgr) {
           return res.status(503).json({ error: 'qBittorrent not connected' });
         }
 
-        const files = await qbittorrentManager.getFiles(hash);
+        const files = await qbMgr.getFiles(hash);
 
         // Normalize to same format as rtorrent files API
+        // qBit priority: 0=Do not download, 1=Normal, 6=High, 7=Max
+        // Normalized:    0=Off,              1=Normal, 2=High
         const normalizedFiles = files.map((file, index) => ({
           index,
           path: file.name,
           size: file.size,
           sizeBytes: file.size,
           downloaded: Math.round(file.size * (file.progress || 0)),
-          priority: file.priority,
+          priority: file.priority === 0 ? 0 : file.priority >= 6 ? 2 : 1,
           progress: Math.round((file.progress || 0) * 100)
         }));
 

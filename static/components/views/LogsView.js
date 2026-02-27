@@ -1,8 +1,9 @@
 /**
  * LogsView Component
  *
- * Displays application logs and server information
- * Uses contexts directly for all data and actions
+ * Displays application logs and client-specific logs.
+ * Client log sections are generated dynamically from the `logs` capability.
+ * To add log support for a new client type, add an entry to CLIENT_LOG_SECTIONS.
  */
 
 import React from 'https://esm.sh/react@18.2.0';
@@ -12,190 +13,163 @@ import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useDataFetch } from '../../contexts/DataFetchContext.js';
 import { useFontSize } from '../../contexts/FontSizeContext.js';
 
-const { createElement: h, useRef, useEffect, useCallback } = React;
+const { createElement: h, useRef, useEffect, useCallback, useState, useMemo } = React;
 
 /**
- * Logs view component - now uses contexts directly
+ * Client log section configs keyed by client type.
+ * Each type can define multiple sections (e.g. aMule has logs + server info).
+ * Only types with connected instances having the `logs` capability are shown.
+ */
+const CLIENT_LOG_SECTIONS = {
+  qbittorrent: [
+    { key: 'qbittorrentLogs', title: 'qBittorrent Logs', dataKey: 'dataQbittorrentLogs', loadedKey: 'qbittorrentLogs', fetchKey: 'fetchQbittorrentLogs' }
+  ],
+  amule: [
+    { key: 'logs', title: 'aMule Logs', dataKey: 'dataLogs', loadedKey: 'logs', fetchKey: 'fetchLogs' },
+    { key: 'serverInfo', title: 'ED2K Server Info', dataKey: 'dataServerInfo', loadedKey: 'serverInfo', fetchKey: 'fetchServerInfo' }
+  ]
+};
+
+/**
+ * Reusable log section with auto-scroll behavior.
+ * Manages its own scroll ref and tracks whether the user has scrolled away from bottom.
+ */
+const LogSection = ({ title, data, loaded, maxHeightClass, instances, hasMulti, selectedInstance, onInstanceChange, fontSize }) => {
+  const ref = useRef(null);
+  const userScrolledAway = useRef(false);
+
+  const handleScroll = useCallback(() => {
+    if (!ref.current) return;
+    const el = ref.current;
+    userScrolledAway.current = el.scrollHeight - el.scrollTop - el.clientHeight > 30;
+  }, []);
+
+  // Auto-scroll to bottom when new data arrives, unless user scrolled away
+  useEffect(() => {
+    if (ref.current && loaded && !userScrolledAway.current) {
+      const timeoutId = setTimeout(() => {
+        if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+      }, 50);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [data, loaded, fontSize]);
+
+  return h('div', { className: 'bg-gray-50 dark:bg-gray-700 rounded-lg p-3' },
+    h('h3', { className: 'text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2 flex items-center gap-2' },
+      title,
+      hasMulti && h('select', {
+        value: selectedInstance || '',
+        onChange: (e) => onInstanceChange(e.target.value),
+        className: 'text-xs bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded px-1.5 py-0.5 font-normal'
+      }, instances.map(inst => h('option', { key: inst.id, value: inst.id }, inst.name)))
+    ),
+    h('div', {
+      ref,
+      onScroll: handleScroll,
+      className: `bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-600 p-3 ${maxHeightClass} overflow-y-auto log-text`
+    },
+      (!loaded && !data)
+        ? h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, `Loading ${title.toLowerCase()}...`)
+        : (data || h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, `No ${title.toLowerCase()} available`))
+    )
+  );
+};
+
+/**
+ * Logs view component
  */
 const LogsView = () => {
-  // Get data from contexts
-  const { dataLogs, dataServerInfo, dataAppLogs, dataQbittorrentLogs, dataLoaded, clientsEnabled } = useStaticData();
+  const { dataLogs, dataServerInfo, dataAppLogs, dataQbittorrentLogs, dataLoaded, instances } = useStaticData();
   const { fetchLogs, fetchServerInfo, fetchAppLogs, fetchQbittorrentLogs } = useDataFetch();
   const { fontSize } = useFontSize();
-  const amuleEnabled = clientsEnabled?.amule !== false;
-  const qbittorrentEnabled = clientsEnabled?.qbittorrent === true;
 
-  // Whether any client-specific logs section is shown
-  const hasClientLogs = amuleEnabled || qbittorrentEnabled;
+  // Lookup tables for dynamic access by config keys
+  const dataByKey = { dataLogs, dataServerInfo, dataQbittorrentLogs };
+  const fetchByKey = useMemo(
+    () => ({ fetchLogs, fetchServerInfo, fetchQbittorrentLogs }),
+    [fetchLogs, fetchServerInfo, fetchQbittorrentLogs]
+  );
 
-  // Refs for auto-scrolling
-  const logsRef = useRef(null);
-  const serverInfoRef = useRef(null);
-  const appLogsRef = useRef(null);
-  const qbittorrentLogsRef = useRef(null);
-
-  // Track whether user has scrolled away from bottom (per section)
-  const userScrolledAwayLogs = useRef(false);
-  const userScrolledAwayServerInfo = useRef(false);
-  const userScrolledAwayAppLogs = useRef(false);
-  const userScrolledAwayQbittorrentLogs = useRef(false);
-
-  // Scroll handlers — update "scrolled away" state per section
-  const handleLogsScroll = useCallback(() => {
-    if (!logsRef.current) return;
-    const el = logsRef.current;
-    userScrolledAwayLogs.current = el.scrollHeight - el.scrollTop - el.clientHeight > 30;
-  }, []);
-  const handleServerInfoScroll = useCallback(() => {
-    if (!serverInfoRef.current) return;
-    const el = serverInfoRef.current;
-    userScrolledAwayServerInfo.current = el.scrollHeight - el.scrollTop - el.clientHeight > 30;
-  }, []);
-  const handleAppLogsScroll = useCallback(() => {
-    if (!appLogsRef.current) return;
-    const el = appLogsRef.current;
-    userScrolledAwayAppLogs.current = el.scrollHeight - el.scrollTop - el.clientHeight > 30;
-  }, []);
-  const handleQbittorrentLogsScroll = useCallback(() => {
-    if (!qbittorrentLogsRef.current) return;
-    const el = qbittorrentLogsRef.current;
-    userScrolledAwayQbittorrentLogs.current = el.scrollHeight - el.scrollTop - el.clientHeight > 30;
-  }, []);
-
-  // Aliases for readability
-  const logs = dataLogs;
-  const serverInfo = dataServerInfo;
-  const appLogs = dataAppLogs;
-  const qbittorrentLogs = dataQbittorrentLogs;
-
-  // Fetch logs and server info on mount with auto-refresh
-  useEffect(() => {
-    if (amuleEnabled) {
-      fetchLogs();
-      fetchServerInfo();
+  // Group connected log-capable instances by type (capability-driven)
+  const logInstanceGroups = useMemo(() => {
+    const groups = {};
+    for (const [id, inst] of Object.entries(instances)) {
+      if (!inst.connected || !inst.capabilities?.logs) continue;
+      if (!groups[inst.type]) groups[inst.type] = [];
+      groups[inst.type].push({ id, name: inst.name });
     }
-    if (qbittorrentEnabled) {
-      fetchQbittorrentLogs();
-    }
-    fetchAppLogs();
+    return groups;
+  }, [instances]);
 
-    const intervalId = setInterval(() => {
-      if (amuleEnabled) {
-        fetchLogs();
-        fetchServerInfo();
+  const hasClientLogs = Object.keys(logInstanceGroups).length > 0;
+
+  // Per-type selected instance state
+  const [selectedInstances, setSelectedInstances] = useState({});
+  const setSelectedInstance = useCallback((type, id) => {
+    setSelectedInstances(prev => ({ ...prev, [type]: id }));
+  }, []);
+
+  // Compute effective instance per type (validates selection, falls back to first)
+  const getEffectiveInstance = useCallback((type) => {
+    const insts = logInstanceGroups[type] || [];
+    const selected = selectedInstances[type];
+    return (selected && insts.some(i => i.id === selected)) ? selected : insts[0]?.id || null;
+  }, [logInstanceGroups, selectedInstances]);
+
+  // Build active client sections from config + capabilities
+  const activeSections = useMemo(() => {
+    const sections = [];
+    for (const [type, configs] of Object.entries(CLIENT_LOG_SECTIONS)) {
+      const insts = logInstanceGroups[type];
+      if (!insts?.length) continue;
+      for (const config of configs) {
+        sections.push({ ...config, type, instances: insts, hasMulti: insts.length > 1 });
       }
-      if (qbittorrentEnabled) {
-        fetchQbittorrentLogs();
+    }
+    return sections;
+  }, [logInstanceGroups]);
+
+  // Fetch all logs on mount and auto-refresh
+  // Re-runs when active sections or selected instances change
+  useEffect(() => {
+    const doFetch = () => {
+      for (const section of activeSections) {
+        const instanceId = getEffectiveInstance(section.type);
+        fetchByKey[section.fetchKey]?.(instanceId);
       }
       fetchAppLogs();
-    }, LOGS_REFRESH_INTERVAL);
-
+    };
+    doFetch();
+    const intervalId = setInterval(doFetch, LOGS_REFRESH_INTERVAL);
     return () => clearInterval(intervalId);
-  }, [fetchLogs, fetchServerInfo, fetchAppLogs, fetchQbittorrentLogs, amuleEnabled, qbittorrentEnabled]);
-
-  // Auto-scroll to bottom when new logs arrive, loading completes, or font size changes
-  // Only auto-scroll if user hasn't scrolled away from bottom
-  useEffect(() => {
-    if (logsRef.current && dataLoaded.logs && !userScrolledAwayLogs.current) {
-      const timeoutId = setTimeout(() => {
-        if (logsRef.current) {
-          logsRef.current.scrollTop = logsRef.current.scrollHeight;
-        }
-      }, 50);
-      return () => clearTimeout(timeoutId);
-    }
-  }, [logs, dataLoaded.logs, fontSize]);
-
-  useEffect(() => {
-    if (serverInfoRef.current && dataLoaded.serverInfo && !userScrolledAwayServerInfo.current) {
-      const timeoutId = setTimeout(() => {
-        if (serverInfoRef.current) {
-          serverInfoRef.current.scrollTop = serverInfoRef.current.scrollHeight;
-        }
-      }, 50);
-      return () => clearTimeout(timeoutId);
-    }
-  }, [serverInfo, dataLoaded.serverInfo, fontSize]);
-
-  useEffect(() => {
-    if (appLogsRef.current && dataLoaded.appLogs && !userScrolledAwayAppLogs.current) {
-      const timeoutId = setTimeout(() => {
-        if (appLogsRef.current) {
-          appLogsRef.current.scrollTop = appLogsRef.current.scrollHeight;
-        }
-      }, 50);
-      return () => clearTimeout(timeoutId);
-    }
-  }, [appLogs, dataLoaded.appLogs, fontSize]);
-
-  useEffect(() => {
-    if (qbittorrentLogsRef.current && dataLoaded.qbittorrentLogs && !userScrolledAwayQbittorrentLogs.current) {
-      const timeoutId = setTimeout(() => {
-        if (qbittorrentLogsRef.current) {
-          qbittorrentLogsRef.current.scrollTop = qbittorrentLogsRef.current.scrollHeight;
-        }
-      }, 50);
-      return () => clearTimeout(timeoutId);
-    }
-  }, [qbittorrentLogs, dataLoaded.qbittorrentLogs, fontSize]);
+  }, [activeSections, getEffectiveInstance, fetchByKey, fetchAppLogs]);
 
   return h('div', { className: 'space-y-2 sm:space-y-3 px-2 sm:px-0' },
-    // App Logs Section (aMule Controller logs)
-    h('div', { className: 'bg-gray-50 dark:bg-gray-700 rounded-lg p-3' },
-      h('h3', { className: 'text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2' }, 'App Logs'),
-      h('div', {
-        ref: appLogsRef,
-        onScroll: handleAppLogsScroll,
-        className: `bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-600 p-3 ${hasClientLogs ? 'max-h-48 sm:max-h-96' : 'max-h-[calc(100vh-16rem)]'} overflow-y-auto log-text`
-      },
-        (!dataLoaded.appLogs && !appLogs)
-          ? h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'Loading app logs...')
-          : (appLogs || h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'No app logs available'))
-      )
-    ),
+    // App Logs (always shown, expands when no client logs exist)
+    h(LogSection, {
+      title: 'App Logs',
+      data: dataAppLogs,
+      loaded: dataLoaded.appLogs,
+      maxHeightClass: hasClientLogs ? 'max-h-48 sm:max-h-96' : 'max-h-[calc(100vh-16rem)]',
+      instances: [],
+      hasMulti: false,
+      fontSize
+    }),
 
-    // qBittorrent Logs Section (only when qBittorrent is enabled)
-    qbittorrentEnabled && h('div', { className: 'bg-gray-50 dark:bg-gray-700 rounded-lg p-3' },
-      h('h3', { className: 'text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2' }, 'qBittorrent Logs'),
-      h('div', {
-        ref: qbittorrentLogsRef,
-        onScroll: handleQbittorrentLogsScroll,
-        className: 'bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-600 p-3 max-h-48 overflow-y-auto log-text'
-      },
-        (!dataLoaded.qbittorrentLogs && !qbittorrentLogs)
-          ? h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'Loading qBittorrent logs...')
-          : (qbittorrentLogs || h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'No qBittorrent logs available'))
-      )
-    ),
-
-    // aMule Logs Section (only when aMule is enabled)
-    amuleEnabled && h('div', { className: 'bg-gray-50 dark:bg-gray-700 rounded-lg p-3' },
-      h('h3', { className: 'text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2' }, 'aMule Logs'),
-      h('div', {
-        ref: logsRef,
-        onScroll: handleLogsScroll,
-        className: 'bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-600 p-3 max-h-48 overflow-y-auto log-text'
-      },
-        // Only show loading on first load; once we have logs, keep showing them during refresh
-        (!dataLoaded.logs && !logs)
-          ? h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'Loading aMule logs...')
-          : (logs || h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'No aMule logs available'))
-      )
-    ),
-
-    // ED2K Server Logs Section (only when aMule is enabled)
-    amuleEnabled && h('div', { className: 'bg-gray-50 dark:bg-gray-700 rounded-lg p-3' },
-      h('h3', { className: 'text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2' }, 'ED2K Server Info'),
-      h('div', {
-        ref: serverInfoRef,
-        onScroll: handleServerInfoScroll,
-        className: 'bg-white dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-600 p-3 max-h-48 overflow-y-auto log-text'
-      },
-        // Only show loading on first load; once we have server info, keep showing it during refresh
-        (!dataLoaded.serverInfo && !serverInfo)
-          ? h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'Loading server logs...')
-          : (serverInfo || h('span', { className: 'text-gray-400 dark:text-gray-500 italic' }, 'No server logs available'))
-      )
+    // Client log sections (dynamic, capability-driven)
+    ...activeSections.map(section =>
+      h(LogSection, {
+        key: section.key,
+        title: section.title,
+        data: dataByKey[section.dataKey],
+        loaded: dataLoaded[section.loadedKey],
+        maxHeightClass: 'max-h-48',
+        instances: section.instances,
+        hasMulti: section.hasMulti,
+        selectedInstance: getEffectiveInstance(section.type),
+        onInstanceChange: (id) => setSelectedInstance(section.type, id),
+        fontSize
+      })
     )
   );
 };

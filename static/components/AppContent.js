@@ -16,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext.js';
 
 // Other hooks
 import { useResponsiveLayout, useModal } from '../hooks/index.js';
+import { useCapabilities, VIEW_CAPABILITIES } from '../hooks/useCapabilities.js';
 
 // Components
 import { Header, Sidebar, Footer, MobileNavFooter, StickyViewHeader } from './layout/index.js';
@@ -65,7 +66,21 @@ const AppContentInner = () => {
   const { wsConnected } = useWebSocketConnection();
 
   // Auth state from context
-  const { isAuthenticated, authEnabled, loading: authLoading, isFirstRun, completeFirstRun, logout } = useAuth();
+  const { isAuthenticated, authEnabled, loading: authLoading, isFirstRun, completeFirstRun, logout, username, isSso } = useAuth();
+
+  // Capability check — redirect if user navigated to a view they can't access
+  const { hasCap, isAdmin } = useCapabilities();
+  useEffect(() => {
+    // Settings and Notifications are admin-only (not in VIEW_CAPABILITIES)
+    if ((appCurrentView === 'settings' || appCurrentView === 'notifications') && !isAdmin) {
+      handleAppNavigate('home');
+      return;
+    }
+    const cap = VIEW_CAPABILITIES[appCurrentView];
+    if (cap && !hasCap(cap)) {
+      handleAppNavigate('home');
+    }
+  }, [appCurrentView, hasCap, isAdmin, handleAppNavigate]);
 
   // About modal state
   const aboutModal = useModal();
@@ -214,7 +229,9 @@ const AppContentInner = () => {
           onNavigateHome: handleNavigateHome,
           onOpenAbout: aboutModal.open,
           authEnabled,
-          onLogout: handleLogout
+          username,
+          onLogout: handleLogout,
+          isSso
         }),
 
         // Sticky view header (shows on mobile when main header is hidden)
@@ -228,7 +245,7 @@ const AppContentInner = () => {
           // Main content - Simplified view rendering using component mapping
           // Mobile: no border/padding/shadow for cleaner look
           // Desktop (sm+): full styling with border, shadow, rounded corners
-          h('main', { className: 'flex-1 flex flex-col bg-white dark:bg-gray-800 py-2 sm:p-4 sm:rounded-lg sm:shadow sm:border sm:border-gray-200 sm:dark:border-gray-700' },
+          h('main', { className: 'flex-1 min-w-0 flex flex-col bg-white dark:bg-gray-800 py-2 sm:p-4 sm:rounded-lg sm:shadow sm:border sm:border-gray-200 sm:dark:border-gray-700' },
             h(ViewRenderer)
           )
         ),

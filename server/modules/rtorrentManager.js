@@ -3,224 +3,19 @@
  * Handles rtorrent connection, reconnection, and data retrieval
  */
 
-const crypto = require('crypto');
 const RtorrentHandler = require('../lib/rtorrent/RtorrentHandler');
-const config = require('./config');
-const BaseModule = require('../lib/BaseModule');
+const BaseClientManager = require('../lib/BaseClientManager');
 const logger = require('../lib/logger');
+const clientMeta = require('../lib/clientMeta');
+const { parseMagnetUri, parseTorrentBuffer } = require('../lib/torrentUtils');
+const { normalizeRtorrentDownload, extractRtorrentUploads } = require('../lib/downloadNormalizer');
 
 
-class RtorrentManager extends BaseModule {
+class RtorrentManager extends BaseClientManager {
   constructor() {
     super();
-    this.client = null;
-    this.reconnectInterval = null;
-    this.connectionInProgress = false;
     this.lastDownloads = [];
     this.lastStats = null;
-
-    // Tracker cache: Map<hash, { trackers: string[], trackersDetailed: Object[], lastUpdated: number }>
-    this.trackerCache = new Map();
-    // Peer cache: Map<hash, { peers: Object[], lastUpdated: number }>
-    this.peerCache = new Map();
-    this.trackerRefreshInterval = null;
-    this.TRACKER_REFRESH_INTERVAL = 10000; // Refresh trackers every 10 seconds (batched calls are efficient)
-
-    // Connection callbacks
-    this._onConnectCallbacks = [];
-  }
-
-  /**
-   * Check if history tracking is enabled
-   * @returns {boolean}
-   */
-  isHistoryEnabled() {
-    return config.getConfig()?.history?.enabled !== false && this.downloadHistoryDB;
-  }
-
-  /**
-   * Parse magnet URI to extract hash and name
-   * @param {string} magnetUri - Magnet URI
-   * @returns {Object} { hash, name }
-   */
-  parseMagnetUri(magnetUri) {
-    let hash = null;
-    let name = null;
-
-    try {
-      // Extract hash from xt=urn:btih:HASH
-      const hashMatch = magnetUri.match(/xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
-      if (hashMatch) {
-        hash = hashMatch[1];
-        // Convert base32 to hex if needed (32 chars = base32, 40 chars = hex)
-        if (hash.length === 32) {
-          hash = this.base32ToHex(hash);
-        }
-        hash = hash.toLowerCase();
-      }
-
-      // Extract name from dn= parameter
-      const nameMatch = magnetUri.match(/dn=([^&]+)/);
-      if (nameMatch) {
-        name = decodeURIComponent(nameMatch[1].replace(/\+/g, ' '));
-      }
-    } catch (err) {
-      logger.warn('[rtorrentManager] Failed to parse magnet URI:', err.message);
-    }
-
-    return { hash, name };
-  }
-
-  /**
-   * Convert base32 to hex (for magnet links with base32 hashes)
-   * @param {string} base32 - Base32 encoded string
-   * @returns {string} Hex string
-   */
-  base32ToHex(base32) {
-    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    let bits = '';
-    for (const char of base32.toUpperCase()) {
-      const val = alphabet.indexOf(char);
-      if (val === -1) continue;
-      bits += val.toString(2).padStart(5, '0');
-    }
-    let hex = '';
-    for (let i = 0; i + 4 <= bits.length; i += 4) {
-      hex += parseInt(bits.substr(i, 4), 2).toString(16);
-    }
-    return hex;
-  }
-
-  /**
-   * Parse torrent file buffer to extract info hash, name, and size
-   * Uses minimal bencode parsing
-   * @param {Buffer} torrentData - Raw torrent file data
-   * @returns {Object} { hash, name, size }
-   */
-  parseTorrentBuffer(torrentData) {
-    let hash = null;
-    let name = null;
-    let size = null;
-
-    try {
-      // Find the info dictionary in the torrent
-      const dataStr = torrentData.toString('binary');
-      const infoStart = dataStr.indexOf('4:info');
-
-      if (infoStart !== -1) {
-        // Find the info dict boundaries
-        const dictStart = infoStart + 6; // After "4:info"
-
-        // Extract the info dictionary for hashing
-        // We need to find the matching end of the dictionary
-        let depth = 0;
-        let pos = dictStart;
-        let foundStart = false;
-
-        while (pos < dataStr.length) {
-          const char = dataStr[pos];
-          if (char === 'd' || char === 'l') {
-            if (!foundStart) foundStart = true;
-            depth++;
-          } else if (char === 'e') {
-            depth--;
-            if (foundStart && depth === 0) {
-              pos++; // Include the final 'e'
-              break;
-            }
-          } else if (char >= '0' && char <= '9') {
-            // String length prefix - skip the string
-            let lenStr = '';
-            while (pos < dataStr.length && dataStr[pos] >= '0' && dataStr[pos] <= '9') {
-              lenStr += dataStr[pos];
-              pos++;
-            }
-            pos++; // Skip the ':'
-            pos += parseInt(lenStr, 10); // Skip the string content
-            continue;
-          } else if (char === 'i') {
-            // Integer - skip to 'e'
-            while (pos < dataStr.length && dataStr[pos] !== 'e') pos++;
-          }
-          pos++;
-        }
-
-        // Extract info dict and compute SHA1 hash
-        const infoDict = torrentData.slice(dictStart, pos);
-        hash = crypto.createHash('sha1').update(infoDict).digest('hex').toLowerCase();
-
-        // Try to extract name from the info dict
-        const nameMatch = dataStr.match(/4:name(\d+):/);
-        if (nameMatch) {
-          const nameLen = parseInt(nameMatch[1], 10);
-          const nameStart = dataStr.indexOf(nameMatch[0]) + nameMatch[0].length;
-          name = dataStr.slice(nameStart, nameStart + nameLen);
-        }
-
-        // Try to extract size
-        // Single file: look for "6:lengthi<number>e" (but not inside files list)
-        // Multi-file: sum all lengths in "5:files" list
-        const filesMatch = dataStr.indexOf('5:filesl');
-        if (filesMatch !== -1 && filesMatch > infoStart) {
-          // Multi-file torrent: sum all file lengths
-          // Find all "6:lengthi<number>e" patterns after "5:files"
-          const lengthRegex = /6:lengthi(\d+)e/g;
-          let match;
-          let totalSize = 0;
-          // Start searching from files list position
-          const filesSection = dataStr.slice(filesMatch);
-          while ((match = lengthRegex.exec(filesSection)) !== null) {
-            totalSize += parseInt(match[1], 10);
-          }
-          if (totalSize > 0) {
-            size = totalSize;
-          }
-        } else {
-          // Single file: look for length field
-          const lengthMatch = dataStr.match(/6:lengthi(\d+)e/);
-          if (lengthMatch) {
-            size = parseInt(lengthMatch[1], 10);
-          }
-        }
-      }
-    } catch (err) {
-      logger.warn('[rtorrentManager] Failed to parse torrent file:', err.message);
-    }
-
-    return { hash, name, size };
-  }
-
-  /**
-   * Track a download in history
-   * @param {string} hash - Info hash
-   * @param {string} name - Torrent name
-   * @param {number} size - Size in bytes (optional)
-   * @param {string} username - Username (optional)
-   * @param {string} category - Category/label name (optional)
-   */
-  trackDownload(hash, name, size = null, username = null, category = null) {
-    if (!this.isHistoryEnabled() || !hash) return;
-
-    try {
-      this.log(`📜 History: tracking rtorrent download - hash: ${hash}, name: ${name}, size: ${size}`);
-      this.downloadHistoryDB.addDownload(hash, name || 'Unknown', size, username, 'rtorrent', category);
-    } catch (err) {
-      logger.warn('[rtorrentManager] Failed to track download:', err.message);
-    }
-  }
-
-  /**
-   * Track a deletion in history
-   * @param {string} hash - Info hash
-   */
-  trackDeletion(hash) {
-    if (!this.isHistoryEnabled() || !hash) return;
-
-    try {
-      this.downloadHistoryDB.markDeleted(hash);
-    } catch (err) {
-      logger.warn('[rtorrentManager] Failed to track deletion:', err.message);
-    }
   }
 
   /**
@@ -234,15 +29,13 @@ class RtorrentManager extends BaseModule {
       return false;
     }
 
-    const rtorrentConfig = config.getRtorrentConfig();
-
     // Check if rtorrent is enabled and configured
-    if (!rtorrentConfig || !rtorrentConfig.enabled) {
+    if (!this._clientConfig || !this._clientConfig.enabled) {
       this.log('ℹ️  rtorrent integration is disabled');
       return false;
     }
 
-    if (!rtorrentConfig.host) {
+    if (!this._clientConfig.host) {
       this.log('⚠️  rtorrent host not configured');
       return false;
     }
@@ -257,14 +50,14 @@ class RtorrentManager extends BaseModule {
         this.client = null;
       }
 
-      this.log(`🔌 Creating new rtorrent client (${rtorrentConfig.host}:${rtorrentConfig.port}${rtorrentConfig.path})...`);
+      this.log(`🔌 Creating new rtorrent client (${this._clientConfig.host}:${this._clientConfig.port}${this._clientConfig.path})...`);
 
       const newClient = new RtorrentHandler({
-        host: rtorrentConfig.host,
-        port: rtorrentConfig.port || 8000,
-        path: rtorrentConfig.path || '/RPC2',
-        username: rtorrentConfig.username || null,
-        password: rtorrentConfig.password || null
+        host: this._clientConfig.host,
+        port: this._clientConfig.port || 8000,
+        path: this._clientConfig.path || '/RPC2',
+        username: this._clientConfig.username || null,
+        password: this._clientConfig.password || null
       });
 
       newClient.connect();
@@ -277,16 +70,14 @@ class RtorrentManager extends BaseModule {
       }
 
       this.client = newClient;
+      this._clearConnectionError();
       this.log(`✅ Connected to rtorrent ${testResult.version} successfully`);
 
       // Stop reconnection attempts
-      if (this.reconnectInterval) {
-        clearInterval(this.reconnectInterval);
-        this.reconnectInterval = null;
-      }
+      this.clearReconnect();
 
-      // Start tracker cache refresh (await initial refresh)
-      await this.startTrackerRefresh();
+      // Start tracker cache refresh (fire-and-forget, initial refresh runs in background)
+      this.startTrackerRefresh();
 
       // Notify connection listeners
       this._onConnectCallbacks.forEach(cb => cb());
@@ -294,6 +85,7 @@ class RtorrentManager extends BaseModule {
       return true;
     } catch (err) {
       this.log('❌ Failed to connect to rtorrent:', logger.errorDetail(err));
+      this._setConnectionError(err);
       this.client = null;
       this.stopTrackerRefresh();
       return false;
@@ -306,40 +98,16 @@ class RtorrentManager extends BaseModule {
    * Start connection and auto-reconnect
    */
   async startConnection() {
-    const rtorrentConfig = config.getRtorrentConfig();
-
     // Don't start if not enabled
-    if (!rtorrentConfig || !rtorrentConfig.enabled) {
+    if (!this._clientConfig || !this._clientConfig.enabled) {
       this.log('ℹ️  rtorrent integration is disabled, skipping connection');
       return;
     }
 
     const connected = await this.initClient();
-    if (!connected && !this.reconnectInterval) {
-      this.log('🔄 Will retry rtorrent connection every 30 seconds...');
-      this.reconnectInterval = setInterval(async () => {
-        // Check if still enabled before retrying
-        const currentConfig = config.getRtorrentConfig();
-        if (!currentConfig || !currentConfig.enabled) {
-          this.log('ℹ️  rtorrent disabled, stopping reconnection attempts');
-          if (this.reconnectInterval) {
-            clearInterval(this.reconnectInterval);
-            this.reconnectInterval = null;
-          }
-          return;
-        }
-        this.log('🔄 Attempting to reconnect to rtorrent...');
-        await this.initClient();
-      }, 30000);
+    if (!connected) {
+      this.scheduleReconnect(30000);
     }
-  }
-
-  /**
-   * Get current client
-   * @returns {RtorrentHandler|null}
-   */
-  getClient() {
-    return this.client;
   }
 
   /**
@@ -348,23 +116,6 @@ class RtorrentManager extends BaseModule {
    */
   isConnected() {
     return !!this.client && this.client.connected;
-  }
-
-  /**
-   * Check if rtorrent is enabled in config
-   * @returns {boolean}
-   */
-  isEnabled() {
-    const rtorrentConfig = config.getRtorrentConfig();
-    return rtorrentConfig && rtorrentConfig.enabled === true;
-  }
-
-  /**
-   * Register a callback to be called when rtorrent connects
-   * @param {Function} callback - Callback function
-   */
-  onConnect(callback) {
-    this._onConnectCallbacks.push(callback);
   }
 
   /**
@@ -380,14 +131,7 @@ class RtorrentManager extends BaseModule {
       const downloads = await this.client.getAllDownloads();
 
       // Merge tracker and peer data from cache
-      downloads.forEach(download => {
-        const trackerCached = this.trackerCache.get(download.hash);
-        download.trackers = trackerCached ? trackerCached.trackers : [];
-        download.trackersDetailed = trackerCached ? trackerCached.trackersDetailed : [];
-
-        const peerCached = this.peerCache.get(download.hash);
-        download.peersDetailed = peerCached ? peerCached.peers : [];
-      });
+      this._mergeTrackerData(downloads);
 
       this.lastDownloads = downloads;
       return downloads;
@@ -396,114 +140,55 @@ class RtorrentManager extends BaseModule {
       // Connection might be lost, mark as disconnected
       const errDetail = logger.errorDetail(err);
       if (errDetail.includes('ECONNREFUSED') || errDetail.includes('socket hang up')) {
+        this._setConnectionError(err);
         this.client = null;
-        this.scheduleReconnect();
+        this.scheduleReconnect(30000);
       }
       return this.lastDownloads; // Return cached data on error
     }
   }
 
   /**
-   * Start periodic tracker refresh
+   * Return cached downloads or fetch fresh for tracker refresh.
+   * @returns {Promise<Array>}
    */
-  async startTrackerRefresh() {
-    if (this.trackerRefreshInterval) {
-      return; // Already running
-    }
-
-    this.log('🔄 Starting tracker cache refresh (every 10s)');
-
-    // Do initial refresh and wait for it to complete
-    await this.refreshAllTrackers();
-
-    // Schedule periodic refresh
-    this.trackerRefreshInterval = setInterval(() => {
-      this.refreshAllTrackers();
-    }, this.TRACKER_REFRESH_INTERVAL);
+  async _getItemsForTrackerRefresh() {
+    return this.lastDownloads.length > 0
+      ? this.lastDownloads
+      : await this.client.getAllDownloads();
   }
 
   /**
-   * Stop periodic tracker refresh
+   * Fetch tracker and peer data for all downloads using batched XML-RPC multicall.
+   * Only 2 HTTP requests regardless of torrent count.
+   * @param {Array} items - Download objects with .hash
+   * @returns {Promise<{ trackersByHash: Map, peersByHash: Map }>}
    */
-  stopTrackerRefresh() {
-    if (this.trackerRefreshInterval) {
-      clearInterval(this.trackerRefreshInterval);
-      this.trackerRefreshInterval = null;
-      this.log('⏹️  Stopped tracker cache refresh');
+  async _fetchTrackersAndPeers(items) {
+    const hashes = items.map(d => d.hash);
+
+    const [rawTrackersMap, rawPeersMap] = await Promise.all([
+      this.client.getAllTrackersDetailed(hashes).catch(() => new Map()),
+      this.client.getAllPeersDetailed(hashes).catch(() => new Map())
+    ]);
+
+    const trackersByHash = new Map();
+    const peersByHash = new Map();
+
+    for (const item of items) {
+      const hash = item.hash?.toLowerCase();
+      if (!hash) continue;
+
+      const trackersDetailed = rawTrackersMap.get(item.hash) || [];
+      const trackers = trackersDetailed
+        .filter(t => t.enabled)
+        .map(t => t.url);
+
+      trackersByHash.set(hash, { trackersDetailed, trackers });
+      peersByHash.set(hash, rawPeersMap.get(item.hash) || []);
     }
-  }
 
-  /**
-   * Refresh trackers and peers for all known torrents
-   * Uses batched system.multicall for efficiency - 2 HTTP requests instead of N*2
-   */
-  async refreshAllTrackers() {
-    if (!this.client) {
-      return;
-    }
-
-    try {
-      // Get list of all torrent hashes
-      const downloads = this.lastDownloads.length > 0
-        ? this.lastDownloads
-        : await this.client.getAllDownloads();
-
-      if (downloads.length === 0) {
-        return;
-      }
-
-      const hashes = downloads.map(d => d.hash);
-      let totalTrackers = 0;
-      let totalPeers = 0;
-
-      // Fetch all trackers and peers in just 2 batched HTTP requests
-      const [trackersMap, peersMap] = await Promise.all([
-        this.client.getAllTrackersDetailed(hashes).catch(() => new Map()),
-        this.client.getAllPeersDetailed(hashes).catch(() => new Map())
-      ]);
-
-      // Update caches from batched results
-      const now = Date.now();
-      for (const download of downloads) {
-        const trackersDetailed = trackersMap.get(download.hash) || [];
-        const peersDetailed = peersMap.get(download.hash) || [];
-
-        // Extract simple tracker URLs from detailed data
-        const trackers = trackersDetailed
-          .filter(t => t.enabled)
-          .map(t => t.url);
-
-        this.trackerCache.set(download.hash, {
-          trackers,
-          trackersDetailed,
-          lastUpdated: now
-        });
-        this.peerCache.set(download.hash, {
-          peers: peersDetailed,
-          lastUpdated: now
-        });
-
-        totalTrackers += trackers.length;
-        totalPeers += peersDetailed.length;
-      }
-
-      // this.log(`🔄 Cache refreshed: ${downloads.length} torrents, ${totalTrackers} trackers, ${totalPeers} peers (batched)`);
-
-      // Clean up cache for torrents that no longer exist
-      const currentHashes = new Set(hashes);
-      for (const hash of this.trackerCache.keys()) {
-        if (!currentHashes.has(hash)) {
-          this.trackerCache.delete(hash);
-        }
-      }
-      for (const hash of this.peerCache.keys()) {
-        if (!currentHashes.has(hash)) {
-          this.peerCache.delete(hash);
-        }
-      }
-    } catch (err) {
-      this.log('❌ Error refreshing tracker/peer cache:', logger.errorDetail(err));
-    }
+    return { trackersByHash, peersByHash };
   }
 
   /**
@@ -541,6 +226,143 @@ class RtorrentManager extends BaseModule {
       return '';
     }
   }
+
+  // ============================================================================
+  // UNIFIED DATA FETCHING (same interface as all managers)
+  // ============================================================================
+
+  /**
+   * Fetch and normalize all data from rTorrent.
+   * @returns {Promise<Object>} { downloads, sharedFiles, uploads }
+   */
+  async fetchData() {
+    const rawDownloads = await this.getDownloads();
+
+    if (!rawDownloads || rawDownloads.length === 0) {
+      return { downloads: [], sharedFiles: [], uploads: [] };
+    }
+
+    // Normalize all downloads
+    const downloads = rawDownloads.map(d => normalizeRtorrentDownload(d));
+
+    // Extract uploads (peers with active upload) from raw data
+    const uploads = extractRtorrentUploads(rawDownloads);
+
+    // Stamp instanceId on all normalized items
+    const instanceId = this.instanceId;
+    downloads.forEach(d => { d.instanceId = instanceId; });
+    uploads.forEach(u => { u.instanceId = instanceId; });
+
+    // For torrent clients, downloads ARE shared files (all torrents seed)
+    return { downloads, sharedFiles: downloads, uploads };
+  }
+
+  // ============================================================================
+  // UNIFIED STATS & NETWORK STATUS (same interface as all managers)
+  // ============================================================================
+
+  /**
+   * Get raw stats from rtorrent (alias for getGlobalStats)
+   * @returns {Promise<Object>} Raw stats
+   */
+  async getStats() {
+    return await this.getGlobalStats();
+  }
+
+  /**
+   * Extract normalized metrics from raw rtorrent stats
+   * @param {Object} rawStats - Raw rtorrent stats
+   * @returns {Object} { uploadSpeed, downloadSpeed, uploadTotal, downloadTotal, pid? }
+   */
+  extractMetrics(rawStats) {
+    return {
+      uploadSpeed: rawStats.uploadSpeed || 0,
+      downloadSpeed: rawStats.downloadSpeed || 0,
+      uploadTotal: rawStats.uploadTotal || 0,
+      downloadTotal: rawStats.downloadTotal || 0,
+      pid: rawStats.pid
+    };
+  }
+
+  /**
+   * Compute network status from raw rtorrent stats
+   * @param {Object} rawStats - Raw rtorrent stats
+   * @returns {Object} { status, text, portOpen, listenPort }
+   */
+  getNetworkStatus(rawStats) {
+    const portOpen = !!rawStats.portOpen;
+    return {
+      status: portOpen ? 'green' : 'yellow',
+      text: portOpen ? 'OK' : 'Firewalled',
+      portOpen,
+      listenPort: rawStats.listenPort || null
+    };
+  }
+
+  /**
+   * Extract normalized history metadata from a raw rtorrent download item
+   * @param {Object} item - Raw rtorrent download data
+   * @returns {Object} Normalized metadata for history DB
+   */
+  extractHistoryMetadata(item) {
+    return {
+      hash: item.hash?.toLowerCase(),
+      instanceId: item.instanceId,
+      size: item.size,
+      name: item.name,
+      downloaded: item.downloaded || 0,
+      uploaded: item.uploadTotal || 0,
+      ratio: item.ratio || 0,
+      trackerDomain: item.trackerDomain || null,
+      directory: item.directory || null,
+      multiFile: item.isMultiFile || false,
+      category: item.label || null
+    };
+  }
+
+  // ============================================================================
+  // UNIFIED DOWNLOAD CONTROL (same interface as all managers)
+  // ============================================================================
+
+  /**
+   * Pause a download
+   * @param {string} hash - Torrent hash
+   */
+  async pause(hash) {
+    return await this.stopDownload(hash);
+  }
+
+  /**
+   * Resume a download
+   * @param {string} hash - Torrent hash
+   */
+  async resume(hash) {
+    return await this.startDownload(hash);
+  }
+
+  /**
+   * Hard stop a download (fully close the torrent, release file handles)
+   * @param {string} hash - Torrent hash
+   */
+  async stop(hash) {
+    return await this.closeDownload(hash);
+  }
+
+  /**
+   * Update client's view of the download directory
+   * @param {string} hash - Torrent hash
+   * @param {string} path - New directory path
+   */
+  async updateDirectory(hash, path) {
+    if (!this.client) {
+      throw new Error('rtorrent not connected');
+    }
+    await this.client.call('d.directory.set', [hash, path]);
+  }
+
+  // ============================================================================
+  // INTERNAL DOWNLOAD CONTROL
+  // ============================================================================
 
   /**
    * Start a download
@@ -603,21 +425,60 @@ class RtorrentManager extends BaseModule {
   }
 
   /**
+   * Delete an item (remove from rtorrent + optionally return paths for disk deletion)
+   * Gets path info before removal since rtorrent state is lost after erase.
+   * @param {string} hash - Torrent hash
+   * @param {Object} options - { deleteFiles }
+   * @returns {Promise<Object>} { success, pathsToDelete }
+   */
+  async deleteItem(hash, { deleteFiles } = {}) {
+    const pathsToDelete = [];
+    if (deleteFiles) {
+      try {
+        const pathInfo = await this.getDownloadPathInfo(hash);
+        if (pathInfo?.basePath) pathsToDelete.push(pathInfo.basePath);
+      } catch (err) {
+        this.log(`⚠️  Failed to get path info for ${hash}: ${err.message}`);
+      }
+    }
+    await this.removeDownload(hash);
+    return { success: true, pathsToDelete };
+  }
+
+  /**
+   * Build rTorrent-native options from unified format.
+   * Unified: { categoryName, savePath, priority, start, username }
+   * rTorrent: { label, directory, priority, start, username }
+   */
+  _buildAddOptions(options) {
+    const label = options.categoryName ?? options.label ?? '';
+    const directory = options.savePath ?? options.directory ?? null;
+    const mappedPriority = options.priority !== undefined
+      ? (clientMeta.mapPriority(this.clientType, options.priority) ?? options.priority)
+      : undefined;
+    const rtOptions = { label, start: options.start, username: options.username };
+    if (directory) rtOptions.directory = directory;
+    if (mappedPriority !== undefined) rtOptions.priority = mappedPriority;
+    return rtOptions;
+  }
+
+  /**
    * Add a torrent from magnet link
    * @param {string} magnetUri - Magnet URI
-   * @param {Object} options - Options (label, directory, start, username)
+   * @param {Object} options - Unified options { categoryName, savePath, priority, start, username }
    */
   async addMagnet(magnetUri, options = {}) {
     if (!this.client) {
       throw new Error('rtorrent not connected');
     }
 
-    await this.client.addMagnet(magnetUri, options);
+    const rtOptions = this._buildAddOptions(options);
+    await this.client.addMagnet(magnetUri, rtOptions);
 
     // Track in history
-    const { hash, name } = this.parseMagnetUri(magnetUri);
+    const { hash, name } = parseMagnetUri(magnetUri);
     if (hash) {
-      this.trackDownload(hash, name || 'Magnet download', null, options.username, options.label || null);
+      this.trackDownload(hash, name || 'Magnet download', null, options.username, rtOptions.label || null);
     }
   }
 
@@ -625,19 +486,20 @@ class RtorrentManager extends BaseModule {
    * Add a torrent from raw data (Buffer)
    * Use this when rtorrent doesn't have filesystem access to the torrent file
    * @param {Buffer} torrentData - Raw .torrent file contents
-   * @param {Object} options - Options (label, directory, start, username)
+   * @param {Object} options - Unified options { categoryName, savePath, priority, start, username }
    */
   async addTorrentRaw(torrentData, options = {}) {
     if (!this.client) {
       throw new Error('rtorrent not connected');
     }
 
-    await this.client.addTorrentRaw(torrentData, options);
+    const rtOptions = this._buildAddOptions(options);
+    await this.client.addTorrentRaw(torrentData, rtOptions);
 
     // Track in history
-    const { hash, name, size } = this.parseTorrentBuffer(torrentData);
+    const { hash, name, size } = parseTorrentBuffer(torrentData);
     if (hash) {
-      this.trackDownload(hash, name || 'Torrent download', size, options.username, options.label || null);
+      this.trackDownload(hash, name || 'Torrent download', size, options.username, rtOptions.label || null);
     }
   }
 
@@ -668,6 +530,20 @@ class RtorrentManager extends BaseModule {
   }
 
   /**
+   * Set category/label for a download (unified interface)
+   * Maps category name to label and priority to rTorrent's native values.
+   * @param {string} hash - Torrent hash
+   * @param {Object} options - { categoryName, priority }
+   * @returns {Promise<Object>} { success }
+   */
+  async setCategoryOrLabel(hash, { categoryName, priority } = {}) {
+    const labelValue = categoryName === 'Default' ? '' : (categoryName || '');
+    const mappedPriority = clientMeta.mapPriority(this.clientType, priority) ?? 2;
+    await this.setLabelAndPriority(hash, labelValue, mappedPriority);
+    return { success: true };
+  }
+
+  /**
    * Set priority for a download
    * @param {string} hash - Torrent hash
    * @param {number} priority - Priority (0=off, 1=low, 2=normal, 3=high)
@@ -692,31 +568,35 @@ class RtorrentManager extends BaseModule {
   }
 
   /**
-   * Schedule reconnection if not already scheduled
+   * Perform category sync when this rTorrent instance connects.
+   * Creates app categories for rTorrent labels that don't exist yet.
+   * @param {Object} categoryManager - CategoryManager instance
    */
-  scheduleReconnect() {
-    if (this.reconnectInterval) {
-      return; // Already scheduled
+  async onConnectSync(categoryManager) {
+    const defaultDir = await this.getDefaultDirectory();
+    if (defaultDir) {
+      categoryManager.setClientDefaultPath(this.instanceId, defaultDir);
     }
+    const downloads = await this.getDownloads();
+    const labels = [...new Set(downloads.map(d => d.label).filter(Boolean))];
 
-    const rtorrentConfig = config.getRtorrentConfig();
-    if (!rtorrentConfig || !rtorrentConfig.enabled) {
-      return; // Disabled, don't reconnect
+    let created = 0;
+    for (const label of labels) {
+      if (!label || label === '(none)') continue;
+      if (categoryManager.getByName(label)) continue;
+      categoryManager.importCategory({
+        name: label,
+        comment: 'Auto-created from rTorrent label'
+      });
+      created++;
     }
+    if (created > 0) await categoryManager.save();
 
-    this.log('🔄 Will retry rtorrent connection in 30 seconds...');
-    this.reconnectInterval = setInterval(async () => {
-      const currentConfig = config.getRtorrentConfig();
-      if (!currentConfig || !currentConfig.enabled) {
-        if (this.reconnectInterval) {
-          clearInterval(this.reconnectInterval);
-          this.reconnectInterval = null;
-        }
-        return;
-      }
-      this.log('🔄 Attempting to reconnect to rtorrent...');
-      await this.initClient();
-    }, 30000);
+    this.log(`📊 rTorrent sync complete: ${created} categories created`);
+
+    // Propagate all app categories to other connected clients that may not have them
+    await categoryManager.propagateToOtherClients(this.instanceId);
+    await categoryManager.validateAllPaths();
   }
 
   /**
@@ -729,10 +609,7 @@ class RtorrentManager extends BaseModule {
     this.stopTrackerRefresh();
 
     // Stop reconnection attempts
-    if (this.reconnectInterval) {
-      clearInterval(this.reconnectInterval);
-      this.reconnectInterval = null;
-    }
+    this.clearReconnect();
 
     // Wait for any ongoing connection attempts
     let waitAttempts = 0;
@@ -756,4 +633,4 @@ class RtorrentManager extends BaseModule {
   }
 }
 
-module.exports = new RtorrentManager();
+module.exports = { RtorrentManager };

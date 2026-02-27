@@ -20,29 +20,31 @@ const { useState, useEffect } = React;
  * state and filter settings
  *
  * @returns {object} Chart configuration object with:
- *   - amuleConnected: boolean - whether aMule client is connected
+ *   - ed2kConnected: boolean - whether ED2K network client is connected
  *   - bittorrentConnected: boolean - whether any BitTorrent client is connected
+ *   - isEd2kEnabled: boolean - whether ED2K network is enabled in filter
+ *   - isBittorrentEnabled: boolean - whether BitTorrent is enabled in filter
  *   - showBothCharts: boolean - show side-by-side charts for both network types
  *   - showSingleClient: boolean - show single network type charts (full width)
- *   - singleClientType: 'amule' | 'bittorrent' - which network to show when single
- *   - singleClientName: 'aMule' | 'BitTorrent' - display name for single network
+ *   - singleNetworkType: 'ed2k' | 'bittorrent' - which network to show when single
+ *   - singleNetworkName: 'aMule' | 'BitTorrent' - display name for single network
  *   - shouldRenderCharts: boolean - deferred rendering state for performance
  */
 export const useClientChartConfig = () => {
-  const { isAmuleEnabled, isBittorrentEnabled, amuleConnected, bittorrentConnected } = useClientFilter();
+  const { isEd2kEnabled, isBittorrentEnabled, ed2kConnected, bittorrentConnected } = useClientFilter();
   const { dataStats } = useLiveData();
 
   // Check if we're still waiting for WebSocket data
   const isLoading = !dataStats;
 
   // Determine chart display mode (isXEnabled includes connection check)
-  const showBothCharts = isAmuleEnabled && isBittorrentEnabled;
-  const showSingleAmule = isAmuleEnabled && !isBittorrentEnabled;
-  const showSingleBittorrent = isBittorrentEnabled && !isAmuleEnabled;
+  const showBothCharts = isEd2kEnabled && isBittorrentEnabled;
+  const showSingleAmule = isEd2kEnabled && !isBittorrentEnabled;
+  const showSingleBittorrent = isBittorrentEnabled && !isEd2kEnabled;
   const showSingleClient = showSingleAmule || showSingleBittorrent;
-  // Use 'bittorrent' for charts (aggregates rtorrent + qbittorrent)
-  const singleClientType = showSingleAmule ? 'amule' : 'bittorrent';
-  const singleClientName = showSingleAmule ? 'aMule' : 'BitTorrent';
+  // Network type for chart data keys (e.g. 'ed2kUploadSpeed', 'bittorrentUploadSpeed')
+  const singleNetworkType = showSingleAmule ? 'ed2k' : 'bittorrent';
+  const singleNetworkName = showSingleAmule ? 'aMule' : 'BitTorrent';
 
   // Defer chart rendering until after initial paint for better performance
   const [shouldRenderCharts, setShouldRenderCharts] = useState(false);
@@ -56,14 +58,14 @@ export const useClientChartConfig = () => {
 
   return {
     isLoading,
-    amuleConnected,
+    ed2kConnected,
     bittorrentConnected,
-    isAmuleEnabled,
+    isEd2kEnabled,
     isBittorrentEnabled,
     showBothCharts,
     showSingleClient,
-    singleClientType,
-    singleClientName,
+    singleNetworkType,
+    singleNetworkName,
     shouldRenderCharts
   };
 };

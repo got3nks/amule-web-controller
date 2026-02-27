@@ -2,19 +2,46 @@
  * Footer Component
  *
  * Displays connection status, upload/download speeds, and network statistics
+ * Supports multi-instance mode with per-instance status tooltips and speed breakdown
  */
 
 import React from 'https://esm.sh/react@18.2.0';
 import { formatSpeed, formatBytes, CLIENT_NAMES } from '../../utils/index.js';
-import { getED2KStatus, getKADStatus, getRtorrentStatus, getQbittorrentStatus, getStatusBadgeClass, getStatusIcon } from '../../utils/networkStatus.js';
+import { getStatusBadgeClass, getStatusIcon, getStatusDotClass } from '../../utils/networkStatus.js';
 import { useVersion } from '../../contexts/index.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
 import { useClientFilter } from '../../contexts/ClientFilterContext.js';
+import { useStaticData } from '../../contexts/StaticDataContext.js';
 import Icon from '../common/Icon.js';
 import Tooltip from '../common/Tooltip.js';
 import ClientIcon from '../common/ClientIcon.js';
 
 const { createElement: h } = React;
+
+// Status priority for worst-of computation (lower = worse)
+const STATUS_PRIORITY = { red: 0, yellow: 1, green: 2 };
+
+/**
+ * Find the status object with worst status from an array
+ * @param {Array} statusObjs - Array of objects with .status field ('green'|'yellow'|'red')
+ * @returns {object|null} The worst status object, or null if empty
+ */
+const findWorstStatus = (statusObjs) => {
+  if (statusObjs.length === 0) return null;
+  return statusObjs.reduce((worst, s) =>
+    (STATUS_PRIORITY[s.status] ?? 2) < (STATUS_PRIORITY[worst.status] ?? 2) ? s : worst
+  );
+};
+
+/**
+ * Render a status badge, optionally wrapped in a Tooltip
+ */
+const renderBadge = (status, text, tooltip) => {
+  const badge = h('span', {
+    className: `inline-block px-1.5 py-0.5 lg:px-2 lg:py-1 rounded-md text-xs font-medium ${tooltip ? 'cursor-help ' : ''}${getStatusBadgeClass(status)}`
+  }, `${getStatusIcon(status)} ${text}`);
+  return tooltip ? h(Tooltip, { content: tooltip, position: 'top' }, badge) : badge;
+};
 
 /**
  * Footer component
@@ -25,41 +52,139 @@ const { createElement: h } = React;
 const Footer = ({ currentView, onOpenAbout }) => {
   const { dataStats: stats } = useLiveData();
   const { updateAvailable, latestVersion } = useVersion();
-  const { amuleConnected, rtorrentConnected, qbittorrentConnected, bittorrentConnected } = useClientFilter();
-
+  const { ed2kConnected, bittorrentConnected } = useClientFilter();
+  const { instances, hasMultiInstance } = useStaticData();
   if (!stats) {
-    return h('footer', { className: 'bg-gray-800 text-white py-4 text-center text-sm' },
+    return h('footer', { className: 'hidden md:block bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-4 text-center text-sm text-gray-500 dark:text-gray-400' },
       'Loading stats...'
     );
   }
 
-  // Get network status using shared helpers
-  const ed2k = getED2KStatus(stats);
-  const kad = getKADStatus(stats);
-  const rtStatus = getRtorrentStatus(stats);
-  const qbStatus = getQbittorrentStatus(stats);
+  // --- Compute per-instance status and tooltips from instances metadata ---
+  let ed2k, kad;
+  let ed2kTooltip = null, kadTooltip = null;
+  const disconnected = { status: 'red', text: 'Disconnected', connected: false };
 
-  // Get speeds from each client (ensure numeric values)
-  const amuleUploadSpeed = Number(stats.EC_TAG_STATS_UL_SPEED) || 0;
-  const amuleDownloadSpeed = Number(stats.EC_TAG_STATS_DL_SPEED) || 0;
-  const rtorrentUploadSpeed = Number(stats.rtorrent?.uploadSpeed) || 0;
-  const rtorrentDownloadSpeed = Number(stats.rtorrent?.downloadSpeed) || 0;
-  const qbittorrentUploadSpeed = Number(stats.qbittorrent?.uploadSpeed) || 0;
-  const qbittorrentDownloadSpeed = Number(stats.qbittorrent?.downloadSpeed) || 0;
+  // Group connected instances by type (dynamic — works for any client type)
+  const byType = {};
+  for (const [id, inst] of Object.entries(instances)) {
+    if (!inst.connected) continue;
+    if (!byType[inst.type]) byType[inst.type] = [];
+    byType[inst.type].push({ id, ...inst });
+  }
 
-  // Sum speeds from all connected clients (regardless of user filter)
-  const totalUploadSpeed =
-    (amuleConnected ? amuleUploadSpeed : 0) +
-    (rtorrentConnected ? rtorrentUploadSpeed : 0) +
-    (qbittorrentConnected ? qbittorrentUploadSpeed : 0);
-  const totalDownloadSpeed =
-    (amuleConnected ? amuleDownloadSpeed : 0) +
-    (rtorrentConnected ? rtorrentDownloadSpeed : 0) +
-    (qbittorrentConnected ? qbittorrentDownloadSpeed : 0);
+  // aMule: worst ED2K and KAD status across instances
+  const amuleInsts = byType.amule || [];
+  if (amuleInsts.length > 0) {
+    const ed2kStatuses = amuleInsts.map(i => i.networkStatus?.ed2k).filter(Boolean);
+    const kadStatuses = amuleInsts.map(i => i.networkStatus?.kad).filter(Boolean);
 
-  // Show tooltip breakdown when multiple clients are connected
-  const connectedClientCount = [amuleConnected, rtorrentConnected, qbittorrentConnected].filter(Boolean).length;
-  const showSpeedTooltip = connectedClientCount >= 2;
+    ed2k = findWorstStatus(ed2kStatuses) || disconnected;
+    kad = findWorstStatus(kadStatuses) || disconnected;
+
+    // Multi-instance tooltips (only when 2+ aMule instances)
+    if (amuleInsts.length > 1) {
+      ed2kTooltip = h('div', { className: 'space-y-1' },
+        h('div', { className: 'font-semibold mb-1' }, 'ED2K Status'),
+        ...amuleInsts.map(inst => {
+          const ns = inst.networkStatus?.ed2k;
+          if (!ns) return null;
+          const detail = ns.connected && ns.serverName
+            ? ` (${ns.serverName}${ns.serverPing ? ` - ${ns.serverPing}ms` : ''})`
+            : '';
+          return h('div', { key: inst.id, className: 'flex items-center gap-2' },
+            h('div', { className: `w-2 h-2 rounded-full flex-shrink-0 ${getStatusDotClass(ns.status)}` }),
+            h('span', null, `${inst.name}: ${ns.text}${detail}`)
+          );
+        }).filter(Boolean)
+      );
+
+      kadTooltip = h('div', { className: 'space-y-1' },
+        h('div', { className: 'font-semibold mb-1' }, 'KAD Status'),
+        ...amuleInsts.map(inst => {
+          const ns = inst.networkStatus?.kad;
+          if (!ns) return null;
+          return h('div', { key: inst.id, className: 'flex items-center gap-2' },
+            h('div', { className: `w-2 h-2 rounded-full flex-shrink-0 ${getStatusDotClass(ns.status)}` }),
+            h('span', null, `${inst.name}: ${ns.text}`)
+          );
+        }).filter(Boolean)
+      );
+    }
+  } else {
+    ed2k = disconnected;
+    kad = disconnected;
+  }
+
+  // BitTorrent clients: compute worst status per type (dynamic — works for rtorrent, qbittorrent, deluge, etc.)
+  const btTypes = Object.keys(byType).filter(t => t !== 'amule').sort();
+  const btStatusMap = {};  // { type: { status, tooltip } }
+  for (const type of btTypes) {
+    const insts = byType[type];
+    const statuses = insts.map(i => i.networkStatus).filter(Boolean);
+    const worst = findWorstStatus(statuses) || disconnected;
+    let tooltip = null;
+    if (insts.length > 1) {
+      const label = CLIENT_NAMES[type]?.name || type;
+      tooltip = h('div', { className: 'space-y-1' },
+        h('div', { className: 'font-semibold mb-1' }, `${label} Status`),
+        ...insts.map(inst => {
+          const ns = inst.networkStatus;
+          if (!ns) return null;
+          return h('div', { key: inst.id, className: 'flex items-center gap-2' },
+            h('div', { className: `w-2 h-2 rounded-full flex-shrink-0 ${getStatusDotClass(ns.status)}` }),
+            h('span', null, `${inst.name}: ${ns.text}${ns.listenPort ? ` (Port ${ns.listenPort})` : ''}`)
+          );
+        }).filter(Boolean)
+      );
+    }
+    btStatusMap[type] = { status: worst, tooltip };
+  }
+
+  // --- Speed computation ---
+  // Per-instance speeds from backend (keyed by instanceId)
+  const instanceSpeeds = stats.instanceSpeeds || {};
+
+  // Sum speeds from all connected instances (filtered by client filter state)
+  let totalUploadSpeed = 0;
+  let totalDownloadSpeed = 0;
+  const connectedInsts = Object.entries(instances)
+    .filter(([, i]) => i.connected)
+    .map(([id, i]) => ({ id, ...i }))
+    .sort((a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name));
+
+  for (const inst of connectedInsts) {
+    const isEnabled = inst.networkType === 'ed2k' ? ed2kConnected : bittorrentConnected;
+    if (!isEnabled) continue;
+    const speeds = instanceSpeeds[inst.id];
+    if (speeds) {
+      totalUploadSpeed += speeds.uploadSpeed || 0;
+      totalDownloadSpeed += speeds.downloadSpeed || 0;
+    }
+  }
+
+  // Show speed tooltip when multiple instances or multiple network types connected
+  const connectedNetworkTypes = new Set(connectedInsts.map(i => i.networkType));
+  const showSpeedTooltip = hasMultiInstance || connectedNetworkTypes.size >= 2;
+
+  // Build speed tooltip content
+  const buildSpeedTooltip = (label, speedKey) => {
+    if (connectedInsts.length === 0) return null;
+
+    return h('div', { className: 'space-y-1' },
+      h('div', { className: 'font-semibold mb-1' }, label),
+      ...connectedInsts.map(inst => {
+        const speed = instanceSpeeds[inst.id]?.[speedKey] || 0;
+        return h('div', { key: inst.id, className: 'flex items-center gap-2' },
+          h(ClientIcon, { clientType: inst.type, size: 14 }),
+          h('span', null,
+            inst.color ? h('span', { style: { color: inst.color } }, inst.name) : inst.name,
+            `: ${formatSpeed(speed)}`
+          )
+        );
+      })
+    );
+  };
 
   // Footer is hidden on mobile (replaced by MobileNavFooter)
   return h('footer', {
@@ -67,62 +192,39 @@ const Footer = ({ currentView, onOpenAbout }) => {
   },
     h('div', { className: 'mx-auto' },
       // Desktop view only
-      h('div', { className: 'flex justify-between items-center text-xs' },
-        // Left: Connection status (conditional based on active clients)
-        h('div', { className: 'flex items-center gap-1.5 lg:gap-3' },
+      h('div', { className: 'flex justify-between items-center text-xs gap-4' },
+        // Left: Connection status (scrollable when many clients configured)
+        h('div', { className: 'flex items-center gap-1.5 lg:gap-3 min-w-0 overflow-x-auto flex-nowrap', style: { scrollbarWidth: 'none' } },
           // aMule: ED2K and KAD status
-          amuleConnected && h(React.Fragment, null,
-            h('div', { className: 'flex items-center gap-1.5' },
+          ed2kConnected && h(React.Fragment, null,
+            h('div', { className: 'flex items-center gap-1.5 flex-shrink-0' },
               h('span', { className: 'font-semibold text-gray-700 dark:text-gray-300' }, 'ED2K:'),
-              h('span', { className: `px-1.5 py-0.5 lg:px-2 lg:py-1 rounded text-xs font-medium ${getStatusBadgeClass(ed2k.status)}` },
-                `${getStatusIcon(ed2k.status)} ${ed2k.text}`
-              ),
-              ed2k.connected && ed2k.serverName && h('span', { className: 'hidden xl:inline text-gray-600 dark:text-gray-400 text-xs' }, `(${ed2k.serverName} - ${ed2k.serverPing}ms)`)
+              renderBadge(ed2k.status, ed2k.text, ed2kTooltip),
+              // Show inline server info only in single-instance mode
+              !ed2kTooltip && ed2k.connected && ed2k.serverName && h('span', { className: 'hidden xl:inline text-gray-600 dark:text-gray-400 text-xs' }, `(${ed2k.serverName} - ${ed2k.serverPing}ms)`)
             ),
-            h('div', { className: 'flex items-center gap-1.5' },
+            h('div', { className: 'flex items-center gap-1.5 flex-shrink-0' },
               h('span', { className: 'font-semibold text-gray-700 dark:text-gray-300' }, 'KAD:'),
-              h('span', { className: `px-1.5 py-0.5 lg:px-2 lg:py-1 rounded text-xs font-medium ${getStatusBadgeClass(kad.status)}` },
-                `${getStatusIcon(kad.status)} ${kad.text}`
-              )
+              renderBadge(kad.status, kad.text, kadTooltip)
             )
           ),
           // Divider between aMule and BitTorrent status
-          amuleConnected && bittorrentConnected && h('div', { className: 'w-px h-4 bg-gray-300 dark:bg-gray-600' }),
-          // rTorrent status (shown when rTorrent is connected)
-          rtorrentConnected && h('div', { className: 'flex items-center gap-1.5' },
-            h('span', { className: 'font-semibold text-gray-700 dark:text-gray-300' },
-              h('span', { className: 'lg:hidden' }, `${CLIENT_NAMES.rtorrent.shortName}:`),
-              h('span', { className: 'hidden lg:inline' }, `${CLIENT_NAMES.rtorrent.name}:`)
-            ),
-            rtStatus.listenPort
-              ? h(Tooltip, { content: `Port ${rtStatus.listenPort}`, position: 'top' },
-                  h('span', { className: `px-1.5 py-0.5 lg:px-2 lg:py-1 rounded text-xs font-medium cursor-help ${getStatusBadgeClass(rtStatus.status)}` },
-                    `${getStatusIcon(rtStatus.status)} ${rtStatus.text}`
-                  )
-                )
-              : h('span', { className: `px-1.5 py-0.5 lg:px-2 lg:py-1 rounded text-xs font-medium ${getStatusBadgeClass(rtStatus.status)}` },
-                  `${getStatusIcon(rtStatus.status)} ${rtStatus.text}`
-                )
-          ),
-          // qBittorrent status (shown when qBittorrent is connected)
-          qbittorrentConnected && h('div', { className: 'flex items-center gap-1.5' },
-            h('span', { className: 'font-semibold text-gray-700 dark:text-gray-300' },
-              h('span', { className: 'lg:hidden' }, `${CLIENT_NAMES.qbittorrent.shortName}:`),
-              h('span', { className: 'hidden lg:inline' }, `${CLIENT_NAMES.qbittorrent.name}:`)
-            ),
-            qbStatus.listenPort
-              ? h(Tooltip, { content: `Port ${qbStatus.listenPort}`, position: 'top' },
-                  h('span', { className: `px-1.5 py-0.5 lg:px-2 lg:py-1 rounded text-xs font-medium cursor-help ${getStatusBadgeClass(qbStatus.status)}` },
-                    `${getStatusIcon(qbStatus.status)} ${qbStatus.text}`
-                  )
-                )
-              : h('span', { className: `px-1.5 py-0.5 lg:px-2 lg:py-1 rounded text-xs font-medium ${getStatusBadgeClass(qbStatus.status)}` },
-                  `${getStatusIcon(qbStatus.status)} ${qbStatus.text}`
-                )
-          )
+          ed2kConnected && bittorrentConnected && h('div', { className: 'w-px h-4 bg-gray-300 dark:bg-gray-600 flex-shrink-0' }),
+          // BitTorrent client statuses (dynamic — works for rtorrent, qbittorrent, deluge, etc.)
+          ...btTypes.map(type => {
+            const { status: st, tooltip } = btStatusMap[type];
+            const names = CLIENT_NAMES[type] || { name: type, shortName: type.slice(0, 3) };
+            return h('div', { key: type, className: 'flex items-center gap-1.5 flex-shrink-0' },
+              h('span', { className: 'font-semibold text-gray-700 dark:text-gray-300' },
+                h('span', { className: 'lg:hidden' }, `${names.shortName}:`),
+                h('span', { className: 'hidden lg:inline' }, `${names.name}:`)
+              ),
+              renderBadge(st.status, st.text, tooltip || (st.listenPort ? `Port ${st.listenPort}` : null))
+            );
+          })
         ),
-        // Right: System indicators + Speeds
-        h('div', { className: 'flex items-center gap-1.5 lg:gap-3' },
+        // Right: System indicators + Speeds (fixed, never compressed)
+        h('div', { className: 'flex items-center gap-1.5 lg:gap-3 flex-shrink-0' },
           // Update available indicator
           updateAvailable && onOpenAbout && h(Tooltip, {
             content: `Version ${latestVersion} is available`,
@@ -163,8 +265,7 @@ const Footer = ({ currentView, onOpenAbout }) => {
                   style: { width: `${stats.diskSpace.percentUsed}%` }
                 }),
                 h('span', {
-                  className: 'absolute inset-0 flex items-center justify-center text-xs font-semibold text-gray-800 dark:text-white',
-                  style: { textShadow: '0 0 1px rgba(0,0,0,0.3)' }
+                  className: 'absolute inset-0 flex items-center justify-center text-xs font-semibold text-gray-800 dark:text-white [text-shadow:0_0_2px_rgba(255,255,255,0.8)] dark:[text-shadow:0_0_2px_rgba(0,0,0,0.8)]'
                 },
                   `${stats.diskSpace.percentUsed}%`
                 )
@@ -186,8 +287,7 @@ const Footer = ({ currentView, onOpenAbout }) => {
                 style: { width: `${stats.cpuUsage.percent}%` }
               }),
               h('span', {
-                className: 'absolute inset-0 flex items-center justify-center text-xs font-semibold text-gray-800 dark:text-white',
-                style: { textShadow: '0 0 1px rgba(0,0,0,0.3)' }
+                className: 'absolute inset-0 flex items-center justify-center text-xs font-semibold text-gray-800 dark:text-white [text-shadow:0_0_2px_rgba(255,255,255,0.8)] dark:[text-shadow:0_0_2px_rgba(0,0,0,0.8)]'
               },
                 `${stats.cpuUsage.percent}%`
               )
@@ -195,24 +295,10 @@ const Footer = ({ currentView, onOpenAbout }) => {
           ),
           // Vertical divider (only show if disk or CPU indicators are visible)
           (stats.diskSpace || stats.cpuUsage) && h('div', { className: 'w-px h-4 bg-gray-300 dark:bg-gray-600' }),
-          // Upload speed - with tooltip only if multiple clients connected
+          // Upload speed
           showSpeedTooltip
             ? h(Tooltip, {
-                content: h('div', { className: 'space-y-1' },
-                  h('div', { className: 'font-semibold mb-1' }, 'Upload Speed'),
-                  amuleConnected && h('div', { className: 'flex items-center gap-2' },
-                    h(ClientIcon, { clientType: 'amule', size: 14 }),
-                    h('span', null, formatSpeed(amuleUploadSpeed))
-                  ),
-                  rtorrentConnected && h('div', { className: 'flex items-center gap-2' },
-                    h(ClientIcon, { clientType: 'rtorrent', size: 14 }),
-                    h('span', null, formatSpeed(rtorrentUploadSpeed))
-                  ),
-                  qbittorrentConnected && h('div', { className: 'flex items-center gap-2' },
-                    h(ClientIcon, { clientType: 'qbittorrent', size: 14 }),
-                    h('span', null, formatSpeed(qbittorrentUploadSpeed))
-                  )
-                ),
+                content: buildSpeedTooltip('Upload Speed', 'uploadSpeed'),
                 position: 'top'
               },
                 h('div', { className: 'flex items-center gap-1 lg:gap-2 cursor-help' },
@@ -230,24 +316,10 @@ const Footer = ({ currentView, onOpenAbout }) => {
                 ),
                 h('span', { className: 'text-green-600 dark:text-green-400 font-mono font-semibold' }, formatSpeed(totalUploadSpeed))
               ),
-          // Download speed - with tooltip only if multiple clients connected
+          // Download speed
           showSpeedTooltip
             ? h(Tooltip, {
-                content: h('div', { className: 'space-y-1' },
-                  h('div', { className: 'font-semibold mb-1' }, 'Download Speed'),
-                  amuleConnected && h('div', { className: 'flex items-center gap-2' },
-                    h(ClientIcon, { clientType: 'amule', size: 14 }),
-                    h('span', null, formatSpeed(amuleDownloadSpeed))
-                  ),
-                  rtorrentConnected && h('div', { className: 'flex items-center gap-2' },
-                    h(ClientIcon, { clientType: 'rtorrent', size: 14 }),
-                    h('span', null, formatSpeed(rtorrentDownloadSpeed))
-                  ),
-                  qbittorrentConnected && h('div', { className: 'flex items-center gap-2' },
-                    h(ClientIcon, { clientType: 'qbittorrent', size: 14 }),
-                    h('span', null, formatSpeed(qbittorrentDownloadSpeed))
-                  )
-                ),
+                content: buildSpeedTooltip('Download Speed', 'downloadSpeed'),
                 position: 'top'
               },
                 h('div', { className: 'flex items-center gap-1 lg:gap-2 cursor-help' },

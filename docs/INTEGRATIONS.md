@@ -46,11 +46,11 @@ aMuTorrent provides two APIs for *arr integration:
 
 **For Sonarr (TV Shows):**
 - **Title:** `sonarr`
-- **Path:** `/incoming/sonarr` (or your preferred path)
+- **Path:** `/downloads/sonarr` (or your preferred path)
 
 **For Radarr (Movies):**
 - **Title:** `radarr`
-- **Path:** `/incoming/radarr` (or your preferred path)
+- **Path:** `/downloads/radarr` (or your preferred path)
 
 > **Important:** Remember these exact category names and paths - you'll need them when configuring the download client.
 
@@ -100,7 +100,7 @@ The Torznab indexer allows *arr applications to search the ED2K network.
 
 > **Note:** Replace `YOUR-SERVER` with your actual server IP/hostname. If running in Docker, use the container name or `host.docker.internal`.
 
-> **Authentication:** If web UI authentication is enabled in the Web Controller, the **API Key** field is required. Use the same password you use to log into the web interface. If authentication is disabled, leave the API Key field empty.
+> **Authentication:** If web UI authentication is enabled, the **API Key** field is required. Use your personal API key (found in Settings → Sonarr/Radarr integration info). If authentication is disabled, leave the API Key field empty.
 
 ---
 
@@ -148,7 +148,7 @@ The qBittorrent-compatible API allows *arr applications to manage downloads.
 5. Click **Test** to verify connection
 6. Click **Save**
 
-> **Authentication:** If web UI authentication is enabled in the Web Controller, the **Username** and **Password** fields are required. The username can be any value (it's ignored), but the password must match your web UI login password. If authentication is disabled, leave both fields empty.
+> **Authentication:** If web UI authentication is enabled, the **Username** and **Password** fields are required. The username can be your aMuTorrent username or any value. For the password, use either your aMuTorrent password or your personal API key (found in Settings). If authentication is disabled, leave both fields empty.
 
 ---
 
@@ -158,7 +158,7 @@ If you're running aMule and/or *arr applications in Docker, you need to ensure a
 
 ### Understanding the Problem
 
-Each Docker container has its own filesystem. When aMule downloads a file to `/incoming/sonarr/file.mkv`, Sonarr needs to access that same file. If Sonarr is in a different container, it might see that path differently.
+Each Docker container has its own filesystem. When aMule downloads a file to `/downloads/sonarr/file.mkv`, Sonarr needs to access that same file. If Sonarr is in a different container, it might see that path differently.
 
 ### Solution 1: Shared Volume Mounts
 
@@ -169,21 +169,21 @@ services:
   amule:
     volumes:
       - ./data/aMule/config:/home/amule/.aMule
-      - ./data/aMule/incoming:/incoming
-      - ./data/aMule/temp:/temp
+      - ./data/aMule/incoming:/downloads
+      - ./data/aMule/temp:/downloads/temp
 
   sonarr:
     volumes:
-      - ./data/aMule/incoming:/incoming  # Same path as aMule!
+      - ./data/aMule/incoming:/downloads  # Same path as aMule!
       - ./data/sonarr/config:/config
 
   radarr:
     volumes:
-      - ./data/aMule/incoming:/incoming  # Same path as aMule!
+      - ./data/aMule/incoming:/downloads  # Same path as aMule!
       - ./data/radarr/config:/config
 ```
 
-With this setup, aMule and *arr containers all see `/incoming` as the same directory on the host (`./data/aMule/incoming`).
+With this setup, aMule and *arr containers all see `/downloads` as the same directory on the host (`./data/aMule/incoming`).
 
 > **Note:** The web controller doesn't need access to the downloads directory - only aMule (which does the actual downloading) and Sonarr/Radarr (which import the files) need it.
 
@@ -198,11 +198,11 @@ If containers use different internal paths for the same host directory, configur
 ```
 Host directory: ./data/aMule/incoming
 
-aMule container:      mounted as /incoming
-Sonarr container:     mounted as /data/incoming
+aMule container:      mounted as /downloads
+Sonarr container:     mounted as /data/downloads
 ```
 
-When aMule finishes downloading, it reports the file path as `/incoming/sonarr/show.mkv`. But Sonarr sees that same file as `/data/incoming/sonarr/show.mkv`. Remote Path Mapping tells Sonarr how to translate the path.
+When aMule finishes downloading, it reports the file path as `/downloads/sonarr/show.mkv`. But Sonarr sees that same file as `/data/downloads/sonarr/show.mkv`. Remote Path Mapping tells Sonarr how to translate the path.
 
 **Configure in Sonarr/Radarr:**
 
@@ -211,13 +211,13 @@ When aMule finishes downloading, it reports the file path as `/incoming/sonarr/s
 3. Click **+** (Add Mapping)
 4. Configure:
 
-| Field | Value |
-|-------|-------|
-| **Host** | `YOUR-SERVER` (same as download client host) |
-| **Remote Path** | `/incoming/` (path reported by aMule/download client) |
-| **Local Path** | `/data/incoming/` (path as Sonarr sees it) |
+| Field | Value                                                  |
+|-------|--------------------------------------------------------|
+| **Host** | `YOUR-SERVER` (same as download client host)           |
+| **Remote Path** | `/downloads/` (path reported by aMule/download client) |
+| **Local Path** | `/data/downloads/` (path as Sonarr sees it)            |
 
-Sonarr will now translate `/incoming/sonarr/show.mkv` → `/data/incoming/sonarr/show.mkv`
+Sonarr will now translate `/downloads/sonarr/show.mkv` → `/data/downloads/sonarr/show.mkv`
 
 ### Native Installation (No Docker)
 
@@ -285,9 +285,10 @@ ED2K servers have flood protection that can temporarily ban clients making too m
 ### "Unauthorized" or "Invalid API key" errors
 
 - If web UI authentication is enabled, you **must** provide credentials:
-  - **Torznab indexer:** Enter your web UI password in the "API Key" field
-  - **qBittorrent download client:** Enter any username and your web UI password
-- Verify the password matches exactly (case-sensitive)
+  - **Torznab indexer:** Enter your personal API key in the "API Key" field (found in Settings)
+  - **qBittorrent download client:** Enter your username and password, or use your API key as the password
+- Only admin users can access the external APIs
+- Verify the key/password matches exactly (case-sensitive)
 - If authentication is disabled in the Web Controller, leave credential fields empty
 
 ### Automatic search not triggering

@@ -1,7 +1,7 @@
 /**
  * ClientSpeedChart Component
  *
- * Shows upload and download speed for a single client (aMule or rTorrent)
+ * Shows upload and download speed for a single network type (ED2K or BitTorrent)
  * - Upload speed line (green)
  * - Download speed line (blue)
  */
@@ -15,11 +15,11 @@ const { createElement: h, useEffect, useRef, useState } = React;
 /**
  * ClientSpeedChart component
  * @param {object} speedData - Speed history data from API
- * @param {string} clientType - 'amule' or 'rtorrent'
+ * @param {string} networkType - 'ed2k' or 'bittorrent'
  * @param {string} theme - Current theme (dark/light)
  * @param {string} historicalRange - Time range (24h/7d/30d)
  */
-const ClientSpeedChart = ({ speedData, clientType, theme, historicalRange }) => {
+const ClientSpeedChart = ({ speedData, networkType, theme, historicalRange }) => {
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const chartInstance = useRef(null);
@@ -137,7 +137,7 @@ const ClientSpeedChart = ({ speedData, clientType, theme, historicalRange }) => 
     resizeObserver.observe(containerRef.current);
 
     return () => resizeObserver.disconnect();
-  }, [chartReady, clientType]);
+  }, [chartReady, networkType]);
 
   // Effect 2: Update chart data when speedData, theme, or range changes
   useEffect(() => {
@@ -160,14 +160,9 @@ const ClientSpeedChart = ({ speedData, clientType, theme, historicalRange }) => 
       }
     });
 
-    // Get client-specific data
-    // 'bittorrent' aggregates rtorrent + qbittorrent
-    const uploadSpeedKey = clientType === 'amule' ? 'amuleUploadSpeed'
-      : clientType === 'bittorrent' ? 'bittorrentUploadSpeed'
-      : 'rtorrentUploadSpeed';
-    const downloadSpeedKey = clientType === 'amule' ? 'amuleDownloadSpeed'
-      : clientType === 'bittorrent' ? 'bittorrentDownloadSpeed'
-      : 'rtorrentDownloadSpeed';
+    // Get network-type-specific data keys (e.g. 'ed2kUploadSpeed', 'bittorrentUploadSpeed')
+    const uploadSpeedKey = `${networkType}UploadSpeed`;
+    const downloadSpeedKey = `${networkType}DownloadSpeed`;
 
     // Update data
     chartInstance.current.data.labels = labels;
@@ -191,7 +186,7 @@ const ClientSpeedChart = ({ speedData, clientType, theme, historicalRange }) => 
 
     // Update without animation to prevent bounce
     chartInstance.current.update('none');
-  }, [chartReady, speedData, theme, historicalRange, clientType]);
+  }, [chartReady, speedData, theme, historicalRange, networkType]);
 
   if (!speedData || !speedData.data || speedData.data.length === 0) {
     return h('p', { className: 'text-center text-gray-500 dark:text-gray-400 text-sm py-8' }, 'No data available');

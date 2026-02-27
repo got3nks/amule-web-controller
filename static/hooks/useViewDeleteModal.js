@@ -7,12 +7,14 @@
  * Returns a pre-rendered DeleteModal element
  */
 
-import React, { useCallback, useMemo, useState, useEffect } from 'https://esm.sh/react@18.2.0';
+import React, { useCallback, useMemo, useState, useEffect, useRef } from 'https://esm.sh/react@18.2.0';
 import { useModal } from './useModal.js';
 import { useActions } from '../contexts/ActionsContext.js';
 import { useAppState } from '../contexts/AppStateContext.js';
+import { useStaticData } from '../contexts/StaticDataContext.js';
 import { useWebSocketConnection } from '../contexts/WebSocketContext.js';
 import DeleteModal from '../components/common/DeleteModal.js';
+import { itemKey, parseItemKey } from '../utils/itemKey.js';
 
 const { createElement: h } = React;
 
@@ -35,7 +37,12 @@ export const useViewDeleteModal = ({
 }) => {
   const actions = useActions();
   const { handleAppNavigate } = useAppState();
+  const { instances, getCapabilities } = useStaticData();
   const { sendMessage, addMessageHandler, removeMessageHandler } = useWebSocketConnection();
+
+  // Ref for instances to avoid re-registering permission handler on every broadcast
+  const instancesRef = useRef(instances);
+  instancesRef.current = instances;
 
   // Delete modal state
   const { modal: deleteModal, open: openDeleteModal, close: closeDeleteModal } = useModal({
@@ -68,11 +75,11 @@ export const useViewDeleteModal = ({
         const notDeletable = results.filter(r => !r.canDelete);
         const warnings = [];
 
-        // Helper to get client label
-        const getClientLabel = (clientType) =>
-          clientType === 'amule' ? 'aMule' :
-          clientType === 'rtorrent' ? 'rTorrent' :
-          clientType === 'qbittorrent' ? 'qBittorrent' : clientType;
+        // Look up display name from instances metadata (avoids hardcoded client-type map)
+        const getClientLabel = (clientType) => {
+          const inst = Object.values(instancesRef.current).find(i => i.type === clientType);
+          return inst?.name || clientType;
+        };
 
         // Helper to build message with client prefix for mixed selections
         const buildMessage = (items, singleMsg, pluralMsg) => {
@@ -143,13 +150,13 @@ export const useViewDeleteModal = ({
         }
 
         // Can delete files if at least some files are deletable
-        // Or if all items are aMule-managed (active downloads)
+        // Or if all items are client-managed (active downloads with auto-cleanup)
         const deletableCount = results.filter(r => r.canDelete).length;
-        const amuleManagedCount = results.filter(r => r.reason === 'amule_managed').length;
+        const managedCount = results.filter(r => r.reason === 'managed').length;
 
         setPermissionCheck({
           loading: false,
-          canDeleteFiles: deletableCount > 0 || amuleManagedCount === results.length,
+          canDeleteFiles: deletableCount > 0 || managedCount === results.length,
           warnings
         });
       }
@@ -159,24 +166,39 @@ export const useViewDeleteModal = ({
     return () => removeMessageHandler(handlePermissions);
   }, [addMessageHandler, removeMessageHandler]);
 
-  // Detect if selection contains aMule shared files (completed, not downloading)
-  const hasAmuleSharedFiles = useMemo(() => {
-    if (!deleteModal.show) return false;
+  // Capability-driven flags for the items being deleted
+  const { hasSharedFiles, hasAutoDeleteItems, hasNonAutoDeleteItems } = useMemo(() => {
+    if (!deleteModal.show) return { hasSharedFiles: false, hasAutoDeleteItems: false, hasNonAutoDeleteItems: false };
     const fileHashes = Array.isArray(deleteModal.fileHash)
       ? deleteModal.fileHash
       : [deleteModal.fileHash];
-    return fileHashes.some(hash => {
-      const item = dataArray.find(d => d.hash === hash);
-      return item?.client === 'amule' && item?.shared && !item?.downloading;
-    });
-  }, [deleteModal.show, deleteModal.fileHash, dataArray]);
+    let shared = false, autoDelete = false, nonAutoDelete = false;
+    if (deleteModal.isBatch) {
+      const keySet = new Set(fileHashes);
+      for (const d of dataArray) {
+        if (!keySet.has(itemKey(d.instanceId, d.hash))) continue;
+        const caps = getCapabilities(d.instanceId);
+        if (caps.removeSharedMustDeleteFiles && d.shared && !d.downloading) shared = true;
+        if (caps.cancelDeletesFiles) autoDelete = true;
+        else nonAutoDelete = true;
+      }
+    } else {
+      const item = dataArray.find(d => d.hash === fileHashes[0] && (!deleteModal.instanceId || d.instanceId === deleteModal.instanceId));
+      if (item) {
+        const caps = getCapabilities(item.instanceId);
+        if (caps.removeSharedMustDeleteFiles && item.shared && !item.downloading) shared = true;
+        if (caps.cancelDeletesFiles) autoDelete = true;
+        else nonAutoDelete = true;
+      }
+    }
+    return { hasSharedFiles: shared, hasAutoDeleteItems: autoDelete, hasNonAutoDeleteItems: nonAutoDelete };
+  }, [deleteModal.show, deleteModal.fileHash, deleteModal.isBatch, deleteModal.instanceId, dataArray, getCapabilities]);
 
   // Determine source type based on items (auto-detect shared vs downloads)
   const sourceType = useMemo(() => {
     if (!deleteModal.show) return 'downloads';
-    // If any aMule shared files (completed), treat as shared source
-    return hasAmuleSharedFiles ? 'shared' : 'downloads';
-  }, [deleteModal.show, hasAmuleSharedFiles]);
+    return hasSharedFiles ? 'shared' : 'downloads';
+  }, [deleteModal.show, hasSharedFiles]);
 
   // Request permission check when modal opens
   useEffect(() => {
@@ -186,34 +208,45 @@ export const useViewDeleteModal = ({
       return;
     }
 
-    // Determine which hashes to check
-    const fileHashes = Array.isArray(deleteModal.fileHash)
+    // Build items with instanceId for compound-key lookup on backend
+    const rawFileHashes = Array.isArray(deleteModal.fileHash)
       ? deleteModal.fileHash
       : [deleteModal.fileHash];
+    let items;
+    if (deleteModal.isBatch) {
+      // Batch: compound keys → resolve to { fileHash, instanceId }
+      items = rawFileHashes.map(k => {
+        const { instanceId, hash } = parseItemKey(k);
+        return { fileHash: hash, instanceId };
+      });
+    } else {
+      items = rawFileHashes.map(h => ({ fileHash: h, instanceId: deleteModal.instanceId || null }));
+    }
 
-    // Only check for rtorrent, qbittorrent, mixed batches, or aMule shared files (completed)
-    const clientType = deleteModal.clientType;
-    const needsCheck = clientType === 'rtorrent' || clientType === 'qbittorrent' || clientType === 'mixed' || hasAmuleSharedFiles;
+    // Check permissions when items need explicit file deletion or are shared files
+    const needsCheck = hasNonAutoDeleteItems || hasSharedFiles;
 
-    if (needsCheck && fileHashes.length > 0 && fileHashes[0]) {
+    if (needsCheck && items.length > 0 && items[0].fileHash) {
       setPermissionCheck({ loading: true, canDeleteFiles: true, warnings: [] });
       sendMessage({
         action: 'checkDeletePermissions',
-        fileHashes,
+        items,
         source: sourceType
       });
     }
-  }, [deleteModal.show, deleteModal.fileHash, deleteModal.clientType, hasAmuleSharedFiles, sourceType, sendMessage]);
+  }, [deleteModal.show, deleteModal.fileHash, deleteModal.isBatch, deleteModal.instanceId, hasNonAutoDeleteItems, hasSharedFiles, sourceType, sendMessage]);
 
   /**
    * Detect batch client type from selected hashes
    * Returns 'amule', 'rtorrent', 'qbittorrent', or 'mixed'
    */
-  const detectBatchClientType = useCallback((fileHashes) => {
+  const detectBatchClientType = useCallback((compoundKeys) => {
+    const keySet = new Set(compoundKeys);
     const batchClientTypes = new Set();
-    fileHashes.forEach(hash => {
-      const item = dataArray.find(d => d.hash === hash);
-      batchClientTypes.add(item?.client || 'amule');
+    dataArray.forEach(d => {
+      if (keySet.has(itemKey(d.instanceId, d.hash))) {
+        batchClientTypes.add(d.client);
+      }
     });
     // If only one client type, return it; otherwise return 'mixed'
     return batchClientTypes.size === 1
@@ -222,37 +255,42 @@ export const useViewDeleteModal = ({
   }, [dataArray]);
 
   // Single file delete handler
-  const handleDeleteClick = useCallback((fileHash, fileName, clientType = 'amule') => {
-    openDeleteModal({ fileHash, fileName, clientType, isBatch: false });
+  const handleDeleteClick = useCallback((fileHash, fileName, clientType = 'amule', instanceId = null) => {
+    openDeleteModal({ fileHash, fileName, clientType, instanceId, isBatch: false });
   }, [openDeleteModal]);
 
-  // Batch delete handler (uses selectedFiles)
+  // Batch delete handler (uses selectedFiles — compound keys)
   const handleBatchDeleteClick = useCallback(() => {
-    const fileHashes = Array.from(selectedFiles);
-    const batchClientType = detectBatchClientType(fileHashes);
+    const compoundKeys = Array.from(selectedFiles);
+    const batchClientType = detectBatchClientType(compoundKeys);
 
     openDeleteModal({
-      fileHash: fileHashes,
+      fileHash: compoundKeys,  // compound keys, not raw hashes
       fileName: null,
       clientType: batchClientType,
       isBatch: true,
-      itemCount: fileHashes.length
+      itemCount: compoundKeys.length
     });
   }, [selectedFiles, detectBatchClientType, openDeleteModal]);
 
   // Confirm delete handler
   const handleConfirmDelete = useCallback((deleteFiles = false) => {
     if (deleteModal.isBatch) {
-      const fileHashes = Array.isArray(deleteModal.fileHash) ? deleteModal.fileHash : [deleteModal.fileHash];
-      actions.files.deleteFile(fileHashes, dataArray, deleteFiles, sourceType);
+      // Batch: compound keys → resolve to pre-built items
+      const compoundKeys = Array.isArray(deleteModal.fileHash) ? deleteModal.fileHash : [deleteModal.fileHash];
+      const keySet = new Set(compoundKeys);
+      const items = dataArray
+        .filter(d => keySet.has(itemKey(d.instanceId, d.hash)))
+        .map(d => ({ fileHash: d.hash, clientType: d.client, instanceId: d.instanceId, fileName: d.name }));
+      actions.files.deleteFile(items, null, deleteFiles, sourceType);
       // Clear selections after batch delete
       if (typeof clearAllSelections === 'function') {
         clearAllSelections();
       }
     } else {
-      const clientType = deleteModal.clientType || 'amule';
+      const clientType = deleteModal.clientType;
       const fileName = deleteModal.fileName;
-      actions.files.deleteFile(deleteModal.fileHash, clientType, deleteFiles, sourceType, fileName);
+      actions.files.deleteFile(deleteModal.fileHash, clientType, deleteFiles, sourceType, fileName, deleteModal.instanceId);
     }
     closeDeleteModal();
   }, [deleteModal, actions.files, dataArray, sourceType, closeDeleteModal, clearAllSelections]);
@@ -263,24 +301,38 @@ export const useViewDeleteModal = ({
     handleAppNavigate('categories');
   }, [closeDeleteModal, handleAppNavigate]);
 
-  // Check if selection contains mixed client types
+  // Check if selection contains mixed client types (selectedFiles contains compound keys)
   const isMixedSelection = useMemo(() => {
     if (selectedFiles.size === 0) return false;
     const clientTypes = new Set();
-    selectedFiles.forEach(hash => {
-      const item = dataArray.find(d => d.hash === hash);
-      clientTypes.add(item?.client || 'amule');
+    dataArray.forEach(d => {
+      if (selectedFiles.has(itemKey(d.instanceId, d.hash))) {
+        clientTypes.add(d.client);
+      }
     });
     return clientTypes.size > 1;
   }, [selectedFiles, dataArray]);
 
-  // Get selected client types set
+  // Get selected client types set (selectedFiles contains compound keys)
   const selectedClientTypes = useMemo(() => {
     if (selectedFiles.size === 0) return new Set();
     const types = new Set();
-    selectedFiles.forEach(hash => {
-      const item = dataArray.find(d => d.hash === hash);
-      types.add(item?.client || 'amule');
+    dataArray.forEach(d => {
+      if (selectedFiles.has(itemKey(d.instanceId, d.hash))) {
+        types.add(d.client);
+      }
+    });
+    return types;
+  }, [selectedFiles, dataArray]);
+
+  // Get selected network types set (future-proof: any new BitTorrent client works automatically)
+  const selectedNetworkTypes = useMemo(() => {
+    if (selectedFiles.size === 0) return new Set();
+    const types = new Set();
+    dataArray.forEach(d => {
+      if (selectedFiles.has(itemKey(d.instanceId, d.hash))) {
+        types.add(d.networkType);
+      }
     });
     return types;
   }, [selectedFiles, dataArray]);
@@ -294,8 +346,9 @@ export const useViewDeleteModal = ({
       isBatch: deleteModal.isBatch,
       itemType,
       confirmLabel,
-      clientType: deleteModal.clientType,
-      forceShowDeleteOption: hasAmuleSharedFiles,
+      hasSharedFiles,
+      hasAutoDeleteItems,
+      hasNonAutoDeleteItems,
       permissionCheck,
       onConfirm: handleConfirmDelete,
       onCancel: closeDeleteModal,
@@ -306,10 +359,11 @@ export const useViewDeleteModal = ({
     deleteModal.fileName,
     deleteModal.itemCount,
     deleteModal.isBatch,
-    deleteModal.clientType,
     itemType,
     confirmLabel,
-    hasAmuleSharedFiles,
+    hasSharedFiles,
+    hasAutoDeleteItems,
+    hasNonAutoDeleteItems,
     permissionCheck,
     handleConfirmDelete,
     closeDeleteModal,
@@ -329,6 +383,7 @@ export const useViewDeleteModal = ({
     // Selection info
     isMixedSelection,
     selectedClientTypes,
+    selectedNetworkTypes,
     // Pre-rendered modal element
     DeleteModalElement
   };

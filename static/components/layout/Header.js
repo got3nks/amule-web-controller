@@ -3,16 +3,95 @@
  *
  * Displays the app logo, title, theme toggle, font size control, and client filter toggles
  * On mobile, hides when scrolled to make room for the view's sticky toolbar
+ * Includes user menu with profile and logout when authentication is enabled
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { Icon, Tooltip, VersionBadge, ClientIcon } from '../common/index.js';
+import { Icon, Tooltip, VersionBadge, ClientIcon, Portal } from '../common/index.js';
 import { useFontSize } from '../../contexts/FontSizeContext.js';
 import { useClientFilter } from '../../contexts/ClientFilterContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useStickyHeader } from '../../contexts/StickyHeaderContext.js';
+import ProfileModal from '../modals/ProfileModal.js';
 
-const { createElement: h } = React;
+const { createElement: h, useState, useRef, useEffect, useCallback } = React;
+
+/**
+ * UserMenu dropdown component
+ */
+const UserMenu = ({ username, onOpenProfile, onLogout }) => {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef(null);
+  const menuRef = useRef(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target) &&
+          buttonRef.current && !buttonRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [open]);
+
+  return h('div', { className: 'relative' },
+    h('button', {
+      ref: buttonRef,
+      onClick: () => setOpen(!open),
+      className: `flex items-center gap-1 px-2 py-1 rounded-lg transition-colors text-sm ${
+        open
+          ? 'bg-gray-100 dark:bg-gray-700'
+          : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+      }`
+    },
+      h(Icon, { name: 'user', size: 16, className: 'text-gray-600 dark:text-gray-300' }),
+      h('span', { className: 'hidden sm:inline text-gray-700 dark:text-gray-300 font-medium max-w-[80px] truncate' }, username),
+      h(Icon, { name: open ? 'chevronUp' : 'chevronDown', size: 12, className: 'text-gray-400' })
+    ),
+
+    open && h(Portal, null,
+      // Backdrop
+      h('div', {
+        className: 'fixed inset-0 z-[100]',
+        onClick: () => setOpen(false)
+      }),
+      // Menu positioned below the button
+      h('div', {
+        ref: menuRef,
+        className: 'fixed z-[101] w-44 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden animate-fadeIn',
+        style: (() => {
+          if (!buttonRef.current) return { top: 48, right: 8 };
+          const rect = buttonRef.current.getBoundingClientRect();
+          return { top: rect.bottom + 4, right: window.innerWidth - rect.right };
+        })()
+      },
+        // Username label (mobile — hidden on desktop since it's in the button)
+        h('div', { className: 'sm:hidden px-4 py-2 border-b border-gray-200 dark:border-gray-700' },
+          h('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300 truncate' }, username)
+        ),
+        // Profile
+        h('button', {
+          onClick: () => { setOpen(false); onOpenProfile(); },
+          className: 'flex items-center gap-3 w-full px-4 py-2.5 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors'
+        },
+          h(Icon, { name: 'user', size: 16 }),
+          'Profile'
+        ),
+        // Logout (hidden for SSO sessions)
+        onLogout && h('button', {
+          onClick: () => { setOpen(false); onLogout(); },
+          className: 'flex items-center gap-3 w-full px-4 py-2.5 text-left text-sm text-red-600 dark:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors'
+        },
+          h(Icon, { name: 'logOut', size: 16 }),
+          'Logout'
+        )
+      )
+    )
+  );
+};
 
 /**
  * Header component
@@ -22,12 +101,42 @@ const { createElement: h } = React;
  * @param {function} onNavigateHome - Navigate to home handler
  * @param {function} onOpenAbout - Open about modal handler
  * @param {boolean} authEnabled - Whether authentication is enabled
+ * @param {string} username - Current username
  * @param {function} onLogout - Logout handler
  */
-const Header = ({ theme, onToggleTheme, isLandscape, onNavigateHome, onOpenAbout, authEnabled = false, onLogout }) => {
+const Header = ({ theme, onToggleTheme, isLandscape, onNavigateHome, onOpenAbout, authEnabled = false, username, onLogout, isSso = false }) => {
   const { fontSize, fontSizeConfig, cycleFontSize } = useFontSize();
-  const { isAmuleEnabled, isBittorrentEnabled, toggleClient } = useClientFilter();
-  const { bothClientsConnected } = useStaticData();
+  const { isEd2kEnabled, isBittorrentEnabled, toggleNetworkType, toggleInstance, isInstanceEnabled } = useClientFilter();
+  const { multipleClientsConnected, instances } = useStaticData();
+
+  // Profile modal state
+  const [profileOpen, setProfileOpen] = useState(false);
+
+  const handleProfileSave = useCallback(async (updates) => {
+    const res = await fetch('/api/auth/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    });
+    const data = await res.json();
+    if (!data.success) {
+      throw new Error(data.message || 'Failed to update profile');
+    }
+  }, []);
+
+  // Group connected instances by network type for per-instance filter chips
+  const instanceGroups = React.useMemo(() => {
+    const groups = { ed2k: [], bittorrent: [] };
+    for (const [id, inst] of Object.entries(instances)) {
+      if (inst.connected && groups[inst.networkType]) {
+        groups[inst.networkType].push({ id, ...inst });
+      }
+    }
+    groups.ed2k.sort((a, b) => a.order - b.order);
+    groups.bittorrent.sort((a, b) => a.order - b.order);
+    return groups;
+  }, [instances]);
+
   const { headerHidden } = useStickyHeader();
 
   return h('header', {
@@ -43,45 +152,104 @@ const Header = ({ theme, onToggleTheme, isLandscape, onNavigateHome, onOpenAbout
         onOpenAbout && h(VersionBadge, { onClick: onOpenAbout })
       ),
 
-      // Middle column: Client filter toggles (centered) - only show when both clients are connected
+      // Middle column: Client filter toggles (centered) - only show when multiple clients are connected
       h('div', { className: 'flex-1 flex justify-center' },
-        bothClientsConnected && h('div', { className: 'flex items-center' },
-          // aMule/ED2K toggle
-          h(Tooltip, {
-            content: isAmuleEnabled ? 'Hide ED2K data' : 'Show ED2K data',
-            position: 'bottom',
-            showOnMobile: false
-          },
-            h('button', {
-              onClick: () => toggleClient('amule'),
-              className: `px-1.5 sm:px-2 py-0.5 sm:py-1 text-[10px] sm:text-xs font-bold rounded-l transition-all flex items-center gap-1 ${
-                isAmuleEnabled
-                  ? 'bg-blue-500 text-white'
-                  : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500'
-              }`,
-              title: isAmuleEnabled ? 'ED2K enabled' : 'ED2K disabled'
+        multipleClientsConnected && h(React.Fragment, null,
+          // Simple ED2K / BT network toggle buttons (small screens only, requires both network types)
+          instanceGroups.ed2k.length > 0 && instanceGroups.bittorrent.length > 0 && h('div', { className: 'flex items-center md:hidden' },
+            // aMule/ED2K toggle
+            h(Tooltip, {
+              content: isEd2kEnabled ? 'Hide ED2K data' : 'Show ED2K data',
+              position: 'bottom',
+              showOnMobile: false
             },
-              h(ClientIcon, { client: 'amule', size: 14, title: '' }),
-              'ED2K'
+              h('button', {
+                onClick: () => toggleNetworkType('ed2k'),
+                className: `px-1.5 sm:px-2 py-0.5 sm:py-1 text-[10px] sm:text-xs font-bold rounded-l transition-all flex items-center gap-1 ${
+                  isEd2kEnabled
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500'
+                }`,
+                title: isEd2kEnabled ? 'ED2K enabled' : 'ED2K disabled'
+              },
+                h(ClientIcon, { client: 'amule', size: 14, title: '' }),
+                'ED2K'
+              )
+            ),
+            // rtorrent/BT toggle
+            h(Tooltip, {
+              content: isBittorrentEnabled ? 'Hide BT data' : 'Show BT data',
+              position: 'bottom',
+              showOnMobile: false
+            },
+              h('button', {
+                onClick: () => toggleNetworkType('bittorrent'),
+                className: `px-1.5 sm:px-2 py-0.5 sm:py-1 text-[10px] sm:text-xs font-bold rounded-r transition-all flex items-center gap-1 ${
+                  isBittorrentEnabled
+                    ? 'bg-orange-500 text-white'
+                    : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500'
+                }`,
+                title: isBittorrentEnabled ? 'BT enabled' : 'BT disabled'
+              },
+                h(ClientIcon, { client: 'bittorrent', size: 14, title: '' }),
+                'BT'
+              )
             )
           ),
-          // rtorrent/BT toggle
-          h(Tooltip, {
-            content: isBittorrentEnabled ? 'Hide BT data' : 'Show BT data',
-            position: 'bottom',
-            showOnMobile: false
-          },
-            h('button', {
-              onClick: () => toggleClient('rtorrent'),
-              className: `px-1.5 sm:px-2 py-0.5 sm:py-1 text-[10px] sm:text-xs font-bold rounded-r transition-all flex items-center gap-1 ${
-                isBittorrentEnabled
-                  ? 'bg-orange-500 text-white'
-                  : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500'
-              }`,
-              title: isBittorrentEnabled ? 'BT enabled' : 'BT disabled'
-            },
-              h(ClientIcon, { client: 'bittorrent', size: 14, title: '' }),
-              'BT'
+          // Per-instance filter chips (md+ viewports — scrollable when many instances)
+          h('div', { className: 'hidden md:flex items-center gap-1 overflow-x-auto max-w-[50vw] flex-nowrap', style: { scrollbarWidth: 'none' } },
+            // ED2K group
+            instanceGroups?.ed2k?.length > 0 && h(React.Fragment, null,
+              h('button', {
+                onClick: () => toggleNetworkType('ed2k'),
+                className: `flex-shrink-0 p-0.5 rounded transition-all ${
+                  isEd2kEnabled
+                    ? 'opacity-100'
+                    : 'opacity-40 grayscale'
+                }`,
+                title: isEd2kEnabled ? 'Hide all ED2K' : 'Show all ED2K'
+              }, h(ClientIcon, { client: 'amule', size: 14, title: '' })),
+              ...instanceGroups.ed2k.map(inst =>
+                h('button', {
+                  key: inst.id,
+                  onClick: () => toggleInstance(inst.id),
+                  className: `flex-shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded transition-all truncate max-w-[80px] ${
+                    isInstanceEnabled(inst.id)
+                      ? 'text-white'
+                      : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500'
+                  }`,
+                  style: isInstanceEnabled(inst.id) ? { backgroundColor: inst.color || '#3b82f6', textShadow: '0 1px 2px rgba(0,0,0,0.3)' } : undefined,
+                  title: `${inst.name} (${isInstanceEnabled(inst.id) ? 'visible' : 'hidden'})`
+                }, inst.name)
+              )
+            ),
+            // Separator
+            instanceGroups?.ed2k?.length > 0 && instanceGroups?.bittorrent?.length > 0 &&
+              h('div', { className: 'flex-shrink-0 w-px h-4 bg-gray-300 dark:bg-gray-600 mx-0.5' }),
+            // BT group
+            instanceGroups?.bittorrent?.length > 0 && h(React.Fragment, null,
+              h('button', {
+                onClick: () => toggleNetworkType('bittorrent'),
+                className: `flex-shrink-0 p-0.5 rounded transition-all ${
+                  isBittorrentEnabled
+                    ? 'opacity-100'
+                    : 'opacity-40 grayscale'
+                }`,
+                title: isBittorrentEnabled ? 'Hide all BT' : 'Show all BT'
+              }, h(ClientIcon, { client: 'bittorrent', size: 14, title: '' })),
+              ...instanceGroups.bittorrent.map(inst =>
+                h('button', {
+                  key: inst.id,
+                  onClick: () => toggleInstance(inst.id),
+                  className: `flex-shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded transition-all truncate max-w-[80px] ${
+                    isInstanceEnabled(inst.id)
+                      ? 'text-white'
+                      : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500'
+                  }`,
+                  style: isInstanceEnabled(inst.id) ? { backgroundColor: inst.color || '#f97316', textShadow: '0 1px 2px rgba(0,0,0,0.3)' } : undefined,
+                  title: `${inst.name} (${isInstanceEnabled(inst.id) ? 'visible' : 'hidden'})`
+                }, inst.name)
+              )
             )
           )
         )
@@ -89,17 +257,23 @@ const Header = ({ theme, onToggleTheme, isLandscape, onNavigateHome, onOpenAbout
 
       // Right column: Controls
       h('div', { className: 'flex items-center gap-1 flex-shrink-0' },
-        // Logout button (only show if authentication is enabled)
-        authEnabled && onLogout && h(Tooltip, {
-          content: 'Logout',
-          position: 'left',
-          showOnMobile: false
-        },
-          h('button', {
-            onClick: onLogout,
-            className: 'p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors'
-          }, h(Icon, { name: 'logOut', size: 18, className: 'text-gray-600 dark:text-gray-300' }))
-        ),
+        // User menu (auth enabled with username) or simple logout button
+        authEnabled && username && onLogout
+          ? h(UserMenu, {
+              username,
+              onOpenProfile: () => setProfileOpen(true),
+              onLogout: isSso ? null : onLogout
+            })
+          : authEnabled && !isSso && onLogout && h(Tooltip, {
+              content: 'Logout',
+              position: 'left',
+              showOnMobile: false
+            },
+              h('button', {
+                onClick: onLogout,
+                className: 'p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors'
+              }, h(Icon, { name: 'logOut', size: 18, className: 'text-gray-600 dark:text-gray-300' }))
+            ),
         // Font size toggle button
         h(Tooltip, {
           content: `Font size: ${fontSizeConfig.label}`,
@@ -138,7 +312,15 @@ const Header = ({ theme, onToggleTheme, isLandscape, onNavigateHome, onOpenAbout
           }, h(Icon, { name: 'home', size: 20, className: 'text-gray-600 dark:text-gray-300' }))
         )
       )
-    )
+    ),
+
+    // Profile Modal
+    h(ProfileModal, {
+      show: profileOpen,
+      username: username || '',
+      onClose: () => setProfileOpen(false),
+      onSave: handleProfileSave
+    })
   );
 };
 

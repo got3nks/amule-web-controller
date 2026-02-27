@@ -7,6 +7,7 @@ const express = require('express');
 const BaseModule = require('../lib/BaseModule');
 const notificationManager = require('../lib/NotificationManager');
 const response = require('../lib/responseFormatter');
+const { requireAdmin } = require('../middleware/capabilities');
 
 class NotificationsAPI extends BaseModule {
   constructor() {
@@ -210,6 +211,7 @@ class NotificationsAPI extends BaseModule {
 
     // All routes use JSON
     router.use(express.json());
+    router.use(requireAdmin);
 
     // GET /api/notifications/status - Get Apprise availability
     router.get('/status', this.getStatus.bind(this));

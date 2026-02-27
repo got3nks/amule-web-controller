@@ -22,9 +22,10 @@ async function verifyPassword(inputPassword, storedPassword) {
     return bcrypt.compare(inputPassword, storedPassword);
   }
 
-  // Plain text password from env var - direct comparison
-  // Note: API key = password approach is intentional for simplicity
-  return inputPassword === storedPassword;
+  // Plain text password (e.g., from env var before migration) — use constant-time
+  // comparison via bcrypt to avoid timing side-channels
+  const tempHash = await bcrypt.hash(storedPassword, 4); // Low rounds — one-time comparison only
+  return bcrypt.compare(inputPassword, tempHash);
 }
 
 /**

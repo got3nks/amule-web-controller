@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const logger = require('./logger');
 
 class VersionManager {
   constructor() {
@@ -110,7 +111,7 @@ class VersionManager {
       }
       return releases;
     } catch (err) {
-      console.error('Error parsing changelog:', err.message);
+      logger.log('Error parsing changelog:', err.message);
       return [];
     }
   }

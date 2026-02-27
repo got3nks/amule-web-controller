@@ -1,67 +1,55 @@
 /**
  * useBitTorrentClientSelector Hook
  *
- * Provides state and helpers for selecting which BitTorrent client to use
- * when adding downloads (magnet links, torrent files, search results).
+ * Provides state and helpers for selecting which BitTorrent client instance
+ * to use when adding downloads (magnet links, torrent files, search results).
  *
- * Only shows selection UI when 2+ BitTorrent clients are connected.
- * Automatically selects the only available client when just one is connected.
+ * Instance-aware: builds list from connected instances metadata.
+ * Shows selection UI when 2+ BT instances are connected (even same type).
  */
 
 import { useState, useMemo, useCallback } from 'https://esm.sh/react@18.2.0';
-import { useClientFilter } from '../contexts/ClientFilterContext.js';
+import { useStaticData } from '../contexts/StaticDataContext.js';
 import { CLIENT_NAMES } from '../utils/constants.js';
 
 /**
- * Hook for BitTorrent client selection
+ * Hook for BitTorrent client instance selection
  * @returns {Object} Client selection state and helpers
  */
 export function useBitTorrentClientSelector() {
-  const { rtorrentConnected, qbittorrentConnected } = useClientFilter();
+  const { instances } = useStaticData();
 
-  // Build list of connected BitTorrent clients
+  // Build list of connected BitTorrent instances
   const connectedClients = useMemo(() => {
-    const clients = [];
-    if (rtorrentConnected) {
-      clients.push({
-        id: 'rtorrent',
-        name: CLIENT_NAMES.rtorrent.name,
-        shortName: CLIENT_NAMES.rtorrent.shortName
-      });
-    }
-    if (qbittorrentConnected) {
-      clients.push({
-        id: 'qbittorrent',
-        name: CLIENT_NAMES.qbittorrent.name,
-        shortName: CLIENT_NAMES.qbittorrent.shortName
-      });
-    }
-    return clients;
-  }, [rtorrentConnected, qbittorrentConnected]);
+    return Object.entries(instances || {})
+      .filter(([, inst]) => inst.connected && inst.networkType === 'bittorrent')
+      .map(([id, inst]) => ({
+        id,           // instanceId (e.g., 'rtorrent-seedbox-5000')
+        type: inst.type,
+        name: inst.name || CLIENT_NAMES[inst.type]?.name || inst.type,
+        shortName: inst.name || CLIENT_NAMES[inst.type]?.shortName || inst.type,
+        color: inst.color,
+        order: inst.order
+      }))
+      .sort((a, b) => a.order - b.order)
+  }, [instances]);
 
   // Whether any BitTorrent client is available
   const hasBitTorrentClient = connectedClients.length > 0;
 
-  // Whether to show client selector (2+ clients connected)
+  // Whether to show client selector (2+ instances connected)
   const showClientSelector = connectedClients.length >= 2;
 
-  // Selected client - default to first available, or null if none
-  const [selectedClientId, setSelectedClientId] = useState(() => {
-    if (rtorrentConnected) return 'rtorrent';
-    if (qbittorrentConnected) return 'qbittorrent';
-    return null;
-  });
+  // Selected client - default to first available
+  const [selectedClientId, setSelectedClientId] = useState(null);
 
-  // Auto-update selection if selected client disconnects
+  // Validate selection against connected clients, fall back to first
   const effectiveClientId = useMemo(() => {
-    // If selected client is still connected, use it
-    if (selectedClientId === 'rtorrent' && rtorrentConnected) return 'rtorrent';
-    if (selectedClientId === 'qbittorrent' && qbittorrentConnected) return 'qbittorrent';
-    // Otherwise, fall back to first available
-    if (rtorrentConnected) return 'rtorrent';
-    if (qbittorrentConnected) return 'qbittorrent';
-    return null;
-  }, [selectedClientId, rtorrentConnected, qbittorrentConnected]);
+    if (selectedClientId && connectedClients.some(c => c.id === selectedClientId)) {
+      return selectedClientId;
+    }
+    return connectedClients[0]?.id || null;
+  }, [selectedClientId, connectedClients]);
 
   // Get the selected client object
   const selectedClient = useMemo(() => {
@@ -74,21 +62,18 @@ export function useBitTorrentClientSelector() {
   }, []);
 
   return {
-    // List of connected BitTorrent clients
+    // List of connected BitTorrent client instances
     connectedClients,
     // Whether any BitTorrent client is available
     hasBitTorrentClient,
-    // Whether to show client selector UI (2+ clients)
+    // Whether to show client selector UI (2+ instances)
     showClientSelector,
-    // Currently selected client ID
+    // Currently selected instance ID (validated)
     selectedClientId: effectiveClientId,
-    // Currently selected client object (with name, etc.)
+    // Currently selected client object (with name, type, color, etc.)
     selectedClient,
     // Function to change selection
-    selectClient,
-    // Individual connection status (for backward compatibility)
-    rtorrentConnected,
-    qbittorrentConnected
+    selectClient
   };
 }
 

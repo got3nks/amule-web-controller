@@ -2,7 +2,7 @@
 
 aMuTorrent connects to rTorrent via XML-RPC over HTTP, allowing you to manage BitTorrent downloads.
 
-> **Alternative:** If you prefer qBittorrent, see [qBittorrent Integration](./QBITTORRENT.md). You can also use both BitTorrent clients simultaneously.
+> **Alternative:** aMuTorrent also supports [qBittorrent](./QBITTORRENT.md), [Deluge](./DELUGE.md), and [Transmission](./TRANSMISSION.md). You can use multiple BitTorrent clients simultaneously.
 
 ## Requirements
 
@@ -117,14 +117,15 @@ Categories created in aMuTorrent map to rTorrent labels. When a category has a c
 1. New downloads with that category are saved to the category path
 2. Existing downloads (active or completed) can be moved to their category path via the UI
 
-## Using Both BitTorrent Clients
+## Using Multiple BitTorrent Clients
 
-You can run rTorrent and qBittorrent simultaneously. When both are connected:
+You can run multiple BitTorrent clients simultaneously (rTorrent, qBittorrent, Deluge, Transmission), including multiple instances of the same client type. When multiple clients are connected:
 
 - A **client selector** appears when adding downloads, letting you choose the target client
-- The **ED2K/BT filter** in the header groups both BitTorrent clients together
+- The **ED2K/BT filter** in the header groups all BitTorrent clients together
 - **Statistics** combine speeds and totals from all connected clients
-- **Prowlarr** search results can be sent to either client
+- **Prowlarr** search results can be sent to any connected BitTorrent client
+- Additional instances can be added through the **Settings** page
 
 ## Troubleshooting
 

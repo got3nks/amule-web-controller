@@ -2,7 +2,7 @@
  * FileInfoModal Component
  *
  * Unified modal for displaying file information.
- * Adapts sections based on item type (rtorrent, amule-download, amule-shared).
+ * Adapts sections based on network type (bittorrent, ed2k-download, ed2k-shared).
  * Looks up live data from context internally — caller only passes a hash.
  */
 
@@ -10,8 +10,8 @@ import React from 'https://esm.sh/react@18.2.0';
 import { useTheme } from '../../contexts/ThemeContext.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
-import { SegmentsBar, Icon, Portal, Button } from '../common/index.js';
-import { formatBytes, getProgressColor, getExportLink, getExportLinkLabel } from '../../utils/index.js';
+import { SegmentsBar, Icon, Portal, Button, AlertBox } from '../common/index.js';
+import { formatBytes, getProgressColor, getExportLink, getExportLinkLabel, calculateRatio } from '../../utils/index.js';
 import { formatPriority, categorizeDownloadFields, categorizeSharedFields } from '../../utils/fieldFormatters.js';
 import { useCopyToClipboard } from '../../hooks/index.js';
 import {
@@ -30,7 +30,7 @@ const { createElement: h, useState, useEffect } = React;
  * Default expanded-sections state for each variant
  */
 const getDefaultExpanded = (variant) => {
-  if (variant === 'rtorrent' || variant === 'qbittorrent') {
+  if (variant === 'bittorrent') {
     return {
       'Files': true,
       'Peers': true,
@@ -42,10 +42,11 @@ const getDefaultExpanded = (variant) => {
       'Upload Statistics': false,
       'Timing & Activity': false,
       'Priority & Category': false,
-      'Data Integrity & Optimization': false
+      'Data Integrity & Optimization': false,
+      'Uncategorized': false
     };
   }
-  if (variant === 'amule-download') {
+  if (variant === 'ed2k-download') {
     return {
       'Active Uploads': true,
       'File Identification': true,
@@ -55,10 +56,11 @@ const getDefaultExpanded = (variant) => {
       'State & Progress': false,
       'Download Statistics': false,
       'Upload Statistics': false,
-      'Data Integrity & Optimization': false
+      'Data Integrity & Optimization': false,
+      'Uncategorized': false
     };
   }
-  // amule-shared
+  // ed2k-shared
   return {
     'Active Uploads': true,
     'File Identification': true,
@@ -71,7 +73,7 @@ const getDefaultExpanded = (variant) => {
  * Header config for each variant
  */
 const getHeaderConfig = (variant, item) => {
-  if (variant === 'rtorrent' || variant === 'qbittorrent') {
+  if (variant === 'bittorrent') {
     const isSeeding = item.status === 'seeding';
     return {
       icon: isSeeding ? 'upload' : 'download',
@@ -79,7 +81,7 @@ const getHeaderConfig = (variant, item) => {
       color: isSeeding ? 'green' : 'blue'
     };
   }
-  if (variant === 'amule-download') {
+  if (variant === 'ed2k-download') {
     return { icon: 'download', title: 'Download Details', color: 'blue' };
   }
   return { icon: 'upload', title: 'Shared File Details', color: 'green' };
@@ -89,34 +91,36 @@ const getHeaderConfig = (variant, item) => {
  * Get variant string from a unified item
  */
 const getVariant = (item) => {
-  if (item.client === 'rtorrent') return 'rtorrent';
-  if (item.client === 'qbittorrent') return 'qbittorrent';
-  if (item.downloading) return 'amule-download';
-  return 'amule-shared';
+  if (item.networkType === 'bittorrent') return 'bittorrent';
+  if (item.downloading) return 'ed2k-download';
+  return 'ed2k-shared';
 };
 
 /**
  * Unified file info modal
  * @param {string|null} hash - File hash to display (null = hidden)
+ * @param {string|null} instanceId - Instance ID for compound key lookup (optional)
  * @param {function} onClose - Close handler
  */
-const FileInfoModal = ({ hash, onClose }) => {
+const FileInfoModal = ({ hash, instanceId, onClose }) => {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
   const { dataItems } = useLiveData();
-  const { dataCategories } = useStaticData();
+  const { instances, hasMultiInstance } = useStaticData();
   const { copyStatus, handleCopy } = useCopyToClipboard();
 
-  // Look up live item by hash (case-insensitive)
+  // Look up live item by hash + instanceId (compound key when available)
   const liveItem = hash
-    ? dataItems.find(i => i.hash?.toLowerCase() === hash.toLowerCase())
+    ? dataItems.find(i =>
+        i.hash?.toLowerCase() === hash.toLowerCase() &&
+        (!instanceId || i.instanceId === instanceId))
     : null;
 
   const variant = liveItem ? getVariant(liveItem) : null;
 
   // Expanded sections state — resets when hash or variant changes
   const [expandedSections, setExpandedSections] = useState(() =>
-    getDefaultExpanded(variant || 'rtorrent')
+    getDefaultExpanded(variant || 'bittorrent')
   );
 
   useEffect(() => {
@@ -132,7 +136,7 @@ const FileInfoModal = ({ hash, onClose }) => {
 
   // Fetch files when modal opens for multi-file torrent items, refresh periodically
   useEffect(() => {
-    const isTorrent = variant === 'rtorrent' || variant === 'qbittorrent';
+    const isTorrent = variant === 'bittorrent';
     if (!hash || !liveItem || !isTorrent) {
       setFiles(null);
       return;
@@ -152,9 +156,8 @@ const FileInfoModal = ({ hash, onClose }) => {
         setFilesError(null);
       }
       try {
-        const apiPath = variant === 'qbittorrent'
-          ? `/api/qbittorrent/files/${liveItem.hash}`
-          : `/api/rtorrent/files/${liveItem.hash}`;
+        const instanceParam = liveItem.instanceId ? `?instanceId=${encodeURIComponent(liveItem.instanceId)}` : '';
+        const apiPath = `/api/${liveItem.client}/files/${liveItem.hash}${instanceParam}`;
         const response = await fetch(apiPath);
         if (cancelled) return;
         if (!response.ok) throw new Error('Failed to fetch files');
@@ -191,14 +194,19 @@ const FileInfoModal = ({ hash, onClose }) => {
   // - aMule: EC_TAG_ fields may be at liveItem.raw (if set from download.raw)
   //   or nested at liveItem.raw.raw (if raw was overwritten by shared file data).
   //   Resolve to whichever level has EC_TAG_ keys.
-  const isTorrent = variant === 'rtorrent' || variant === 'qbittorrent';
+  const isTorrent = variant === 'bittorrent';
   const rawFull = liveItem.raw || {};
   const ecTagSource = !isTorrent && rawFull.raw && typeof rawFull.raw === 'object'
     ? rawFull.raw
     : rawFull;
   const raw = isTorrent
     ? rawFull
-    : Object.fromEntries(Object.entries(ecTagSource).filter(([k]) => k.startsWith('EC_TAG_')));
+    : { clientType: 'amule', ...Object.fromEntries(Object.entries(ecTagSource).filter(([k]) => k.startsWith('EC_TAG_'))) };
+
+  // Inject resolved category name into raw for ed2k downloads (replaces numeric ID)
+  if (!isTorrent && raw.EC_TAG_PARTFILE_CAT !== undefined) {
+    raw.EC_TAG_PARTFILE_CAT = liveItem.category || 'Default';
+  }
 
   // Export link — fallback to raw ED2K field if unified field is empty
   const exportLink = getExportLink(liveItem) || ecTagSource.EC_TAG_PARTFILE_ED2K_LINK || null;
@@ -220,8 +228,8 @@ const FileInfoModal = ({ hash, onClose }) => {
   const trackersDetailed = isTorrent ? (liveItem.trackersDetailed || []) : [];
   const peersDetailedTorrent = isTorrent ? (liveItem.peersDetailed || []) : [];
 
-  // amule (shared or downloading with active upload peers)
-  const peersDetailedAmule = (variant === 'amule-shared' || variant === 'amule-download')
+  // ed2k (shared or downloading with active upload peers)
+  const peersDetailedAmule = !isTorrent
     ? (liveItem.activeUploads || []) : [];
 
   // --- Categorized fields ---
@@ -233,24 +241,24 @@ const FileInfoModal = ({ hash, onClose }) => {
       ? [
           'File Identification', 'Source Information', 'State & Progress',
           'Upload Statistics', 'Timing & Activity', 'Priority & Category',
-          'Data Integrity & Optimization'
+          'Data Integrity & Optimization', 'Uncategorized'
         ]
       : [
           'File Identification', 'Source Information', 'State & Progress',
           'Download Statistics', 'Upload Statistics', 'Timing & Activity',
-          'Priority & Category', 'Data Integrity & Optimization'
+          'Priority & Category', 'Data Integrity & Optimization', 'Uncategorized'
         ];
     categorizedFields = Object.fromEntries(
       categoryOrder
         .filter(c => allFields[c] && allFields[c].length > 0)
         .map(c => [c, allFields[c]])
     );
-  } else if (variant === 'amule-download') {
+  } else if (variant === 'ed2k-download') {
     const allFields = categorizeDownloadFields(raw);
     const categoryOrder = [
       'File Identification', 'Source Information', 'State & Progress',
       'Download Statistics', 'Upload Statistics', 'Timing & Activity',
-      'Priority & Category', 'Data Integrity & Optimization'
+      'Priority & Category', 'Data Integrity & Optimization', 'Uncategorized'
     ];
     categorizedFields = Object.fromEntries(
       categoryOrder
@@ -258,7 +266,7 @@ const FileInfoModal = ({ hash, onClose }) => {
         .map(c => [c, allFields[c]])
     );
   } else {
-    // amule-shared
+    // ed2k-shared
     const allFields = categorizeSharedFields(raw);
     const categoryOrder = ['File Identification', 'Upload Statistics', 'Source Information'];
     categorizedFields = Object.fromEntries(
@@ -268,7 +276,6 @@ const FileInfoModal = ({ hash, onClose }) => {
     );
   }
 
-  const categories = variant === 'amule-download' ? dataCategories : [];
 
   return h(Portal, null,
     h('div', {
@@ -276,13 +283,15 @@ const FileInfoModal = ({ hash, onClose }) => {
       onClick: onClose
     },
     h('div', {
-      className: 'bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-4xl w-full max-h-[85vh] sm:max-h-[90vh] flex flex-col overflow-hidden',
+      className: 'modal-full bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-4xl w-full max-h-[85vh] sm:max-h-[90vh] flex flex-col overflow-hidden',
       onClick: (e) => e.stopPropagation()
     },
       // Header
       h(InfoModalHeader, {
         icon: headerConfig.icon,
-        title: headerConfig.title,
+        title: hasMultiInstance && liveItem.instanceId && instances[liveItem.instanceId]?.name
+          ? `${headerConfig.title} — ${instances[liveItem.instanceId].name}`
+          : headerConfig.title,
         subtitle: liveItem.name,
         color: headerConfig.color,
         onClose
@@ -321,10 +330,10 @@ const FileInfoModal = ({ hash, onClose }) => {
           )
         ),
 
-        // --- amule-download: Segments visualization ---
-        variant === 'amule-download' && liveItem.partStatus && h('div', { className: 'bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-gray-700' },
+        // --- ed2k-download: Segments visualization ---
+        variant === 'ed2k-download' && liveItem.partStatus && h('div', { className: 'bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-gray-700' },
           h('div', { className: 'text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 mb-2' }, 'Segments'),
-          h('div', { className: 'w-full overflow-hidden rounded' },
+          h('div', { className: 'w-full overflow-hidden rounded-full h-6' },
             h(SegmentsBar, {
               fileSize: parseInt(liveItem.size),
               fileSizeDownloaded: parseInt(liveItem.sizeDownloaded),
@@ -342,8 +351,8 @@ const FileInfoModal = ({ hash, onClose }) => {
           )
         ),
 
-        // --- torrent: Quick stats grid ---
-        isTorrent && h('div', { className: 'grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3' },
+        // --- Quick stats grid (all variants) ---
+        h('div', { className: 'grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3' },
           h('div', { className: 'bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2 sm:p-3' },
             h('div', { className: 'text-xs text-gray-500 dark:text-gray-400 mb-0.5 sm:mb-1' }, 'Size'),
             h('div', { className: 'text-sm sm:text-base font-semibold text-gray-900 dark:text-gray-100' },
@@ -351,9 +360,9 @@ const FileInfoModal = ({ hash, onClose }) => {
             )
           ),
           h('div', { className: 'bg-orange-50 dark:bg-orange-900/20 rounded-lg p-2 sm:p-3' },
-            h('div', { className: 'text-xs text-orange-600 dark:text-orange-400 mb-0.5 sm:mb-1' }, 'Label'),
+            h('div', { className: 'text-xs text-orange-600 dark:text-orange-400 mb-0.5 sm:mb-1' }, 'Category'),
             h('div', { className: 'text-sm sm:text-base font-semibold text-orange-700 dark:text-orange-300' },
-              liveItem.category || '(none)'
+              liveItem.category || 'Default'
             )
           ),
           h('div', { className: 'bg-blue-50 dark:bg-blue-900/20 rounded-lg p-2 sm:p-3' },
@@ -365,56 +374,15 @@ const FileInfoModal = ({ hash, onClose }) => {
           h('div', { className: 'bg-purple-50 dark:bg-purple-900/20 rounded-lg p-2 sm:p-3' },
             h('div', { className: 'text-xs text-purple-600 dark:text-purple-400 mb-0.5 sm:mb-1' }, 'Ratio'),
             h('div', { className: 'text-sm sm:text-base font-semibold text-purple-700 dark:text-purple-300' },
-              liveItem.ratio != null ? liveItem.ratio.toFixed(2) : '-'
-            )
-          )
-        ),
-
-        // --- amule-shared: Quick stats grid ---
-        variant === 'amule-shared' && h('div', { className: 'grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3' },
-          h('div', { className: 'bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2 sm:p-3' },
-            h('div', { className: 'text-xs text-gray-500 dark:text-gray-400 mb-0.5 sm:mb-1' }, 'Size'),
-            h('div', { className: 'text-sm sm:text-base font-semibold text-gray-900 dark:text-gray-100' },
-              formatBytes(liveItem.size)
-            )
-          ),
-          h('div', { className: 'bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2 sm:p-3' },
-            h('div', { className: 'text-xs text-gray-500 dark:text-gray-400 mb-0.5 sm:mb-1' }, 'Priority'),
-            h('div', { className: 'text-sm sm:text-base font-semibold text-gray-900 dark:text-gray-100' },
-              formatPriority(liveItem.uploadPriority)
-            )
-          ),
-          h('div', { className: 'bg-green-50 dark:bg-green-900/20 rounded-lg p-2 sm:p-3' },
-            h('div', { className: 'text-xs text-green-600 dark:text-green-400 mb-0.5 sm:mb-1' }, 'Session Upload'),
-            h('div', { className: 'text-sm sm:text-base font-semibold text-green-700 dark:text-green-300' },
-              formatBytes(liveItem.uploadSession)
-            ),
-            h('div', { className: 'text-xs text-green-600 dark:text-green-400' },
-              `${liveItem.requestsAccepted} requests`
-            )
-          ),
-          h('div', { className: 'bg-blue-50 dark:bg-blue-900/20 rounded-lg p-2 sm:p-3' },
-            h('div', { className: 'text-xs text-blue-600 dark:text-blue-400 mb-0.5 sm:mb-1' }, 'Total Upload'),
-            h('div', { className: 'text-sm sm:text-base font-semibold text-blue-700 dark:text-blue-300' },
-              formatBytes(liveItem.uploadTotal)
-            ),
-            h('div', { className: 'text-xs text-blue-600 dark:text-blue-400' },
-              `${liveItem.requestsAcceptedTotal} requests`
+              calculateRatio(liveItem)
             )
           )
         ),
 
         // --- torrent: Message/error section ---
-        isTorrent && torrentMessage && h('div', {
-          className: 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 sm:p-4'
-        },
-          h('div', { className: 'flex items-start gap-2' },
-            h(Icon, { name: 'alertCircle', size: 18, className: 'text-red-500 dark:text-red-400 flex-shrink-0 mt-0.5' }),
-            h('div', null,
-              h('span', { className: 'text-xs sm:text-sm font-medium text-red-700 dark:text-red-300' }, 'Message'),
-              h('p', { className: 'text-xs sm:text-sm text-red-600 dark:text-red-400 mt-1' }, torrentMessage)
-            )
-          )
+        isTorrent && torrentMessage && h(AlertBox, { type: 'error', className: 'mb-0' },
+          h('span', { className: 'font-medium' }, 'Message'),
+          h('p', { className: 'mt-1' }, torrentMessage)
         ),
 
         // --- torrent: Files section (multi-file only) ---
@@ -439,10 +407,10 @@ const FileInfoModal = ({ hash, onClose }) => {
           count: trackersDetailed.length,
           expanded: expandedSections['Trackers'],
           onToggle: () => toggleSection('Trackers')
-        }, h(TrackersTable, { trackers: trackersDetailed })),
+        }, h(TrackersTable, { trackers: trackersDetailed, clientType: instances[liveItem.instanceId]?.type })),
 
-        // --- amule: Active Uploads (peers) section ---
-        (variant === 'amule-shared' || variant === 'amule-download') && peersDetailedAmule.length > 0 && h(CollapsibleTableSection, {
+        // --- ed2k: Active Uploads (peers) section ---
+        !isTorrent && peersDetailedAmule.length > 0 && h(CollapsibleTableSection, {
           title: 'Active Uploads',
           count: peersDetailedAmule.length,
           expanded: expandedSections['Active Uploads'],
@@ -456,8 +424,7 @@ const FileInfoModal = ({ hash, onClose }) => {
             category,
             fields,
             expanded: expandedSections[category],
-            onToggle: () => toggleSection(category),
-            categories
+            onToggle: () => toggleSection(category)
           })
         )
       ),

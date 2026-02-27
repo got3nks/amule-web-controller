@@ -95,19 +95,21 @@ services:
   amule:
     image: ngosang/amule:latest
     container_name: amule
+    ports:
+      - "4662:4662"
+      - "4665:4665/udp"
+      - "4672:4672/udp"
     environment:
       - PUID=1000
       - PGID=1000
       - GUI_PWD=your_password
       - WEBUI_PWD=your_password
+      - INCOMING_DIR=/downloads
+      - TEMP_DIR=/downloads/temp
     volumes:
       - ./data/aMule/config:/home/amule/.aMule
-      - ./data/aMule/incoming:/incoming
-      - ./data/aMule/temp:/temp
-    ports:
-      - "4662:4662"
-      - "4665:4665/udp"
-      - "4672:4672/udp"
+      - ./data/aMule/incoming:/downloads
+      - ./data/aMule/temp:/downloads/temp
     restart: unless-stopped
 
   amutorrent:
@@ -119,7 +121,7 @@ services:
       - AMULE_PASSWORD=your_password
     volumes:
       # Download directories (optional): Required for moving/deleting files
-      - ./data/aMule/incoming:/incoming
+      - ./data/aMule/incoming:/downloads
     ports:
       - "4000:4000"
     restart: unless-stopped

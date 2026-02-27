@@ -25,10 +25,9 @@ const { createElement: h, useState, useEffect, useMemo } = React;
  * @param {function} onCategoryChange - Category change handler (controlled by hook)
  * @param {boolean} showMoveOption - Whether to show move option (computed by hook)
  * @param {object} permissionCheck - Permission check state from hook { loading, canMove, error, destPath }
- * @param {boolean} hasAmuleSharedFiles - Whether selection includes aMule shared files
- * @param {boolean} hasRtorrentItems - Whether selection includes rTorrent items
- * @param {boolean} hasQbittorrentItems - Whether selection includes qBittorrent items
- * @param {boolean} forceMove - Whether move is forced (aMule shared files)
+ * @param {boolean} hasAutoMoveItems - Whether selection includes items that auto-move on category change
+ * @param {boolean} hasOptionalMoveItems - Whether selection includes items with optional move (checkbox)
+ * @param {boolean} forceMove - Whether move is forced (shared files that must be moved for category change)
  * @param {function} onSubmit - Submit handler (fileHash/hashes, categoryName, options)
  * @param {function} onClose - Close handler
  * @param {function} onEditMappings - Optional handler to open category mappings editor
@@ -44,10 +43,8 @@ const FileCategoryModal = ({
   onCategoryChange,
   showMoveOption = false,
   permissionCheck = { loading: false, canMove: true, error: null, destPath: null },
-  hasAmuleFiles = false,
-  hasAmuleSharedFiles = false,
-  hasRtorrentItems = false,
-  hasQbittorrentItems = false,
+  hasAutoMoveItems = false,
+  hasOptionalMoveItems = false,
   forceMove = false,
   onSubmit,
   onClose,
@@ -97,7 +94,7 @@ const FileCategoryModal = ({
   const isSameCategory = finalCategory === currentCategory || (useCustom && !customCategory.trim());
 
   // Determine if submit should be disabled
-  const isSubmitDisabled = isSameCategory || (hasAmuleSharedFiles && permissionCheck.error);
+  const isSubmitDisabled = isSameCategory || (forceMove && permissionCheck.error);
 
   const handleSubmit = () => {
     // Always submit category name (backend handles client-specific logic)
@@ -133,18 +130,23 @@ const FileCategoryModal = ({
       onClick: onClose
     },
       h('div', {
-        className: 'bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6',
+        className: 'bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full flex flex-col overflow-hidden',
         onClick: (e) => e.stopPropagation()
       },
-      h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2' },
-        'Change Category'
-      ),
-      h('p', { className: 'text-sm text-gray-600 dark:text-gray-400 mb-4 break-all' },
-        isBatch
-          ? `Change category for ${displayCount} selected file${displayCount !== 1 ? 's' : ''}`
-          : fileName
+      // Header
+      h('div', { className: 'px-6 py-4 border-b border-gray-200 dark:border-gray-700' },
+        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100' },
+          'Change Category'
+        ),
+        h('p', { className: 'text-sm text-gray-600 dark:text-gray-400 mt-1 break-all' },
+          isBatch
+            ? `Change category for ${displayCount} selected file${displayCount !== 1 ? 's' : ''}`
+            : fileName
+        )
       ),
 
+      // Body
+      h('div', { className: 'flex-1 overflow-y-auto px-6 py-4' },
       // Single unified category dropdown for both client types
       h('div', { className: 'mb-4' },
         h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
@@ -175,16 +177,16 @@ const FileCategoryModal = ({
         })
       ),
 
-      // Info for aMule files (downloads will complete to category path, shared files will be moved)
-      hasAmuleFiles && !useCustom && h(AlertBox, { type: 'info', className: 'mb-4' },
-        'aMule files will be moved to the new category path'
+      // Info for auto-move items (active downloads will be moved to category path automatically)
+      hasAutoMoveItems && !useCustom && h(AlertBox, { type: 'info', className: 'mb-4' },
+        'Downloads will be automatically moved to the new category path'
       ),
 
-      // Move files option - different behavior based on client types
+      // Move files option — capability-driven:
+      // forceMove only (no optional items): show destination path (no checkbox)
+      // optional items (with or without forced): show checkbox
       showMoveOption && !useCustom && h('div', { className: 'mb-4' },
-        // For aMule-only: show destination path (no checkbox, forced)
-        // For torrent clients (or mixed): show checkbox with appropriate label
-        hasAmuleSharedFiles && !hasRtorrentItems && !hasQbittorrentItems
+        forceMove && !hasOptionalMoveItems
           ? h('div', { className: 'text-sm text-gray-700 dark:text-gray-300' },
               permissionCheck.loading
                 ? 'Checking paths...'
@@ -208,13 +210,13 @@ const FileCategoryModal = ({
               h('span', { className: 'text-gray-700 dark:text-gray-300' },
                 permissionCheck.loading
                   ? 'Checking paths...'
-                  : hasAmuleSharedFiles && (hasRtorrentItems || hasQbittorrentItems)
+                  : forceMove && hasOptionalMoveItems
                     ? permissionCheck.destPath
                       ? h('span', null,
-                          'Also move torrent files to: ',
+                          'Also move other files to: ',
                           h('span', { className: 'font-mono text-xs break-all' }, permissionCheck.destPath)
                         )
-                      : 'Also move torrent files'
+                      : 'Also move other files'
                     : permissionCheck.destPath
                       ? h('span', null,
                           'Move files to: ',
@@ -233,7 +235,10 @@ const FileCategoryModal = ({
         }, permissionCheck.error)
       ),
 
-      h('div', { className: 'flex gap-3 justify-end' },
+      ), // Close body
+
+      // Footer
+      h('div', { className: 'px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex gap-3 justify-end' },
         h(Button, {
           variant: 'secondary',
           onClick: onClose

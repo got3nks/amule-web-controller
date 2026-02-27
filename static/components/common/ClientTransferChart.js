@@ -1,7 +1,7 @@
 /**
  * ClientTransferChart Component
  *
- * Shows data transferred (uploaded/downloaded) for a single client (aMule or rTorrent)
+ * Shows data transferred (uploaded/downloaded) for a single network type (ED2K or BitTorrent)
  * - Uploaded bar (green)
  * - Downloaded bar (blue)
  */
@@ -15,11 +15,11 @@ const { createElement: h, useEffect, useRef, useState } = React;
 /**
  * ClientTransferChart component
  * @param {object} historicalData - Historical data from API
- * @param {string} clientType - 'amule' or 'rtorrent'
+ * @param {string} networkType - 'ed2k' or 'bittorrent'
  * @param {string} theme - Current theme (dark/light)
  * @param {string} historicalRange - Time range (24h/7d/30d)
  */
-const ClientTransferChart = ({ historicalData, clientType, theme, historicalRange }) => {
+const ClientTransferChart = ({ historicalData, networkType, theme, historicalRange }) => {
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const chartInstance = useRef(null);
@@ -155,14 +155,9 @@ const ClientTransferChart = ({ historicalData, clientType, theme, historicalRang
       }
     });
 
-    // Get client-specific data
-    // 'bittorrent' aggregates rtorrent + qbittorrent
-    const uploadedKey = clientType === 'amule' ? 'amuleUploadedDelta'
-      : clientType === 'bittorrent' ? 'bittorrentUploadedDelta'
-      : 'rtorrentUploadedDelta';
-    const downloadedKey = clientType === 'amule' ? 'amuleDownloadedDelta'
-      : clientType === 'bittorrent' ? 'bittorrentDownloadedDelta'
-      : 'rtorrentDownloadedDelta';
+    // Get network-type-specific data keys (e.g. 'ed2kUploadedDelta', 'bittorrentUploadedDelta')
+    const uploadedKey = `${networkType}UploadedDelta`;
+    const downloadedKey = `${networkType}DownloadedDelta`;
 
     const uploadedData = historicalData.data.map(d => d[uploadedKey] || 0);
     const downloadedData = historicalData.data.map(d => d[downloadedKey] || 0);
@@ -189,7 +184,7 @@ const ClientTransferChart = ({ historicalData, clientType, theme, historicalRang
 
     // Update without animation to prevent bounce
     chartInstance.current.update('none');
-  }, [chartReady, historicalData, theme, historicalRange, clientType]);
+  }, [chartReady, historicalData, theme, historicalRange, networkType]);
 
   if (!historicalData || !historicalData.data || historicalData.data.length === 0) {
     return h('p', { className: 'text-center text-gray-500 dark:text-gray-400 text-sm py-8' }, 'No data available');

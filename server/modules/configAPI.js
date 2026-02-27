@@ -11,20 +11,24 @@ const config = require('./config');
 const configTester = require('../lib/configTester');
 const response = require('../lib/responseFormatter');
 const eventScriptingManager = require('../lib/EventScriptingManager');
+const { requireCapability, requireAdmin } = require('../middleware/capabilities');
 
-// Singleton managers - imported directly instead of injected
-const amuleManager = require('./amuleManager');
-const rtorrentManager = require('./rtorrentManager');
-const qbittorrentManager = require('./qbittorrentManager');
+// Client registry - replaces direct singleton manager imports
+const registry = require('../lib/ClientRegistry');
 
 class ConfigAPI extends BaseModule {
   constructor() {
     super();
     this.initializeServices = null;
+    this.reinitializeClients = null;
   }
 
   setInitializeServices(fn) {
     this.initializeServices = fn;
+  }
+
+  setReinitializeClients(fn) {
+    this.reinitializeClients = fn;
   }
 
   // ==========================================================================
@@ -36,74 +40,53 @@ class ConfigAPI extends BaseModule {
    * For getDefaults: checks environment variables directly
    * For getCurrent: uses config.isFromEnv() to check if value is from env and not overridden
    */
-  buildFromEnvMeta(useConfigCheck = false) {
-    if (useConfigCheck) {
-      // For getCurrent - check if values come from env and are not overridden
-      return {
-        host: config.isFromEnv('server.host'),
-        port: config.isFromEnv('server.port'),
-        amuleEnabled: config.isFromEnv('amule.enabled'),
-        amuleHost: config.isFromEnv('amule.host'),
-        amulePort: config.isFromEnv('amule.port'),
-        amuleSharedFilesReloadInterval: config.isFromEnv('amule.sharedFilesReloadIntervalHours'),
-        serverAuthEnabled: config.isFromEnv('server.auth.enabled'),
-        serverAuthPassword: config.isFromEnv('server.auth.password'),
-        amulePassword: config.isFromEnv('amule.password'),
-        rtorrentEnabled: config.isFromEnv('rtorrent.enabled'),
-        rtorrentHost: config.isFromEnv('rtorrent.host'),
-        rtorrentPort: config.isFromEnv('rtorrent.port'),
-        rtorrentPath: config.isFromEnv('rtorrent.path'),
-        rtorrentUsername: config.isFromEnv('rtorrent.username'),
-        rtorrentPassword: config.isFromEnv('rtorrent.password'),
-        qbittorrentEnabled: config.isFromEnv('qbittorrent.enabled'),
-        qbittorrentHost: config.isFromEnv('qbittorrent.host'),
-        qbittorrentPort: config.isFromEnv('qbittorrent.port'),
-        qbittorrentUsername: config.isFromEnv('qbittorrent.username'),
-        qbittorrentPassword: config.isFromEnv('qbittorrent.password'),
-        qbittorrentUseSsl: config.isFromEnv('qbittorrent.useSsl'),
-        sonarrUrl: config.isFromEnv('integrations.sonarr.url'),
-        sonarrApiKey: config.isFromEnv('integrations.sonarr.apiKey'),
-        sonarrSearchInterval: config.isFromEnv('integrations.sonarr.searchIntervalHours'),
-        radarrUrl: config.isFromEnv('integrations.radarr.url'),
-        radarrApiKey: config.isFromEnv('integrations.radarr.apiKey'),
-        radarrSearchInterval: config.isFromEnv('integrations.radarr.searchIntervalHours'),
-        prowlarrUrl: config.isFromEnv('integrations.prowlarr.url'),
-        prowlarrApiKey: config.isFromEnv('integrations.prowlarr.apiKey')
-      };
-    } else {
-      // For getDefaults - check environment variables directly
-      return {
-        host: !!process.env.BIND_ADDRESS,
-        port: !!process.env.PORT,
-        amuleEnabled: process.env.AMULE_ENABLED !== undefined,
-        amuleHost: !!process.env.AMULE_HOST,
-        amulePort: !!process.env.AMULE_PORT,
-        amuleSharedFilesReloadInterval: !!process.env.AMULE_SHARED_FILES_RELOAD_INTERVAL_HOURS,
-        serverAuthEnabled: process.env.WEB_AUTH_ENABLED !== undefined,
-        serverAuthPassword: !!process.env.WEB_AUTH_PASSWORD,
-        amulePassword: !!process.env.AMULE_PASSWORD,
-        rtorrentEnabled: process.env.RTORRENT_ENABLED !== undefined,
-        rtorrentHost: !!process.env.RTORRENT_HOST,
-        rtorrentPort: !!process.env.RTORRENT_PORT,
-        rtorrentPath: !!process.env.RTORRENT_PATH,
-        rtorrentUsername: !!process.env.RTORRENT_USERNAME,
-        rtorrentPassword: !!process.env.RTORRENT_PASSWORD,
-        qbittorrentEnabled: process.env.QBITTORRENT_ENABLED !== undefined,
-        qbittorrentHost: !!process.env.QBITTORRENT_HOST,
-        qbittorrentPort: !!process.env.QBITTORRENT_PORT,
-        qbittorrentUsername: !!process.env.QBITTORRENT_USERNAME,
-        qbittorrentPassword: !!process.env.QBITTORRENT_PASSWORD,
-        qbittorrentUseSsl: process.env.QBITTORRENT_USE_SSL !== undefined,
-        sonarrUrl: !!process.env.SONARR_URL,
-        sonarrApiKey: !!process.env.SONARR_API_KEY,
-        sonarrSearchInterval: !!process.env.SONARR_SEARCH_INTERVAL_HOURS,
-        radarrUrl: !!process.env.RADARR_URL,
-        radarrApiKey: !!process.env.RADARR_API_KEY,
-        radarrSearchInterval: !!process.env.RADARR_SEARCH_INTERVAL_HOURS,
-        prowlarrUrl: !!process.env.PROWLARR_URL,
-        prowlarrApiKey: !!process.env.PROWLARR_API_KEY
-      };
-    }
+  buildFromEnvMeta() {
+    // Uses config.isFromEnv() which handles flat client env vars (AMULE_PASSWORD)
+    // plus server/integration vars from ENV_VAR_MAP
+    return {
+      host: config.isFromEnv('server.host'),
+      port: config.isFromEnv('server.port'),
+      serverAuthEnabled: config.isFromEnv('server.auth.enabled'),
+      serverAuthPassword: config.isFromEnv('server.auth.password'),
+      serverAuthAdminUsername: config.isFromEnv('server.auth.adminUsername'),
+      amuleEnabled: config.isFromEnv('amule.enabled'),
+      amuleHost: config.isFromEnv('amule.host'),
+      amulePort: config.isFromEnv('amule.port'),
+      amulePassword: config.isFromEnv('amule.password'),
+      amuleSharedFilesReloadInterval: config.isFromEnv('amule.sharedFilesReloadIntervalHours'),
+      rtorrentEnabled: config.isFromEnv('rtorrent.enabled'),
+      rtorrentHost: config.isFromEnv('rtorrent.host'),
+      rtorrentPort: config.isFromEnv('rtorrent.port'),
+      rtorrentPath: config.isFromEnv('rtorrent.path'),
+      rtorrentUsername: config.isFromEnv('rtorrent.username'),
+      rtorrentPassword: config.isFromEnv('rtorrent.password'),
+      qbittorrentEnabled: config.isFromEnv('qbittorrent.enabled'),
+      qbittorrentHost: config.isFromEnv('qbittorrent.host'),
+      qbittorrentPort: config.isFromEnv('qbittorrent.port'),
+      qbittorrentUsername: config.isFromEnv('qbittorrent.username'),
+      qbittorrentPassword: config.isFromEnv('qbittorrent.password'),
+      qbittorrentUseSsl: config.isFromEnv('qbittorrent.useSsl'),
+      delugeEnabled: config.isFromEnv('deluge.enabled'),
+      delugeHost: config.isFromEnv('deluge.host'),
+      delugePort: config.isFromEnv('deluge.port'),
+      delugePassword: config.isFromEnv('deluge.password'),
+      delugeUseSsl: config.isFromEnv('deluge.useSsl'),
+      transmissionEnabled: config.isFromEnv('transmission.enabled'),
+      transmissionHost: config.isFromEnv('transmission.host'),
+      transmissionPort: config.isFromEnv('transmission.port'),
+      transmissionUsername: config.isFromEnv('transmission.username'),
+      transmissionPassword: config.isFromEnv('transmission.password'),
+      transmissionUseSsl: config.isFromEnv('transmission.useSsl'),
+      transmissionPath: config.isFromEnv('transmission.path'),
+      sonarrUrl: config.isFromEnv('integrations.sonarr.url'),
+      sonarrApiKey: config.isFromEnv('integrations.sonarr.apiKey'),
+      sonarrSearchInterval: config.isFromEnv('integrations.sonarr.searchIntervalHours'),
+      radarrUrl: config.isFromEnv('integrations.radarr.url'),
+      radarrApiKey: config.isFromEnv('integrations.radarr.apiKey'),
+      radarrSearchInterval: config.isFromEnv('integrations.radarr.searchIntervalHours'),
+      prowlarrUrl: config.isFromEnv('integrations.prowlarr.url'),
+      prowlarrApiKey: config.isFromEnv('integrations.prowlarr.apiKey')
+    };
   }
 
   /**
@@ -114,10 +97,6 @@ class ConfigAPI extends BaseModule {
     if (!currentConfig) return;
 
     const passwordPaths = [
-      { new: 'server.auth.password', current: 'server.auth.password' },
-      { new: 'amule.password', current: 'amule.password' },
-      { new: 'rtorrent.password', current: 'rtorrent.password' },
-      { new: 'qbittorrent.password', current: 'qbittorrent.password' },
       { new: 'integrations.sonarr.apiKey', current: 'integrations.sonarr.apiKey' },
       { new: 'integrations.radarr.apiKey', current: 'integrations.radarr.apiKey' },
       { new: 'integrations.prowlarr.apiKey', current: 'integrations.prowlarr.apiKey' }
@@ -130,6 +109,24 @@ class ConfigAPI extends BaseModule {
       // If password is missing or masked, use current value
       if ((!newValue || newValue === '********') && currentValue) {
         config.setValueByPath(newConfig, newPath, currentValue);
+      }
+    }
+
+    // Merge masked passwords in clients array
+    if (Array.isArray(newConfig.clients) && Array.isArray(currentConfig.clients)) {
+      const indexedFields = config.getClientEnvFields();
+      for (const newEntry of newConfig.clients) {
+        // Match by id, or by type+host+port for new entries without id
+        const currentEntry = currentConfig.clients.find(c => c.id && c.id === newEntry.id)
+          || currentConfig.clients.find(c => c.type === newEntry.type && c.host === newEntry.host && c.port === newEntry.port);
+        if (!currentEntry) continue;
+        const fields = indexedFields?.[newEntry.type];
+        if (!fields) continue;
+        for (const def of Object.values(fields)) {
+          if (def.sensitive && (!newEntry[def.field] || newEntry[def.field] === '********') && currentEntry[def.field]) {
+            newEntry[def.field] = currentEntry[def.field];
+          }
+        }
       }
     }
   }
@@ -205,9 +202,14 @@ class ConfigAPI extends BaseModule {
         return response.notFound(res, 'No configuration loaded');
       }
 
+      // Annotate each client entry with per-instance _fromEnv metadata
+      if (Array.isArray(currentConfig.clients)) {
+        config.annotateClientsFromEnv(currentConfig.clients);
+      }
+
       res.json({
         ...currentConfig,
-        _meta: { fromEnv: this.buildFromEnvMeta(true) }
+        _meta: { fromEnv: this.buildFromEnvMeta() }
       });
     } catch (err) {
       this.log('❌ Error getting current config:', err.message);
@@ -225,7 +227,7 @@ class ConfigAPI extends BaseModule {
 
       res.json({
         ...envConfig,
-        _meta: { fromEnv: this.buildFromEnvMeta(false) }
+        _meta: { fromEnv: this.buildFromEnvMeta() }
       });
     } catch (err) {
       this.log('❌ Error getting defaults:', err.message);
@@ -280,7 +282,7 @@ class ConfigAPI extends BaseModule {
 
       // Test aMule connection if provided and enabled
       if (amule && amule.enabled !== false) {
-        const password = amule.password || currentConfig.amule.password;
+        const password = amule.password || (amule.instanceId ? config.getClientConfig(amule.instanceId)?.password : null);
         this.log(`🧪 Testing aMule connection to ${amule.host}:${amule.port}...`);
         results.amule = await configTester.testAmuleConnection(amule.host, amule.port, password);
         this.logTestResult('aMule connection', results.amule);
@@ -288,7 +290,7 @@ class ConfigAPI extends BaseModule {
 
       // Test rtorrent connection if provided and enabled
       if (rtorrent && rtorrent.enabled) {
-        const password = rtorrent.password || currentConfig.rtorrent?.password;
+        const password = rtorrent.password || (rtorrent.instanceId ? config.getClientConfig(rtorrent.instanceId)?.password : null);
         this.log(`🧪 Testing rtorrent connection to ${rtorrent.host}:${rtorrent.port}${rtorrent.path || '/RPC2'}...`);
         results.rtorrent = await configTester.testRtorrentConnection(
           rtorrent.host,
@@ -303,7 +305,7 @@ class ConfigAPI extends BaseModule {
       // Test qBittorrent connection if provided and enabled
       const { qbittorrent } = req.body;
       if (qbittorrent && qbittorrent.enabled) {
-        const password = qbittorrent.password || currentConfig.qbittorrent?.password;
+        const password = qbittorrent.password || (qbittorrent.instanceId ? config.getClientConfig(qbittorrent.instanceId)?.password : null);
         this.log(`🧪 Testing qBittorrent connection to ${qbittorrent.host}:${qbittorrent.port}...`);
         results.qbittorrent = await configTester.testQbittorrentConnection(
           qbittorrent.host,
@@ -313,6 +315,25 @@ class ConfigAPI extends BaseModule {
           qbittorrent.useSsl
         );
         this.logTestResult('qBittorrent connection', results.qbittorrent);
+      }
+
+      // Test Deluge connection if provided and enabled
+      const { deluge } = req.body;
+      if (deluge && deluge.enabled) {
+        const password = deluge.password || (deluge.instanceId ? config.getClientConfig(deluge.instanceId)?.password : null);
+        this.log(`🧪 Testing Deluge connection to ${deluge.host}:${deluge.port}...`);
+        results.deluge = await configTester.testDelugeConnection(deluge.host, deluge.port, password, deluge.useSsl);
+        this.logTestResult('Deluge connection', results.deluge);
+      }
+
+      // Test Transmission connection if provided and enabled
+      const { transmission } = req.body;
+      if (transmission && transmission.enabled) {
+        const password = transmission.password || (transmission.instanceId ? config.getClientConfig(transmission.instanceId)?.password : null);
+        const username = transmission.username || (transmission.instanceId ? config.getClientConfig(transmission.instanceId)?.username : null);
+        this.log(`🧪 Testing Transmission connection to ${transmission.host}:${transmission.port}...`);
+        results.transmission = await configTester.testTransmissionConnection(transmission.host, transmission.port, username, password, transmission.useSsl, transmission.path);
+        this.logTestResult('Transmission connection', results.transmission);
       }
 
       // Test directories if provided
@@ -454,31 +475,13 @@ class ConfigAPI extends BaseModule {
 
       this.log('✅ Configuration saved successfully');
 
-      // Shutdown any existing connections before reinitializing
-      if (amuleManager) {
-        this.log('🔄 Closing existing aMule connection...');
+      // Shutdown all existing connections before reinitializing
+      for (const mgr of registry.getAll()) {
+        this.log(`🔄 Closing existing ${mgr.displayName} connection (${mgr.instanceId})...`);
         try {
-          await amuleManager.shutdown();
+          await mgr.shutdown();
         } catch (err) {
-          this.log('⚠️  Error shutting down aMule connection:', err.message);
-        }
-      }
-
-      if (rtorrentManager) {
-        this.log('🔄 Closing existing rtorrent connection...');
-        try {
-          await rtorrentManager.shutdown();
-        } catch (err) {
-          this.log('⚠️  Error shutting down rtorrent connection:', err.message);
-        }
-      }
-
-      if (qbittorrentManager) {
-        this.log('🔄 Closing existing qBittorrent connection...');
-        try {
-          await qbittorrentManager.shutdown();
-        } catch (err) {
-          this.log('⚠️  Error shutting down qBittorrent connection:', err.message);
+          this.log(`⚠️  Error shutting down ${mgr.instanceId}:`, err.message);
         }
       }
 
@@ -492,36 +495,14 @@ class ConfigAPI extends BaseModule {
           this.log('⚠️  Service initialization failed:', err.message);
           // Don't fail the save if initialization fails - user can restart server
         }
-      } else {
-        // Settings changed after initial setup - reconnect clients
-        if (amuleManager) {
-          this.log('🔄 Connecting to aMule with new settings...');
-          try {
-            await amuleManager.startConnection();
-            this.log('✅ aMule reconnected successfully');
-          } catch (err) {
-            this.log('⚠️  aMule reconnection failed:', err.message);
-          }
-        }
-
-        if (rtorrentManager) {
-          this.log('🔄 Connecting to rtorrent with new settings...');
-          try {
-            await rtorrentManager.startConnection();
-            this.log('✅ rtorrent reconnected successfully');
-          } catch (err) {
-            this.log('⚠️  rtorrent reconnection failed:', err.message);
-          }
-        }
-
-        if (qbittorrentManager) {
-          this.log('🔄 Connecting to qBittorrent with new settings...');
-          try {
-            await qbittorrentManager.startConnection();
-            this.log('✅ qBittorrent reconnected successfully');
-          } catch (err) {
-            this.log('⚠️  qBittorrent reconnection failed:', err.message);
-          }
+      } else if (this.reinitializeClients) {
+        // Settings changed — reinitialize all client connections
+        // (handles add/remove/change of instances)
+        try {
+          await this.reinitializeClients();
+          this.log('✅ Client connections reinitialized successfully');
+        } catch (err) {
+          this.log('⚠️  Client reinitialization failed:', err.message);
         }
       }
 
@@ -543,29 +524,17 @@ class ConfigAPI extends BaseModule {
     // All routes use JSON
     router.use(express.json());
 
-    // GET /api/config/interfaces - Get available network interfaces
-    router.get('/interfaces', this.getInterfaces.bind(this));
+    // Read-only config routes — admin only (settings is not a capability, it's admin-only)
+    router.get('/current', requireAdmin, this.getCurrent.bind(this));
+    router.get('/defaults', requireAdmin, this.getDefaults.bind(this));
 
-    // GET /api/config/status - Check first-run status
-    router.get('/status', this.getStatus.bind(this));
-
-    // GET /api/config/current - Get current configuration (masked)
-    router.get('/current', this.getCurrent.bind(this));
-
-    // GET /api/config/defaults - Get default configuration with env overrides
-    router.get('/defaults', this.getDefaults.bind(this));
-
-    // POST /api/config/check-path - Check directory permissions
-    router.post('/check-path', this.checkPath.bind(this));
-
-    // POST /api/config/test - Test configuration components
-    router.post('/test', this.testConfig.bind(this));
-
-    // POST /api/config/test-script - Test script path
-    router.post('/test-script', this.testScript.bind(this));
-
-    // POST /api/config/save - Save configuration
-    router.post('/save', this.saveConfig.bind(this));
+    // Admin-only config routes
+    router.get('/interfaces', requireAdmin, this.getInterfaces.bind(this));
+    router.get('/status', requireAdmin, this.getStatus.bind(this));
+    router.post('/check-path', requireAdmin, this.checkPath.bind(this));
+    router.post('/test', requireAdmin, this.testConfig.bind(this));
+    router.post('/test-script', requireAdmin, this.testScript.bind(this));
+    router.post('/save', requireAdmin, this.saveConfig.bind(this));
 
     // Mount router
     app.use('/api/config', router);

@@ -9,8 +9,8 @@ const fs = require('fs').promises;
 const path = require('path');
 const { hoursToMs, minutesToMs, MS_PER_HOUR } = require('../lib/timeRange');
 
-// Singleton managers - imported directly instead of injected
-const amuleManager = require('./amuleManager');
+// Client registry - replaces direct singleton manager imports
+const registry = require('../lib/ClientRegistry');
 
 // Debug mode - set to true to see detailed search decisions
 const DEBUG = true;
@@ -222,7 +222,15 @@ class ArrManager extends BaseModule {
     const pollInterval = 10000; // 10 seconds
     const startTime = Date.now();
 
-    while (!amuleManager.acquireSearchLock()) {
+    const configuredId = config.getConfig()?.integrations?.amuleInstanceId;
+    const amuleMgr = configuredId
+      ? registry.get(configuredId)
+      : registry.getByType('amule').find(m => m.isConnected());
+    if (!amuleMgr) {
+      this.log(`⚠️  No aMule instance connected, skipping ${service} automatic search`);
+      return false;
+    }
+    while (!amuleMgr.acquireSearchLock()) {
       if (Date.now() - startTime > maxWaitTime) {
         this.log(`⚠️  Timeout waiting for search lock, skipping ${service} automatic search`);
         return false;
@@ -231,9 +239,11 @@ class ArrManager extends BaseModule {
       await new Promise(resolve => setTimeout(resolve, pollInterval));
     }
 
-    amuleManager.searchInProgress = true;
-    this.broadcast({ type: 'search-lock', locked: true });
-    this.log(`🔒 Search lock acquired for ${service} automatic search`);
+    amuleMgr.searchInProgress = true;
+    this.broadcast({ type: 'search-lock', locked: true }, {
+      filter: u => u?.isAdmin || u?.capabilities?.includes('search')
+    });
+    this.log(`🔒 Search lock acquired for ${service} automatic search (${amuleMgr.instanceId})`);
     return true;
   }
 
@@ -241,8 +251,14 @@ class ArrManager extends BaseModule {
    * Release search lock
    */
   releaseSearchLock(service) {
-    amuleManager.releaseSearchLock();
-    this.broadcast({ type: 'search-lock', locked: false });
+    const configuredId = config.getConfig()?.integrations?.amuleInstanceId;
+    const amuleMgr = configuredId
+      ? registry.get(configuredId)
+      : registry.getByType('amule').find(m => m.isConnected());
+    if (amuleMgr) amuleMgr.releaseSearchLock();
+    this.broadcast({ type: 'search-lock', locked: false }, {
+      filter: u => u?.isAdmin || u?.capabilities?.includes('search')
+    });
     this.log(`🔓 Search lock released after ${service} automatic search`);
   }
 

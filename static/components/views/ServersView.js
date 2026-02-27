@@ -6,11 +6,10 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { Table, DeleteModal, MobileSortButton, Button, Input, IconButton } from '../common/index.js';
+import { Table, DeleteModal, MobileSortButton, Button, Input, IconButton, AmuleInstanceSelector } from '../common/index.js';
 import { DEFAULT_SORT_CONFIG, VIEW_TITLE_STYLES } from '../../utils/index.js';
-import { useModal, useTableState } from '../../hooks/index.js';
+import { useModal, useTableState, useAmuleInstanceSelector } from '../../hooks/index.js';
 import { useStickyToolbar } from '../../contexts/StickyHeaderContext.js';
-import { useLiveData } from '../../contexts/LiveDataContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useDataFetch } from '../../contexts/DataFetchContext.js';
 import { useActions } from '../../contexts/ActionsContext.js';
@@ -22,15 +21,22 @@ const { createElement: h, useCallback, useEffect, useMemo } = React;
  */
 const ServersView = () => {
   // Get data from contexts
-  const { dataStats } = useLiveData();
-  const { dataServers, dataServersEd2kLinks, setDataServersEd2kLinks, dataLoaded } = useStaticData();
+  const { dataServers, dataServersEd2kLinks, setDataServersEd2kLinks, dataLoaded, instances } = useStaticData();
   const { fetchServers } = useDataFetch();
   const actions = useActions();
 
-  // Fetch servers on mount
+  // Multi-instance: aMule instance selector
+  const {
+    connectedInstances: amuleInstances,
+    showSelector: showAmuleSelector,
+    selectedId: effectiveInstance,
+    selectInstance: selectAmuleInstance
+  } = useAmuleInstanceSelector();
+
+  // Fetch servers on mount (and when selected instance changes)
   useEffect(() => {
-    fetchServers();
-  }, [fetchServers]);
+    fetchServers(effectiveInstance);
+  }, [fetchServers, effectiveInstance]);
 
   // Use table state hook for sorting and pagination (no text filtering)
   const {
@@ -55,11 +61,13 @@ const ServersView = () => {
   const servers = dataServers;
   const ed2kLinks = dataServersEd2kLinks;
 
-  // Memoize connected server address - only recalculate when connection state changes
-  // This prevents re-renders when only speed stats change (every 5 seconds)
+  // Memoize connected server address from selected instance's network status
   const connectedServerAddress = useMemo(() => {
-    return dataStats?.EC_TAG_CONNSTATE?.EC_TAG_SERVER?._value || null;
-  }, [dataStats?.EC_TAG_CONNSTATE?.EC_TAG_SERVER?._value]);
+    // Multi-instance: use selected instance, single: use first connected aMule
+    const instId = effectiveInstance || amuleInstances[0]?.id;
+    if (!instId) return null;
+    return instances[instId]?.networkStatus?.ed2k?.serverAddress || null;
+  }, [effectiveInstance, amuleInstances, instances]);
 
   const isConnectedServer = useCallback(
     (serverAddress) => connectedServerAddress && serverAddress === connectedServerAddress,
@@ -73,9 +81,9 @@ const ServersView = () => {
   });
 
   // Local handlers
-  const onRefresh = fetchServers;
+  const onRefresh = useCallback(() => fetchServers(effectiveInstance), [fetchServers, effectiveInstance]);
   const onEd2kLinksChange = setDataServersEd2kLinks;
-  const onAddEd2kLinks = () => actions.search.addEd2kLinks(ed2kLinks, 0, true); // (input, categoryId, isServerList)
+  const onAddEd2kLinks = () => actions.search.addEd2kLinks(ed2kLinks, 'Default', true, effectiveInstance);
 
   // Server action handler - intercepts 'remove' to show confirmation modal
   const handleServerAction = useCallback((ipPort, action) => {
@@ -85,17 +93,17 @@ const ServersView = () => {
       const serverName = server?.EC_TAG_SERVER_NAME || ipPort;
       openDeleteModal({ serverAddress: ipPort, serverName });
     } else {
-      // Handle other actions directly
-      actions.servers.action(ipPort, action);
+      // Handle other actions directly (pass instanceId for multi-instance)
+      actions.servers.action(ipPort, action, effectiveInstance);
     }
-  }, [servers, openDeleteModal, actions.servers]);
+  }, [servers, openDeleteModal, actions.servers, effectiveInstance]);
 
   // Confirm delete handler
   const handleConfirmDelete = useCallback(() => {
-    actions.servers.remove(deleteModal.serverAddress);
+    actions.servers.remove(deleteModal.serverAddress, effectiveInstance);
     closeDeleteModal();
-    setTimeout(() => fetchServers(), 500);
-  }, [deleteModal.serverAddress, actions.servers, closeDeleteModal, fetchServers]);
+    setTimeout(() => fetchServers(effectiveInstance), 500);
+  }, [deleteModal.serverAddress, actions.servers, closeDeleteModal, fetchServers, effectiveInstance]);
 
   const columns = [
     {
@@ -284,14 +292,26 @@ const ServersView = () => {
     }, dataLoaded.servers ? 'Refresh' : h('span', { className: 'flex items-center gap-2' }, h('div', { className: 'loader' }), 'Loading...')),
   [onRefresh, dataLoaded.servers]);
 
+  const instanceSelector = useMemo(() =>
+    h(AmuleInstanceSelector, {
+      connectedInstances: amuleInstances,
+      selectedId: effectiveInstance,
+      onSelect: selectAmuleInstance,
+      showSelector: showAmuleSelector,
+      variant: 'dropdown',
+      className: 'text-xs'
+    }),
+  [amuleInstances, effectiveInstance, selectAmuleInstance, showAmuleSelector]);
+
   const mobileHeaderContent = useMemo(() =>
     h('div', { className: 'flex items-center gap-2' },
       h('h2', { className: VIEW_TITLE_STYLES.desktop }, `Servers (${servers.length})`),
+      instanceSelector,
       h('div', { className: 'flex-1' }),
       mobileSortButton,
       refreshButton
     ),
-  [servers.length, mobileSortButton, refreshButton]);
+  [servers.length, instanceSelector, mobileSortButton, refreshButton]);
 
   // Register sticky toolbar for mobile scroll behavior
   const mobileHeaderRef = useStickyToolbar(mobileHeaderContent);
@@ -300,6 +320,7 @@ const ServersView = () => {
     // Header with title + compact controls
     h('div', { className: 'flex items-center gap-2', ref: mobileHeaderRef },
       h('h2', { className: VIEW_TITLE_STYLES.desktop }, `Servers (${servers.length})`),
+      instanceSelector,
       h('div', { className: 'flex-1' }),
       h('div', { className: 'xl:hidden' }, mobileSortButton),
       refreshButton

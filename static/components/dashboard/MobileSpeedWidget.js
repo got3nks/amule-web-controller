@@ -4,14 +4,16 @@
  * Compact speed chart with current speeds and network status for mobile view
  * Shows 24h speed history with simplified data points for performance
  * Supports switching between aMule and BitTorrent (rTorrent + qBittorrent) when both are active
+ * Multi-instance mode: per-instance network status dots with instance names
  */
 
 import React from 'https://esm.sh/react@18.2.0';
 import { formatSpeed } from '../../utils/index.js';
 import { loadChartJs } from '../../utils/chartLoader.js';
-import { getED2KStatus, getKADStatus, getRtorrentStatus, getQbittorrentStatus, getStatusDotClass } from '../../utils/networkStatus.js';
+import { getStatusDotClass } from '../../utils/networkStatus.js';
 import ClientIcon from '../common/ClientIcon.js';
 import { useClientFilter } from '../../contexts/ClientFilterContext.js';
+import { useStaticData } from '../../contexts/StaticDataContext.js';
 
 const { createElement: h, useEffect, useRef, useState } = React;
 
@@ -19,24 +21,15 @@ const { createElement: h, useEffect, useRef, useState } = React;
  * Downsample data for mobile performance
  * 288 points = 1 data point every 5 minutes for 24 hours
  * @param {Array} data - Original data array
- * @param {string} clientType - 'amule' or 'rtorrent'
+ * @param {string} networkType - 'ed2k' or 'bittorrent'
  * @param {number} targetPoints - Target number of data points
  * @returns {Array} Downsampled data
  */
-const downsampleData = (data, clientType, targetPoints = 288) => {
+const downsampleData = (data, networkType, targetPoints = 288) => {
   if (!data || data.length <= targetPoints) return data;
 
-  let uploadKey, downloadKey;
-  if (clientType === 'amule') {
-    uploadKey = 'amuleUploadSpeed';
-    downloadKey = 'amuleDownloadSpeed';
-  } else if (clientType === 'bittorrent') {
-    uploadKey = 'bittorrentUploadSpeed';
-    downloadKey = 'bittorrentDownloadSpeed';
-  } else {
-    uploadKey = 'rtorrentUploadSpeed';
-    downloadKey = 'rtorrentDownloadSpeed';
-  }
+  const uploadKey = `${networkType}UploadSpeed`;
+  const downloadKey = `${networkType}DownloadSpeed`;
 
   const step = Math.ceil(data.length / targetPoints);
   const result = [];
@@ -70,24 +63,25 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
   const [chartReady, setChartReady] = useState(false);
 
   // Get client connection status from context
-  const { amuleConnected, rtorrentConnected, qbittorrentConnected, bittorrentConnected } = useClientFilter();
+  const { ed2kConnected, bittorrentConnected } = useClientFilter();
+  const { instances } = useStaticData();
 
   // Show toggle when both aMule and BitTorrent clients are connected
-  const showBothClients = amuleConnected && bittorrentConnected;
+  const showBothClients = ed2kConnected && bittorrentConnected;
 
-  // State for selected client (when both are available)
-  const [selectedClient, setSelectedClient] = useState('amule');
+  // State for selected network type (when both are available)
+  const [selectedNetwork, setSelectedNetwork] = useState('ed2k');
 
-  // Auto-select the available client when only one is connected
+  // Auto-select the available network when only one is connected
   useEffect(() => {
     if (!showBothClients) {
-      if (amuleConnected) {
-        setSelectedClient('amule');
+      if (ed2kConnected) {
+        setSelectedNetwork('ed2k');
       } else if (bittorrentConnected) {
-        setSelectedClient('bittorrent');
+        setSelectedNetwork('bittorrent');
       }
     }
-  }, [showBothClients, amuleConnected, bittorrentConnected]);
+  }, [showBothClients, ed2kConnected, bittorrentConnected]);
 
   // Load Chart.js library on mount
   useEffect(() => {
@@ -103,7 +97,7 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
     if (!chartReady || !canvasRef.current || !window.Chart || !speedData?.data) return;
 
     // Downsample data - 288 points max (1 per 5 mins for 24h)
-    const sampledData = downsampleData(speedData.data, selectedClient, 288);
+    const sampledData = downsampleData(speedData.data, selectedNetwork, 288);
 
     const labels = sampledData.map(d => {
       const date = new Date(d.timestamp);
@@ -206,7 +200,7 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
         chartInstance.current = null;
       }
     };
-  }, [chartReady, speedData, theme, selectedClient]);
+  }, [chartReady, speedData, theme, selectedNetwork]);
 
   // ResizeObserver to handle container size changes
   useEffect(() => {
@@ -221,84 +215,110 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
     resizeObserver.observe(containerRef.current);
 
     return () => resizeObserver.disconnect();
-  }, [chartReady, speedData, theme, selectedClient]);
+  }, [chartReady, speedData, theme, selectedNetwork]);
 
-  // Get network status using shared helpers
-  const ed2k = getED2KStatus(stats);
-  const kad = getKADStatus(stats);
-  const rtStatus = getRtorrentStatus(stats);
-  const qbStatus = getQbittorrentStatus(stats);
+  // --- Network status section ---
+  // Always read from instances[id].networkStatus (backend-computed)
+  let networkStatus;
 
-  // Current speeds from each client (ensure numeric values)
-  const amuleUploadSpeed = Number(stats?.EC_TAG_STATS_UL_SPEED) || 0;
-  const amuleDownloadSpeed = Number(stats?.EC_TAG_STATS_DL_SPEED) || 0;
-  const rtorrentUploadSpeed = Number(stats?.rtorrent?.uploadSpeed) || 0;
-  const rtorrentDownloadSpeed = Number(stats?.rtorrent?.downloadSpeed) || 0;
-  const qbittorrentUploadSpeed = Number(stats?.qbittorrent?.uploadSpeed) || 0;
-  const qbittorrentDownloadSpeed = Number(stats?.qbittorrent?.downloadSpeed) || 0;
+  const tabInstances = Object.entries(instances)
+    .filter(([, i]) => i.connected && i.networkType === selectedNetwork)
+    .map(([id, i]) => ({ id, ...i }));
 
-  // Combined BitTorrent speeds (rtorrent + qBittorrent)
-  const btUploadSpeed = rtorrentUploadSpeed + qbittorrentUploadSpeed;
-  const btDownloadSpeed = rtorrentDownloadSpeed + qbittorrentDownloadSpeed;
+  if (selectedNetwork === 'ed2k') {
+    if (tabInstances.length === 1) {
+      // Single aMule: show ED2K and KAD separately
+      const inst = tabInstances[0];
+      const ed2kNs = inst.networkStatus?.ed2k;
+      const kadNs = inst.networkStatus?.kad;
+      networkStatus = h(React.Fragment, null,
+        ed2kNs && h('div', { className: 'flex items-center gap-1.5' },
+          h('div', { className: `w-2 h-2 rounded-full ${getStatusDotClass(ed2kNs.status)}` }),
+          h('span', { className: 'text-xs font-medium text-gray-600 dark:text-gray-400' },
+            `ED2K: ${ed2kNs.text}`
+          )
+        ),
+        kadNs && h('div', { className: 'flex items-center gap-1.5' },
+          h('div', { className: `w-2 h-2 rounded-full ${getStatusDotClass(kadNs.status)}` }),
+          h('span', { className: 'text-xs font-medium text-gray-600 dark:text-gray-400' },
+            `KAD: ${kadNs.text}`
+          )
+        )
+      );
+    } else {
+      // Multi aMule: per-instance combined ED2K/KAD
+      networkStatus = h(React.Fragment, null,
+        ...tabInstances.map(inst => {
+          const ed2kNs = inst.networkStatus?.ed2k;
+          const kadNs = inst.networkStatus?.kad;
+          if (!ed2kNs && !kadNs) return null;
 
-  // Current speeds based on selected client
-  const uploadSpeed = selectedClient === 'amule' ? amuleUploadSpeed : btUploadSpeed;
-  const downloadSpeed = selectedClient === 'amule' ? amuleDownloadSpeed : btDownloadSpeed;
+          const ed2kText = ed2kNs ? `${ed2kNs.text}` : '?';
+          const kadText = kadNs ? `${kadNs.text}` : '?';
+          // Use worst of ED2K/KAD for the dot color
+          const worstStatus = ed2kNs && kadNs
+            ? (ed2kNs.status === 'red' || kadNs.status === 'red' ? 'red'
+              : ed2kNs.status === 'yellow' || kadNs.status === 'yellow' ? 'yellow' : 'green')
+            : (ed2kNs?.status || kadNs?.status || 'red');
 
-  // Client toggle button component
-  const clientToggle = showBothClients && h('div', {
+          return h('div', { key: inst.id, className: 'flex items-center gap-1.5' },
+            h('div', { className: `w-2 h-2 rounded-full ${getStatusDotClass(worstStatus)}` }),
+            h('span', { className: 'text-xs font-medium text-gray-600 dark:text-gray-400' },
+              `${inst.name}: ${ed2kText} / ${kadText}`
+            )
+          );
+        }).filter(Boolean)
+      );
+    }
+  } else {
+    // BitTorrent: per-instance status
+    networkStatus = h(React.Fragment, null,
+      ...tabInstances.map(inst => {
+        const ns = inst.networkStatus;
+        if (!ns) return null;
+        return h('div', { key: inst.id, className: 'flex items-center gap-1.5' },
+          h('div', { className: `w-2 h-2 rounded-full ${getStatusDotClass(ns.status)}` }),
+          h('span', { className: 'text-xs font-medium text-gray-600 dark:text-gray-400' },
+            `${inst.name}: ${ns.text}`
+          )
+        );
+      }).filter(Boolean)
+    );
+  }
+
+  // Current speeds computed from per-instance speeds
+  const instanceSpeeds = stats?.instanceSpeeds || {};
+  let uploadSpeed = 0;
+  let downloadSpeed = 0;
+  for (const [id, inst] of Object.entries(instances)) {
+    if (inst.connected && inst.networkType === selectedNetwork) {
+      const speeds = instanceSpeeds[id];
+      if (speeds) {
+        uploadSpeed += speeds.uploadSpeed || 0;
+        downloadSpeed += speeds.downloadSpeed || 0;
+      }
+    }
+  }
+
+  // Network toggle button component
+  const networkToggle = showBothClients && h('div', {
     className: 'absolute top-2 left-2 z-10 flex rounded-md overflow-hidden border border-gray-300 dark:border-gray-600'
   },
     h('button', {
-      onClick: () => setSelectedClient('amule'),
-      className: `p-1.5 ${selectedClient === 'amule'
+      onClick: () => setSelectedNetwork('ed2k'),
+      className: `p-1.5 ${selectedNetwork === 'ed2k'
         ? 'bg-blue-100 dark:bg-blue-900/50'
         : 'bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700'}`,
       title: 'Show aMule'
-    }, h(ClientIcon, { clientType: 'amule', size: 16 })),
+    }, h(ClientIcon, { clientType: 'ed2k', size: 16 })),
     h('button', {
-      onClick: () => setSelectedClient('bittorrent'),
-      className: `p-1.5 border-l border-gray-300 dark:border-gray-600 ${selectedClient === 'bittorrent'
+      onClick: () => setSelectedNetwork('bittorrent'),
+      className: `p-1.5 border-l border-gray-300 dark:border-gray-600 ${selectedNetwork === 'bittorrent'
         ? 'bg-blue-100 dark:bg-blue-900/50'
         : 'bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700'}`,
       title: 'Show BitTorrent'
     }, h(ClientIcon, { clientType: 'bittorrent', size: 16 }))
   );
-
-  // Network status section based on selected client
-  const networkStatus = selectedClient === 'amule'
-    ? h(React.Fragment, null,
-        // ED2K status
-        h('div', { className: 'flex items-center gap-1.5' },
-          h('div', { className: `w-2 h-2 rounded-full ${getStatusDotClass(ed2k.status)}` }),
-          h('span', { className: 'text-xs font-medium text-gray-600 dark:text-gray-400' },
-            `${ed2k.label}: ${ed2k.text}`
-          )
-        ),
-        // KAD status
-        h('div', { className: 'flex items-center gap-1.5' },
-          h('div', { className: `w-2 h-2 rounded-full ${getStatusDotClass(kad.status)}` }),
-          h('span', { className: 'text-xs font-medium text-gray-600 dark:text-gray-400' },
-            `${kad.label}: ${kad.text}`
-          )
-        )
-      )
-    : h(React.Fragment, null,
-        // rTorrent status (shown when connected)
-        rtorrentConnected && h('div', { className: 'flex items-center gap-1.5' },
-          h('div', { className: `w-2 h-2 rounded-full ${getStatusDotClass(rtStatus.status)}` }),
-          h('span', { className: 'text-xs font-medium text-gray-600 dark:text-gray-400' },
-            `${rtStatus.label}: ${rtStatus.text}`
-          )
-        ),
-        // qBittorrent status (shown when connected)
-        qbittorrentConnected && h('div', { className: 'flex items-center gap-1.5' },
-          h('div', { className: `w-2 h-2 rounded-full ${getStatusDotClass(qbStatus.status)}` }),
-          h('span', { className: 'text-xs font-medium text-gray-600 dark:text-gray-400' },
-            `${qbStatus.label}: ${qbStatus.text}`
-          )
-        )
-      );
 
   // Check if data is loading
   const isLoading = !speedData?.data || !stats;
@@ -308,8 +328,8 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
   },
     // Chart container
     h('div', { className: 'relative', style: { height: '100px' } },
-      // Client toggle (when both clients available and not loading)
-      !isLoading && clientToggle,
+      // Network toggle (when both clients available and not loading)
+      !isLoading && networkToggle,
       // Chart canvas (always mounted for refs, hidden when loading)
       h('div', {
         ref: containerRef,
@@ -321,12 +341,8 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
           style: { width: '100%', height: '100%', maxWidth: '100%' }
         })
       ),
-      // Loading overlay
-      isLoading && h('div', {
-        className: 'absolute inset-0 flex items-center justify-center'
-      },
-        h('div', { className: 'loader' })
-      )
+      // Empty placeholder when loading (outer overlay handles the spinner)
+      isLoading && h('div', { className: 'absolute inset-0' })
     ),
     // Status bar
     h('div', { className: 'flex items-center justify-between py-2 px-3 bg-gray-50 dark:bg-gray-700/50 border-t border-gray-200 dark:border-gray-700' },
@@ -336,7 +352,7 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
             h('div', { className: 'h-3 w-24 bg-gray-200 dark:bg-gray-600 rounded' }),
             h('div', { className: 'h-3 w-20 bg-gray-200 dark:bg-gray-600 rounded' })
           )
-        : h('div', { className: 'flex items-center gap-3' }, networkStatus),
+        : h('div', { className: 'flex items-center gap-3 flex-wrap' }, networkStatus),
       // Current speeds (right side) - show skeleton when loading
       isLoading
         ? h('div', { className: 'flex items-center gap-3' },

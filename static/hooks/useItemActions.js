@@ -7,7 +7,8 @@
 
 import React from 'https://esm.sh/react@18.2.0';
 import { useActions } from '../contexts/ActionsContext.js';
-import { copyToClipboard, getExportLink } from '../utils/index.js';
+import { copyToClipboard, getExportLink, isBittorrentClient } from '../utils/index.js';
+import { itemKey } from '../utils/itemKey.js';
 
 const { useState, useCallback } = React;
 
@@ -33,19 +34,16 @@ export function useItemActions({
   // ============================================================================
   // SINGLE ITEM ACTIONS
   // ============================================================================
-  const handlePause = useCallback((fileHash, clientType = 'amule', fileName = null) => {
-    // Use the actual client type passed from the item
-    actions.files.pause(fileHash, clientType, fileName);
+  const handlePause = useCallback((fileHash, clientType = 'amule', fileName = null, instanceId = null) => {
+    actions.files.pause(fileHash, clientType, fileName, instanceId);
   }, [actions.files]);
 
-  const handleResume = useCallback((fileHash, clientType = 'amule', fileName = null) => {
-    // Use the actual client type passed from the item
-    actions.files.resume(fileHash, clientType, fileName);
+  const handleResume = useCallback((fileHash, clientType = 'amule', fileName = null, instanceId = null) => {
+    actions.files.resume(fileHash, clientType, fileName, instanceId);
   }, [actions.files]);
 
-  const handleStop = useCallback((fileHash, clientType = 'rtorrent', fileName = null) => {
-    // Stop is for BitTorrent clients (rtorrent and qbittorrent)
-    actions.files.stop(fileHash, clientType, fileName);
+  const handleStop = useCallback((fileHash, clientType = 'rtorrent', fileName = null, instanceId = null) => {
+    actions.files.stop(fileHash, clientType, fileName, instanceId);
   }, [actions.files]);
 
   const handleCopyLink = useCallback(async (item) => {
@@ -62,38 +60,49 @@ export function useItemActions({
   // ============================================================================
   // BATCH ACTIONS
   // ============================================================================
-  const filterBittorrentHashes = useCallback((hashes) => {
-    return hashes.filter(hash => {
-      const item = dataArray.find(d => d.hash === hash);
-      return item?.client === 'rtorrent' || item?.client === 'qbittorrent';
-    });
+  // Resolve compound keys to pre-built items for ActionsContext
+  const resolveItems = useCallback((compoundKeys) => {
+    const keySet = new Set(compoundKeys);
+    return dataArray
+      .filter(d => keySet.has(itemKey(d.instanceId, d.hash)))
+      .map(d => ({ fileHash: d.hash, clientType: d.client, instanceId: d.instanceId, fileName: d.name }));
+  }, [dataArray]);
+
+  // Filter compound keys to only BitTorrent items, return pre-built items
+  const filterBittorrentItems = useCallback((compoundKeys) => {
+    const keySet = new Set(compoundKeys);
+    return dataArray
+      .filter(d => keySet.has(itemKey(d.instanceId, d.hash)) && isBittorrentClient(d))
+      .map(d => ({ fileHash: d.hash, clientType: d.client, instanceId: d.instanceId, fileName: d.name }));
   }, [dataArray]);
 
   const handleBatchPause = useCallback(() => {
-    const hashes = bittorrentOnly
-      ? filterBittorrentHashes(Array.from(selectedFiles))
-      : getSelectedHashes();
-    if (hashes.length > 0) {
-      actions.files.pause(hashes, dataArray);
+    const selectedKeys = getSelectedHashes(); // compound keys
+    const items = bittorrentOnly
+      ? filterBittorrentItems(selectedKeys)
+      : resolveItems(selectedKeys);
+    if (items.length > 0) {
+      actions.files.pause(items);
     }
-  }, [actions.files, selectedFiles, getSelectedHashes, dataArray, bittorrentOnly, filterBittorrentHashes]);
+  }, [actions.files, getSelectedHashes, bittorrentOnly, filterBittorrentItems, resolveItems]);
 
   const handleBatchResume = useCallback(() => {
-    const hashes = bittorrentOnly
-      ? filterBittorrentHashes(Array.from(selectedFiles))
-      : getSelectedHashes();
-    if (hashes.length > 0) {
-      actions.files.resume(hashes, dataArray);
+    const selectedKeys = getSelectedHashes(); // compound keys
+    const items = bittorrentOnly
+      ? filterBittorrentItems(selectedKeys)
+      : resolveItems(selectedKeys);
+    if (items.length > 0) {
+      actions.files.resume(items);
     }
-  }, [actions.files, selectedFiles, getSelectedHashes, dataArray, bittorrentOnly, filterBittorrentHashes]);
+  }, [actions.files, getSelectedHashes, bittorrentOnly, filterBittorrentItems, resolveItems]);
 
   const handleBatchStop = useCallback(() => {
     // Stop is for BitTorrent clients (rtorrent and qbittorrent)
-    const bittorrentHashes = filterBittorrentHashes(getSelectedHashes());
-    if (bittorrentHashes.length > 0) {
-      actions.files.stop(bittorrentHashes, dataArray);
+    const items = filterBittorrentItems(getSelectedHashes());
+    if (items.length > 0) {
+      actions.files.stop(items);
     }
-  }, [actions.files, getSelectedHashes, dataArray, filterBittorrentHashes]);
+  }, [actions.files, getSelectedHashes, filterBittorrentItems]);
 
   return {
     // State

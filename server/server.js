@@ -15,15 +15,23 @@ const bodyParser = require('body-parser');
 const cookieParser = require('cookie-parser');
 const session = require('express-session');
 const SQLiteStore = require('better-sqlite3-session-store')(session);
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 // Application modules
 const config = require('./modules/config');
 const configAPI = require('./modules/configAPI');
 const authManager = require('./modules/authManager');
 const authAPI = require('./modules/authAPI');
-const amuleManager = require('./modules/amuleManager');
-const rtorrentManager = require('./modules/rtorrentManager');
-const qbittorrentManager = require('./modules/qbittorrentManager');
+const registry = require('./lib/ClientRegistry');
+// Manager class registry — adding a new client type requires one entry here + clientMeta.js
+const MANAGER_CLASSES = {
+  amule: require('./modules/amuleManager').AmuleManager,
+  rtorrent: require('./modules/rtorrentManager').RtorrentManager,
+  qbittorrent: require('./modules/qbittorrentManager').QbittorrentManager,
+  deluge: require('./modules/delugeManager').DelugeManager,
+  transmission: require('./modules/transmissionManager').TransmissionManager,
+};
 const geoIPManager = require('./modules/geoIPManager');
 const arrManager = require('./modules/arrManager');
 const metricsAPI = require('./modules/metricsAPI');
@@ -32,6 +40,8 @@ const torznabAPI = require('./modules/torznabAPI');
 const qbittorrentAPI = require('./modules/qbittorrentAPI');
 const prowlarrAPI = require('./modules/prowlarrAPI');
 const rtorrentAPI = require('./modules/rtorrentAPI');
+const delugeAPI = require('./modules/delugeAPI');
+const transmissionAPI = require('./modules/transmissionAPI');
 const webSocketHandlers = require('./modules/webSocketHandlers');
 const autoRefreshManager = require('./modules/autoRefreshManager');
 const dataFetchService = require('./lib/DataFetchService');
@@ -43,14 +53,17 @@ const filesystemAPI = require('./modules/filesystemAPI');
 const eventScriptingManager = require('./lib/EventScriptingManager');
 const notificationManager = require('./lib/NotificationManager');
 const notificationsAPI = require('./modules/notificationsAPI');
+const userAPI = require('./modules/userAPI');
 
 // Middleware
 const requireAuth = require('./middleware/auth');
+const { createTrustedProxyMiddleware } = require('./middleware/trustedProxy');
 
 // Utilities
 const MetricsDB = require('./database');
 const HashStore = require('./lib/qbittorrent/hashStore');
 const DownloadHistory = require('./lib/downloadHistory');
+const UserManager = require('./modules/userManager');
 const logger = require('./lib/logger');
 
 // ============================================================================
@@ -72,6 +85,50 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// Security headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.jsdelivr.net"],  // Preact/htm + Chart.js CDN
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      connectSrc: ["'self'", "ws:", "wss:"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameAncestors: ["'self'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      upgradeInsecureRequests: null  // App runs HTTP; HTTPS upgrade breaks non-TLS deployments
+    }
+  },
+  crossOriginEmbedderPolicy: false,  // Not needed for this app, can break WebSocket
+  crossOriginOpenerPolicy: false,    // Requires HTTPS on non-localhost origins
+  hsts: false  // Managed by reverse proxy; avoid double HSTS
+}));
+
+// Global rate limiting (200 requests per minute per IP)
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later' }
+});
+app.use('/api', globalLimiter);
+app.use('/indexer', globalLimiter);
+
+// Stricter rate limit on auth/login endpoints (20 attempts per minute)
+const authLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts, please try again later' }
+});
+app.use('/api/auth/login', authLimiter);
+app.use('/api/v2/auth/login', authLimiter);
+
 // Express middleware
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
@@ -81,9 +138,16 @@ app.use(cookieParser());
 let sessionMiddleware = null;
 
 // --- WebSocket broadcast setup ---
-const createBroadcaster = (wss) => (msg) => {
+// Supports optional per-client filtering and message transformation:
+//   broadcast(msg)                                — send to all clients (backwards-compatible)
+//   broadcast(msg, { filter: u => bool })         — skip clients whose ws.user doesn't match
+//   broadcast(msg, { transform: (msg, u) => msg })— per-client message transformation
+const createBroadcaster = (wss) => (msg, { filter, transform } = {}) => {
     wss.clients.forEach(c => {
-        if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify(msg));
+        if (c.readyState !== WebSocket.OPEN) return;
+        if (filter && !filter(c.user)) return;
+        const payload = transform ? transform(msg, c.user) : msg;
+        if (payload) c.send(JSON.stringify(payload));
     });
 };
 const broadcastFn = createBroadcaster(wss);
@@ -106,6 +170,10 @@ const downloadHistory = new DownloadHistory(historyDbPath);
 const moveOpsDbPath = config.getMoveOpsDbPath();
 moveOperationManager.initDB(moveOpsDbPath);
 
+// User database
+const userDbPath = config.getUserDbPath();
+const userManager = new UserManager(userDbPath);
+
 // ============================================================================
 // MODULE DEPENDENCY INJECTION
 // ============================================================================
@@ -118,16 +186,14 @@ const deps = {
   downloadHistoryDB: downloadHistory,
   hashStore,
   wss,
-  broadcast: broadcastFn
+  broadcast: broadcastFn,
+  userManager
 };
 
 // Inject dependencies into each module (each module only uses what it needs)
 metricsAPI.inject(deps);
 autoRefreshManager.inject(deps);
 historyAPI.inject(deps);
-amuleManager.inject(deps);
-rtorrentManager.inject(deps);
-qbittorrentManager.inject(deps);
 qbittorrentAPI.inject(deps);
 prowlarrAPI.inject(deps);
 authAPI.inject(deps);
@@ -138,92 +204,16 @@ arrManager.inject(deps);
 torznabAPI.inject(deps);
 dataFetchService.inject(deps);
 rtorrentAPI.inject(deps);
+delugeAPI.inject(deps);
+transmissionAPI.inject(deps);
 moveOperationManager.inject(deps);
 filesystemAPI.inject(deps);
 eventScriptingManager.inject(deps);
 notificationsAPI.inject(deps);
+userAPI.inject(deps);
 
-// When aMule connects (including late enablement), sync categories
-amuleManager.onConnect(async () => {
-  try {
-    // Sync qBittorrent API categories
-    await qbittorrentAPI.handler.syncCategories();
-  } catch (err) {
-    log('[qBittorrent] Failed to sync categories on aMule connect:', err.message);
-  }
-
-  try {
-    // Sync unified categories with aMule
-    const amuleCategories = await amuleManager.getClient()?.getCategories();
-    if (amuleCategories) {
-      // Extract aMule's default path (category with id=0)
-      const defaultCat = amuleCategories.find(c => c.id === 0);
-      if (defaultCat?.path) {
-        categoryManager.setClientDefaultPath('amule', defaultCat.path);
-      }
-
-      const result = await categoryManager.syncWithAmule(amuleCategories);
-      // If categories need to be updated in aMule, do it now
-      if (result.toUpdateInAmule && result.toUpdateInAmule.length > 0) {
-        for (const catUpdate of result.toUpdateInAmule) {
-          await categoryManager.updateAmuleCategoryWithVerify(
-            catUpdate.categoryId,
-            catUpdate.title,
-            catUpdate.path,
-            catUpdate.comment,
-            catUpdate.color,
-            catUpdate.priority
-          );
-        }
-      }
-
-      // Re-validate paths now that we have aMule's default path
-      await categoryManager.validateAllPaths();
-    }
-  } catch (err) {
-    log('[CategoryManager] Failed to sync categories on aMule connect:', err.message);
-  }
-});
-
-// When rtorrent connects, sync labels as categories
-rtorrentManager.onConnect && rtorrentManager.onConnect(async () => {
-  try {
-    // Get rTorrent's default directory
-    const defaultDir = await rtorrentManager.getDefaultDirectory();
-    if (defaultDir) {
-      categoryManager.setClientDefaultPath('rtorrent', defaultDir);
-    }
-
-    const downloads = await rtorrentManager.getDownloads();
-    const labels = [...new Set(downloads.map(d => d.label).filter(Boolean))];
-    await categoryManager.syncWithRtorrent(labels);
-
-    // Re-validate paths now that we have rtorrent's default path
-    await categoryManager.validateAllPaths();
-  } catch (err) {
-    log('[CategoryManager] Failed to sync labels on rtorrent connect:', err.message);
-  }
-});
-
-// When qBittorrent connects, sync categories
-qbittorrentManager.onConnect && qbittorrentManager.onConnect(async () => {
-  try {
-    // Get qBittorrent's default save path
-    const defaultDir = await qbittorrentManager.getDefaultDirectory();
-    if (defaultDir) {
-      categoryManager.setClientDefaultPath('qbittorrent', defaultDir);
-    }
-
-    // Sync qBittorrent categories with unified category manager
-    const qbCategories = await qbittorrentManager.getCategories();
-    await categoryManager.syncWithQbittorrent(qbCategories);
-
-    // Re-validate paths now that we have qBittorrent's default path
-    await categoryManager.validateAllPaths();
-  } catch (err) {
-    log('[CategoryManager] Failed to sync categories on qBittorrent connect:', err.message);
-  }
-});
+// onConnect callbacks are registered per-instance inside initializeServices()
+// (moved from module-level to support multi-instance)
 
 // ============================================================================
 // ROUTE REGISTRATION (ORDER MATTERS!)
@@ -254,6 +244,12 @@ app.use((req, res, next) => {
 // These routes need session but not requireAuth (handles their own auth)
 authAPI.registerRoutes(app);
 
+// --- Trusted proxy SSO middleware ---
+// Authenticates users via reverse proxy headers (e.g., Authelia, Authentik)
+// Runs after session so it can create sessions, before requireAuth so sessions are ready
+const trustedProxyMiddleware = createTrustedProxyMiddleware(userManager);
+app.use(trustedProxyMiddleware);
+
 // --- Authentication middleware ---
 // Apply to all subsequent routes (protects web UI and internal APIs)
 app.use(requireAuth);
@@ -265,8 +261,11 @@ metricsAPI.registerRoutes(app);     // Metrics API
 historyAPI.registerRoutes(app);     // Download history API
 prowlarrAPI.registerRoutes(app);    // Prowlarr torrent search API
 rtorrentAPI.registerRoutes(app);    // rtorrent API (files, etc.)
+delugeAPI.registerRoutes(app);     // Deluge API (files, etc.)
+transmissionAPI.registerRoutes(app); // Transmission API (files, etc.)
 filesystemAPI.registerRoutes(app);  // Filesystem browsing API
 notificationsAPI.registerRoutes(app); // Notifications API
+userAPI.registerRoutes(app);           // User management API (admin only)
 versionAPI.registerProtectedRoutes(app); // Version seen tracking (protected)
 
 // ============================================================================
@@ -286,7 +285,16 @@ wss.on('connection', (ws, req) => {
  */
 function initializeSessionMiddleware() {
   const sessionDB = authManager.getSessionDB();
-  const sessionSecret = config.getSessionSecret();
+  const sessionSecret = config.ensureSessionSecret();
+
+  // Enable trust proxy when trusted proxy authentication is configured
+  // This ensures correct client IP for rate limiting and secure cookie auto-detection
+  const trustedProxyConfig = config.getTrustedProxyConfig();
+  const behindProxy = trustedProxyConfig.enabled === true;
+  if (behindProxy) {
+    app.set('trust proxy', 1);
+    log('🔒 trust proxy enabled (trusted proxy authentication is configured)');
+  }
 
   sessionMiddleware = session({
     store: new SQLiteStore({
@@ -296,19 +304,89 @@ function initializeSessionMiddleware() {
         intervalMs: 900000 // 15 minutes
       }
     }),
-    secret: sessionSecret || 'fallback-secret-key',
+    secret: sessionSecret,
     name: 'amule.sid',
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: false,     // Allow cookies over HTTP (for Docker/development)
-      sameSite: 'lax',   // Less restrictive than 'strict', but still secure
+      secure: behindProxy ? 'auto' : false,
+      sameSite: 'lax',
       maxAge: null       // Set dynamically in login based on rememberMe
-    }
+    },
+    ...(behindProxy ? { proxy: true } : {})
   });
 
   log('🔐 Session middleware initialized');
+}
+
+/**
+ * Wire WebSocket force-disconnect callback for session invalidation.
+ * When a user's sessions are invalidated, close their WebSocket connections.
+ */
+function wireDisconnectCallback() {
+  authManager.setDisconnectCallback((userId) => {
+    let disconnected = 0;
+    wss.clients.forEach(ws => {
+      if (ws.readyState === WebSocket.OPEN && ws.user?.userId === userId) {
+        ws.close(4001, 'Session invalidated');
+        disconnected++;
+      }
+    });
+    if (disconnected > 0) {
+      log(`🔌 Force-disconnected ${disconnected} WebSocket client(s) for userId ${userId}`);
+    }
+  });
+}
+
+/**
+ * Reinitialize all client connections.
+ * Clears the registry, creates fresh manager instances for each configured client,
+ * registers onConnect callbacks, adopts legacy history entries, and starts connections.
+ * Called from initializeServices() on startup and from configAPI on settings save.
+ * @returns {Promise<void>}
+ */
+async function reinitializeClients() {
+  // Wire client configs and register in ClientRegistry
+  registry.clear();
+  categoryManager.clearClientDefaultPaths();
+  const clientConfigs = config.getClientConfigs();
+
+  for (const cc of clientConfigs) {
+    const ManagerClass = MANAGER_CLASSES[cc.type];
+    const manager = new ManagerClass();
+    manager.inject(deps);
+    manager.setClientConfig(cc);
+    registry.register(cc.id, cc.type, manager, { displayName: cc.name });
+  }
+
+  // Register per-instance onConnect callbacks for category sync
+  registry.forEach((manager, instanceId) => {
+    if (!manager.onConnect || !manager.onConnectSync) return;
+
+    manager.onConnect(async () => {
+      try {
+        await manager.onConnectSync(categoryManager, { qbittorrentAPI });
+      } catch (err) {
+        log(`[CategoryManager] Failed to sync on ${manager.clientType} connect (${instanceId}):`, err.message);
+      }
+    });
+  });
+
+  // Adopt legacy entries now that registry has real instance IDs
+  const instances = [];
+  registry.forEach((manager, instanceId) => {
+    instances.push({ instanceId, clientType: manager.clientType });
+  });
+  if (downloadHistory) {
+    downloadHistory.adoptLegacyEntries(instances);
+  }
+  metricsDB.adoptLegacyMetrics(instances);
+
+  // Start connections via registry (replaces hardcoded startConnection calls)
+  registry.forEach((manager) => {
+    manager.startConnection();
+  });
 }
 
 /**
@@ -318,9 +396,16 @@ function initializeSessionMiddleware() {
 async function initializeServices() {
   log('🚀 Initializing services...');
 
+  // Migrate legacy auth to user accounts (before session init)
+  await userManager.migrateFromConfig(config, downloadHistory);
+
+  // Backfill download ownership from history (runs once when ownership table is empty)
+  userManager.backfillFromHistory(downloadHistory);
+
   // Initialize session and authentication
   initializeSessionMiddleware();
   authManager.start();
+  wireDisconnectCallback();
 
   // Initialize category manager (load categories from file)
   await categoryManager.load();
@@ -339,17 +424,8 @@ async function initializeServices() {
     geoIPManager.watchGeoIPFiles();
   }, 5000);
 
-  // Start aMule connection with auto-reconnect (non-blocking)
-  // Connection happens in background - server starts immediately
-  amuleManager.startConnection();
-
-  // Start rtorrent connection with auto-reconnect (non-blocking)
-  // Only connects if rtorrent is enabled in config
-  rtorrentManager.startConnection();
-
-  // Start qBittorrent connection with auto-reconnect (non-blocking)
-  // Only connects if qBittorrent is enabled in config
-  qbittorrentManager.startConnection();
+  // Initialize client connections
+  await reinitializeClients();
 
   // Recover any interrupted move operations (may fail gracefully if clients not yet connected)
   await moveOperationManager.recoverOperations();
@@ -375,8 +451,9 @@ async function startServer() {
   log('⚙️  Loading configuration...');
   await config.loadConfig();
 
-  // Pass initializeServices to configAPI so it can initialize after first-run setup
+  // Pass initializeServices and reinitializeClients to configAPI
   configAPI.setInitializeServices(initializeServices);
+  configAPI.setReinitializeClients(reinitializeClients);
 
   // Check if this is the first run (no config file exists)
   const isFirstRun = await config.isFirstRun();
@@ -397,8 +474,10 @@ async function startServer() {
     // If auth is enabled via env vars, we need session middleware for login
     if (config.getAuthEnabled()) {
       log('🔐 Auth enabled via environment - initializing session middleware');
+      await userManager.migrateFromConfig(config, downloadHistory);
       initializeSessionMiddleware();
       authManager.start();
+      wireDisconnectCallback();
     }
 
     // In first-run mode, only start HTTP server and WebSocket
@@ -419,7 +498,10 @@ async function startServer() {
     server.listen(config.PORT, config.HOST, () => {
       log(`🚀 aMuTorrent web UI running on http://localhost:${config.PORT} — ${config.HOST === '::' ? 'listening on all interfaces' : `bound to ${config.HOST}`}`);
       log(`📊 WebSocket server ready`);
-      log(`🔌 aMule connection: ${config.AMULE_HOST}:${config.AMULE_PORT}`);
+      registry.forEach((manager, instanceId) => {
+        const cc = config.getClientConfig(instanceId);
+        if (cc) log(`🔌 ${cc.name}: ${cc.host}:${cc.port}`);
+      });
     });
   }
 
@@ -442,15 +524,16 @@ async function startServer() {
         authManager.stop();
         autoRefreshManager.stop();
 
-        // Shutdown aMule connection
-        amuleManager.shutdown().then(() => {
-          log('aMule connection closed');
-
-          // Shutdown rtorrent connection
-          return rtorrentManager.shutdown();
-        }).then(() => {
-          log('rtorrent connection closed');
-
+        // Shutdown all client managers via registry
+        const shutdownPromises = [];
+        registry.forEach((manager, instanceId) => {
+          shutdownPromises.push(manager.shutdown().then(() => {
+            log(`${instanceId} connection closed`);
+          }).catch(err => {
+            log(`⚠️ Error shutting down ${instanceId}: ${err.message}`);
+          }));
+        });
+        Promise.all(shutdownPromises).then(() => {
           // Close databases
           metricsDB.close();
           log('Metrics database closed');
@@ -464,6 +547,9 @@ async function startServer() {
           // Close move operation manager
           moveOperationManager.shutdown();
           log('Move operation manager closed');
+
+          userManager.close();
+          log('User database closed');
 
           // Close GeoIP
           geoIPManager.shutdown().then(() => {

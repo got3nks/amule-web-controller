@@ -50,7 +50,8 @@ class MoveOperationsDB {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS move_operations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        hash TEXT NOT NULL UNIQUE,
+        hash TEXT NOT NULL,
+        instance_id TEXT NOT NULL DEFAULT '',
         name TEXT NOT NULL,
         client_type TEXT DEFAULT 'rtorrent',
         source_path TEXT NOT NULL,
@@ -66,14 +67,12 @@ class MoveOperationsDB {
         files_moved INTEGER DEFAULT 0,
         current_file TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        UNIQUE(hash, instance_id)
       );
-
-      CREATE INDEX IF NOT EXISTS idx_move_ops_hash ON move_operations(hash);
-      CREATE INDEX IF NOT EXISTS idx_move_ops_status ON move_operations(status);
     `);
 
-    // Migrations for existing databases
+    // Migrations for existing databases (column additions — silently skip if already present)
     const migrations = [
       'ALTER TABLE move_operations ADD COLUMN remote_source_path TEXT',
       'ALTER TABLE move_operations ADD COLUMN remote_dest_path TEXT',
@@ -88,6 +87,80 @@ class MoveOperationsDB {
         // Column already exists
       }
     }
+
+    // Migration: add instance_id column (requires table rebuild for UNIQUE constraint change)
+    // Must run before index creation since old tables lack the instance_id column
+    this._migrateAddInstanceId();
+
+    // Create indexes after all migrations have run
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_move_ops_hash ON move_operations(hash);
+      CREATE INDEX IF NOT EXISTS idx_move_ops_status ON move_operations(status);
+      CREATE INDEX IF NOT EXISTS idx_move_ops_instance ON move_operations(instance_id);
+    `);
+  }
+
+  /**
+   * Migrate existing table to add instance_id with compound UNIQUE(hash, instance_id).
+   * SQLite can't ALTER UNIQUE constraints, so we rebuild the table.
+   * @private
+   */
+  _migrateAddInstanceId() {
+    // Check if instance_id column already exists
+    const columns = this.db.pragma('table_info(move_operations)');
+    if (columns.some(c => c.name === 'instance_id')) {
+      return; // Already migrated
+    }
+
+    logger.log('📦 Migrating move_operations: adding instance_id column...');
+
+    this.db.exec(`
+      CREATE TABLE move_operations_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        hash TEXT NOT NULL,
+        instance_id TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL,
+        client_type TEXT DEFAULT 'rtorrent',
+        source_path TEXT NOT NULL,
+        dest_path TEXT NOT NULL,
+        remote_source_path TEXT,
+        remote_dest_path TEXT,
+        total_size INTEGER NOT NULL,
+        bytes_moved INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'pending',
+        error_message TEXT,
+        is_multi_file INTEGER DEFAULT 0,
+        files_total INTEGER DEFAULT 1,
+        files_moved INTEGER DEFAULT 0,
+        current_file TEXT,
+        category_name TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(hash, instance_id)
+      );
+
+      INSERT INTO move_operations_new (
+        id, hash, instance_id, name, client_type, source_path, dest_path,
+        remote_source_path, remote_dest_path, total_size, bytes_moved, status,
+        error_message, is_multi_file, files_total, files_moved, current_file,
+        category_name, created_at, updated_at
+      )
+      SELECT
+        id, hash, '', name, client_type, source_path, dest_path,
+        remote_source_path, remote_dest_path, total_size, bytes_moved, status,
+        error_message, is_multi_file, files_total, files_moved, current_file,
+        category_name, created_at, updated_at
+      FROM move_operations;
+
+      DROP TABLE move_operations;
+      ALTER TABLE move_operations_new RENAME TO move_operations;
+
+      CREATE INDEX IF NOT EXISTS idx_move_ops_hash ON move_operations(hash);
+      CREATE INDEX IF NOT EXISTS idx_move_ops_status ON move_operations(status);
+      CREATE INDEX IF NOT EXISTS idx_move_ops_instance ON move_operations(instance_id);
+    `);
+
+    logger.log('📦 Migration complete: move_operations now has instance_id');
   }
 
   /**
@@ -105,21 +178,23 @@ class MoveOperationsDB {
    * @param {string} operation.categoryName - Category name (for setting priority after move)
    * @returns {Object} Created operation record
    */
-  addOperation({ hash, name, clientType = 'rtorrent', sourcePath, destPath, remoteSourcePath, remoteDestPath, totalSize, isMultiFile = false, categoryName = null }) {
+  addOperation({ hash, name, instanceId = '', clientType = 'rtorrent', sourcePath, destPath, remoteSourcePath, remoteDestPath, totalSize, isMultiFile = false, categoryName = null }) {
     const now = new Date().toISOString();
+    const iid = instanceId || '';
 
-    // Delete any existing operation for this hash (in case of retry)
-    this.db.prepare('DELETE FROM move_operations WHERE hash = ?').run(hash.toLowerCase());
+    // Delete any existing operation for this hash+instance (in case of retry)
+    this.db.prepare('DELETE FROM move_operations WHERE hash = ? AND instance_id = ?').run(hash.toLowerCase(), iid);
 
     const stmt = this.db.prepare(`
       INSERT INTO move_operations (
-        hash, name, client_type, source_path, dest_path, remote_source_path, remote_dest_path,
+        hash, instance_id, name, client_type, source_path, dest_path, remote_source_path, remote_dest_path,
         total_size, is_multi_file, files_total, category_name, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    const result = stmt.run(
+    stmt.run(
       hash.toLowerCase(),
+      iid,
       name,
       clientType,
       sourcePath,
@@ -136,36 +211,38 @@ class MoveOperationsDB {
 
     logger.log(`📦 Move operation queued: ${name} (${clientType}:${hash})`);
 
-    return this.getByHash(hash);
+    return this.getByHash(hash, iid);
   }
 
   /**
    * Update progress for an operation
    * @param {string} hash - Torrent hash
+   * @param {string} instanceId - Client instance identifier
    * @param {number} bytesMoved - Total bytes moved so far
    */
-  updateProgress(hash, bytesMoved) {
+  updateProgress(hash, instanceId, bytesMoved) {
     const stmt = this.db.prepare(`
       UPDATE move_operations
       SET bytes_moved = ?, updated_at = ?
-      WHERE hash = ?
+      WHERE hash = ? AND instance_id = ?
     `);
-    stmt.run(bytesMoved, new Date().toISOString(), hash.toLowerCase());
+    stmt.run(bytesMoved, new Date().toISOString(), hash.toLowerCase(), instanceId);
   }
 
   /**
    * Update status for an operation
    * @param {string} hash - Torrent hash
+   * @param {string} instanceId - Client instance identifier
    * @param {string} status - New status
-   * @param {string} errorMessage - Error message (for failed status)
+   * @param {string} [errorMessage] - Error message (for failed status)
    */
-  updateStatus(hash, status, errorMessage = null) {
+  updateStatus(hash, instanceId, status, errorMessage = null) {
     const stmt = this.db.prepare(`
       UPDATE move_operations
       SET status = ?, error_message = ?, updated_at = ?
-      WHERE hash = ?
+      WHERE hash = ? AND instance_id = ?
     `);
-    stmt.run(status, errorMessage, new Date().toISOString(), hash.toLowerCase());
+    stmt.run(status, errorMessage, new Date().toISOString(), hash.toLowerCase(), instanceId);
 
     if (status === 'failed') {
       logger.warn(`📦 Move operation failed: ${hash} - ${errorMessage}`);
@@ -177,9 +254,10 @@ class MoveOperationsDB {
   /**
    * Update multiple fields for an operation
    * @param {string} hash - Torrent hash
+   * @param {string} instanceId - Client instance identifier
    * @param {Object} updates - Fields to update
    */
-  update(hash, updates) {
+  update(hash, instanceId, updates) {
     const allowedFields = [
       'bytes_moved', 'status', 'error_message', 'files_total',
       'files_moved', 'current_file'
@@ -202,23 +280,25 @@ class MoveOperationsDB {
     setClauses.push('updated_at = ?');
     values.push(new Date().toISOString());
     values.push(hash.toLowerCase());
+    values.push(instanceId);
 
     const stmt = this.db.prepare(`
       UPDATE move_operations
       SET ${setClauses.join(', ')}
-      WHERE hash = ?
+      WHERE hash = ? AND instance_id = ?
     `);
     stmt.run(...values);
   }
 
   /**
-   * Get operation by hash
+   * Get operation by hash and instance ID
    * @param {string} hash - Torrent hash
+   * @param {string} instanceId - Client instance identifier
    * @returns {Object|null} Operation record or null
    */
-  getByHash(hash) {
-    const stmt = this.db.prepare('SELECT * FROM move_operations WHERE hash = ?');
-    const row = stmt.get(hash.toLowerCase());
+  getByHash(hash, instanceId) {
+    const stmt = this.db.prepare('SELECT * FROM move_operations WHERE hash = ? AND instance_id = ?');
+    const row = stmt.get(hash.toLowerCase(), instanceId);
     return row ? this._rowToObject(row) : null;
   }
 
@@ -268,17 +348,6 @@ class MoveOperationsDB {
   }
 
   /**
-   * Remove operation by hash
-   * @param {string} hash - Torrent hash
-   * @returns {boolean} True if deleted
-   */
-  remove(hash) {
-    const stmt = this.db.prepare('DELETE FROM move_operations WHERE hash = ?');
-    const result = stmt.run(hash.toLowerCase());
-    return result.changes > 0;
-  }
-
-  /**
    * Convert database row to camelCase object
    * @param {Object} row - Database row
    * @returns {Object} Converted object
@@ -288,6 +357,7 @@ class MoveOperationsDB {
     return {
       id: row.id,
       hash: row.hash,
+      instanceId: row.instance_id || null,
       name: row.name,
       clientType: row.client_type || 'rtorrent',
       sourcePath: row.source_path,

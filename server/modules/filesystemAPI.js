@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const BaseModule = require('../lib/BaseModule');
 const response = require('../lib/responseFormatter');
+const { requireAdmin } = require('../middleware/capabilities');
 
 class FilesystemAPI extends BaseModule {
   constructor() {
@@ -106,6 +107,7 @@ class FilesystemAPI extends BaseModule {
   registerRoutes(app) {
     const router = express.Router();
     router.use(express.json());
+    router.use(requireAdmin);
 
     router.post('/browse', this.browse.bind(this));
 

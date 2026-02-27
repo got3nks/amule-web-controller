@@ -12,9 +12,10 @@ const path = require('path');
 const fs = require('fs');
 const logger = require('./logger');
 const eventScriptingManager = require('./EventScriptingManager');
+const { itemKey } = require('./itemKey');
 
 // Current schema version - increment when adding new migrations
-const CURRENT_VERSION = 3;
+const CURRENT_VERSION = 4;
 
 class DownloadHistory {
   constructor(dbPath) {
@@ -225,8 +226,89 @@ class DownloadHistory {
             this.db.exec("ALTER TABLE download_history ADD COLUMN tracker_domain TEXT");
           }
         }
+      },
+      {
+        // Version 4: Add instance_id for multi-instance support
+        // PK changes from (hash) to (hash, instance_id) — requires table rebuild.
+        // Existing rows get instance_id = client_type as a temporary value.
+        // Runtime adoption (adoptLegacyEntries) assigns real instance IDs after registry populates.
+        version: 4,
+        up: function() {
+          const columns = this.db.prepare("PRAGMA table_info(download_history)").all();
+          if (columns.some(col => col.name === 'instance_id')) {
+            return; // Already migrated (e.g., interrupted previous run)
+          }
+
+          this.db.exec(`
+            CREATE TABLE download_history_new (
+              hash TEXT NOT NULL,
+              instance_id TEXT NOT NULL,
+              filename TEXT NOT NULL,
+              size INTEGER,
+              started_at TEXT NOT NULL,
+              completed_at TEXT,
+              deleted_at TEXT,
+              username TEXT,
+              client_type TEXT DEFAULT 'amule',
+              status TEXT DEFAULT 'downloading',
+              last_seen_at TEXT,
+              downloaded INTEGER DEFAULT 0,
+              uploaded INTEGER DEFAULT 0,
+              ratio REAL DEFAULT 0,
+              tracker_domain TEXT,
+              PRIMARY KEY (hash, instance_id)
+            );
+
+            INSERT INTO download_history_new
+              (hash, instance_id, filename, size, started_at, completed_at, deleted_at,
+               username, client_type, status, last_seen_at, downloaded, uploaded, ratio, tracker_domain)
+            SELECT
+              hash, COALESCE(client_type, 'amule'), filename, size, started_at, completed_at, deleted_at,
+              username, client_type, status, last_seen_at, downloaded, uploaded, ratio, tracker_domain
+            FROM download_history;
+
+            DROP TABLE download_history;
+            ALTER TABLE download_history_new RENAME TO download_history;
+
+            CREATE INDEX IF NOT EXISTS idx_started_at ON download_history(started_at);
+            CREATE INDEX IF NOT EXISTS idx_completed_at ON download_history(completed_at);
+            CREATE INDEX IF NOT EXISTS idx_client_type ON download_history(client_type);
+            CREATE INDEX IF NOT EXISTS idx_status ON download_history(status);
+            CREATE INDEX IF NOT EXISTS idx_instance_id ON download_history(instance_id);
+          `);
+
+          logger.log('📜 History: Migrated to compound PK (hash, instance_id)');
+        }
       }
     ];
+  }
+
+  /**
+   * Adopt legacy history entries by assigning real instance IDs.
+   * Called after ClientRegistry is populated (from server.js initializeServices).
+   * For each registered instance, claims rows where instance_id still equals the client_type placeholder.
+   * First instance of each type adopts all legacy rows for that type.
+   *
+   * @param {Array<{instanceId: string, clientType: string}>} instances - Registered instances
+   */
+  adoptLegacyEntries(instances) {
+    const adoptedTypes = new Set();
+    const stmt = this.db.prepare(`
+      UPDATE download_history
+      SET instance_id = ?
+      WHERE client_type = ? AND instance_id = ?
+    `);
+
+    for (const { instanceId, clientType } of instances) {
+      // Only first instance of each type adopts legacy rows
+      if (adoptedTypes.has(clientType)) continue;
+      adoptedTypes.add(clientType);
+
+      const result = stmt.run(instanceId, clientType, clientType);
+      if (result.changes > 0) {
+        logger.log(`📜 History: Adopted ${result.changes} legacy ${clientType} entries → ${instanceId}`);
+      }
+    }
   }
 
   /**
@@ -234,15 +316,16 @@ class DownloadHistory {
    * @param {string} hash - File hash (ED2K for aMule, info hash for rtorrent)
    * @param {string} filename - File name
    * @param {number} size - File size in bytes
-   * @param {string} username - Optional username from proxy auth
-   * @param {string} clientType - Client type ('amule' or 'rtorrent')
-   * @param {string} category - Optional category name
+   * @param {string|null} [username] - Username from proxy auth
+   * @param {string} [clientType='amule'] - Client type ('amule', 'rtorrent', or 'qbittorrent')
+   * @param {string|null} [category] - Category name
+   * @param {string} instanceId - Client instance identifier
    */
-  addDownload(hash, filename, size, username = null, clientType = 'amule', category = null) {
+  addDownload(hash, filename, size, username = null, clientType = 'amule', category = null, instanceId) {
     const stmt = this.db.prepare(`
-      INSERT INTO download_history (hash, filename, size, started_at, username, client_type)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(hash) DO UPDATE SET
+      INSERT INTO download_history (hash, instance_id, filename, size, started_at, username, client_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(hash, instance_id) DO UPDATE SET
         filename = excluded.filename,
         size = excluded.size,
         started_at = excluded.started_at,
@@ -253,6 +336,7 @@ class DownloadHistory {
 
     stmt.run(
       hash.toLowerCase(),
+      instanceId,
       filename,
       size || null,
       new Date().toISOString(),
@@ -260,7 +344,7 @@ class DownloadHistory {
       clientType
     );
 
-    logger.log(`📥 History: Added ${clientType} download - ${filename}`);
+    logger.log(`📥 History: Added ${clientType} download - ${filename} [${instanceId}]`);
 
     // Emit downloadAdded event
     eventScriptingManager.emit('downloadAdded', {
@@ -269,40 +353,24 @@ class DownloadHistory {
       size: size || null,
       username,
       clientType,
+      instanceId,
       category: category || null
     });
   }
 
   /**
-   * Mark a download as completed
-   * @param {string} hash - ED2K hash
-   */
-  markCompleted(hash) {
-    const stmt = this.db.prepare(`
-      UPDATE download_history
-      SET completed_at = ?, status = 'completed'
-      WHERE hash = ? AND completed_at IS NULL
-    `);
-
-    const result = stmt.run(new Date().toISOString(), hash.toLowerCase());
-
-    if (result.changes > 0) {
-      logger.log(`✅ History: Marked completed - ${hash}`);
-    }
-  }
-
-  /**
    * Mark a download as deleted (soft delete)
-   * @param {string} hash - ED2K hash
+   * @param {string} hash - File hash
+   * @param {string} instanceId - Client instance identifier
    */
-  markDeleted(hash) {
+  markDeleted(hash, instanceId) {
+    const h = hash.toLowerCase();
     const stmt = this.db.prepare(`
       UPDATE download_history
       SET deleted_at = ?, status = 'deleted'
-      WHERE hash = ? AND deleted_at IS NULL
+      WHERE hash = ? AND instance_id = ? AND deleted_at IS NULL
     `);
-
-    const result = stmt.run(new Date().toISOString(), hash.toLowerCase());
+    const result = stmt.run(new Date().toISOString(), h, instanceId);
 
     if (result.changes > 0) {
       logger.log(`🗑️ History: Marked deleted - ${hash}`);
@@ -310,67 +378,73 @@ class DownloadHistory {
   }
 
   /**
-   * Batch update status for entries seen in current downloads
-   * Called by background task to keep status in sync
-   * @param {Set<string>} activeHashes - Set of hashes currently downloading
-   * @param {Set<string>} completedHashes - Set of hashes that are completed
-   * @param {Map<string, Object>} metadataMap - Map of hash to metadata for updates
-   *   Each entry can have: size, name, downloaded, uploaded, ratio, trackerDomain
+   * Batch update status for entries seen in current downloads.
+   * Called by background task to keep history status in sync with live data.
+   *
+   * @param {Set<string>} activeKeys - Compound keys (instanceId:hash) currently downloading
+   * @param {Set<string>} completedKeys - Compound keys (instanceId:hash) that are completed
+   * @param {Map<string, Object>} metadataMap - Map of compound key to metadata
+   *   Each entry must have instanceId, and can have: size, name, downloaded, uploaded, ratio, trackerDomain
    */
-  batchUpdateFromLiveData(activeHashes, completedHashes, metadataMap = new Map()) {
+  batchUpdateFromLiveData(activeKeys, completedKeys, metadataMap = new Map()) {
     const now = new Date().toISOString();
 
     // Update entries that are currently downloading
-    if (activeHashes.size > 0) {
+    if (activeKeys.size > 0) {
       const updateActive = this.db.prepare(`
         UPDATE download_history
         SET status = 'downloading', last_seen_at = ?
-        WHERE hash = ? AND status != 'deleted'
+        WHERE hash = ? AND instance_id = ? AND status != 'deleted'
       `);
 
-      for (const hash of activeHashes) {
-        updateActive.run(now, hash.toLowerCase());
+      for (const key of activeKeys) {
+        const meta = metadataMap.get(key);
+        const hash = meta?.hash || key;
+        const instanceId = meta?.instanceId;
+        if (!instanceId) continue;
 
-        // Update metadata if available
-        const meta = metadataMap.get(hash.toLowerCase());
+        updateActive.run(now, hash.toLowerCase(), instanceId);
+
         if (meta) {
-          if (meta.size) this.updateSize(hash, meta.size);
-          if (meta.name) this.updateFilename(hash, meta.name);
-          this.updateTransferStats(hash, meta);
+          if (meta.size) this.updateSize(hash, meta.size, instanceId);
+          if (meta.name) this.updateFilename(hash, meta.name, instanceId);
+          this.updateTransferStats(hash, meta, instanceId);
         }
       }
     }
 
     // Update entries that completed
-    if (completedHashes.size > 0) {
+    if (completedKeys.size > 0) {
       const updateCompleted = this.db.prepare(`
         UPDATE download_history
         SET status = 'completed', completed_at = COALESCE(completed_at, ?), last_seen_at = ?
-        WHERE hash = ? AND status NOT IN ('deleted', 'completed')
+        WHERE hash = ? AND instance_id = ? AND status NOT IN ('deleted', 'completed')
       `);
 
-      for (const hash of completedHashes) {
-        const result = updateCompleted.run(now, now, hash.toLowerCase());
+      for (const key of completedKeys) {
+        const meta = metadataMap.get(key);
+        const hash = meta?.hash || key;
+        const instanceId = meta?.instanceId;
+        if (!instanceId) continue;
 
-        // Update metadata if available
-        const meta = metadataMap.get(hash.toLowerCase());
+        const result = updateCompleted.run(now, now, hash.toLowerCase(), instanceId);
+
         if (meta) {
-          if (meta.size) this.updateSize(hash, meta.size);
-          if (meta.name) this.updateFilename(hash, meta.name);
-          this.updateTransferStats(hash, meta);
+          if (meta.size) this.updateSize(hash, meta.size, instanceId);
+          if (meta.name) this.updateFilename(hash, meta.name, instanceId);
+          this.updateTransferStats(hash, meta, instanceId);
         }
 
-        // Emit downloadFinished event only when status actually changed (not already completed)
+        // Emit downloadFinished event only when status actually changed
         if (result.changes > 0) {
-          // Get the entry to have complete data for the event
-          const entry = this.getByHash(hash);
+          const entry = this.getByHash(hash, instanceId);
           if (entry) {
-            // Build full path: directory/filename for all clients
             const dir = meta?.directory || null;
             const fullPath = dir ? `${dir.replace(/\/+$/, '')}/${entry.filename}` : null;
 
             eventScriptingManager.emit('downloadFinished', {
               hash: hash.toLowerCase(),
+              instanceId,
               filename: entry.filename,
               size: entry.size,
               clientType: meta?.clientType || entry.client_type || 'unknown',
@@ -388,7 +462,6 @@ class DownloadHistory {
     }
 
     // Mark entries as missing if they were downloading but haven't been seen recently
-    // (more than 30 seconds since last seen)
     const cutoff = new Date(Date.now() - 30000).toISOString();
     const updateMissing = this.db.prepare(`
       UPDATE download_history
@@ -403,8 +476,9 @@ class DownloadHistory {
    * Update transfer statistics for an entry
    * @param {string} hash - File hash
    * @param {Object} stats - Stats object with downloaded, uploaded, ratio, trackerDomain
+   * @param {string} instanceId - Client instance identifier
    */
-  updateTransferStats(hash, stats) {
+  updateTransferStats(hash, stats, instanceId) {
     if (!stats) return;
 
     const updates = [];
@@ -437,10 +511,11 @@ class DownloadHistory {
     if (updates.length === 0) return;
 
     params.push(hash.toLowerCase());
+    params.push(instanceId);
     const stmt = this.db.prepare(`
       UPDATE download_history
       SET ${updates.join(', ')}
-      WHERE hash = ?
+      WHERE hash = ? AND instance_id = ?
     `);
     stmt.run(...params);
   }
@@ -451,31 +526,34 @@ class DownloadHistory {
    * Ignores sizes < 1KB as these are likely invalid (unresolved magnets may report 0 or 1 byte)
    * @param {string} hash - File hash
    * @param {number} size - Size in bytes
+   * @param {string} instanceId - Client instance identifier
    */
-  updateSize(hash, size) {
+  updateSize(hash, size, instanceId) {
     // Ignore invalid sizes (less than 1KB is almost certainly wrong for any real torrent/file)
     if (!size || size < 1024) return;
     const stmt = this.db.prepare(`
       UPDATE download_history
       SET size = ?
-      WHERE hash = ? AND (size IS NULL OR size < ?)
+      WHERE hash = ? AND instance_id = ? AND (size IS NULL OR size < ?)
     `);
-    stmt.run(size, hash.toLowerCase(), size);
+    stmt.run(size, hash.toLowerCase(), instanceId, size);
   }
 
   /**
    * Update filename for an entry (used when name becomes known later, e.g., from magnet)
    * @param {string} hash - File hash
    * @param {string} filename - New filename
+   * @param {string} instanceId - Client instance identifier
    */
-  updateFilename(hash, filename) {
+  updateFilename(hash, filename, instanceId) {
     if (!filename) return;
+    const h = hash.toLowerCase();
     const stmt = this.db.prepare(`
       UPDATE download_history
       SET filename = ?
-      WHERE hash = ? AND (filename = 'Unknown' OR filename = 'Magnet download' OR filename = 'Torrent download')
+      WHERE hash = ? AND instance_id = ? AND (filename = 'Unknown' OR filename = 'Magnet download' OR filename = 'Torrent download')
     `);
-    const result = stmt.run(filename, hash.toLowerCase());
+    const result = stmt.run(filename, h, instanceId);
     if (result.changes > 0) {
       logger.log(`📝 History: Updated filename to "${filename}" for hash ${hash}`);
     }
@@ -483,15 +561,17 @@ class DownloadHistory {
 
   /**
    * Remove entry from history permanently (hard delete)
-   * @param {string} hash - ED2K hash
+   * @param {string} hash - File hash
+   * @param {string} instanceId - Client instance identifier
    * @returns {boolean} True if entry was deleted
    */
-  removeEntry(hash) {
-    const stmt = this.db.prepare('DELETE FROM download_history WHERE hash = ?');
-    const result = stmt.run(hash.toLowerCase());
+  removeEntry(hash, instanceId) {
+    const h = hash.toLowerCase();
+    const stmt = this.db.prepare('DELETE FROM download_history WHERE hash = ? AND instance_id = ?');
+    const result = stmt.run(h, instanceId);
 
     if (result.changes > 0) {
-      logger.log(`🗑️ History: Removed entry - ${hash}`);
+      logger.log(`🗑️ History: Removed entry - ${hash} [${instanceId}]`);
       return true;
     }
     return false;
@@ -512,23 +592,24 @@ class DownloadHistory {
 
   /**
    * Get history entry by hash
-   * @param {string} hash - ED2K hash
+   * @param {string} hash - File hash
+   * @param {string} instanceId - Client instance identifier
    * @returns {object|null} History entry or null
    */
-  getByHash(hash) {
-    const stmt = this.db.prepare('SELECT * FROM download_history WHERE hash = ?');
-    return stmt.get(hash.toLowerCase());
+  getByHash(hash, instanceId) {
+    const h = hash.toLowerCase();
+    return this.db.prepare('SELECT * FROM download_history WHERE hash = ? AND instance_id = ?').get(h, instanceId);
   }
 
   /**
-   * Get all known hashes from the database
+   * Get all known compound keys from the database
    * Used for detecting externally added downloads
-   * @returns {Set<string>} Set of lowercase hashes
+   * @returns {Set<string>} Set of compound keys (instanceId:hash)
    */
-  getKnownHashes() {
-    const stmt = this.db.prepare('SELECT hash FROM download_history');
+  getKnownKeys() {
+    const stmt = this.db.prepare('SELECT hash, instance_id FROM download_history');
     const rows = stmt.all();
-    return new Set(rows.map(r => r.hash.toLowerCase()));
+    return new Set(rows.map(r => itemKey(r.instance_id, r.hash)));
   }
 
   /**
@@ -538,10 +619,11 @@ class DownloadHistory {
    * @param {number} size - File size in bytes
    * @param {string} clientType - Client type ('amule' or 'rtorrent')
    * @param {string} category - Optional category name
+   * @param {string} instanceId - Client instance identifier
    */
-  addExternalDownload(hash, filename, size, clientType = 'amule', category = null) {
-    this.addDownload(hash, filename, size, 'external', clientType, category);
-    logger.log(`📥 History: Detected external ${clientType} download - ${filename}`);
+  addExternalDownload(hash, filename, size, clientType = 'amule', category = null, instanceId) {
+    this.addDownload(hash, filename, size, 'external', clientType, category, instanceId);
+    logger.log(`📥 History: Detected external ${clientType} download - ${filename} [${instanceId}]`);
   }
 
   /**

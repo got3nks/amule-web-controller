@@ -107,7 +107,7 @@ const SelectionModeFooter = ({
             }, 'Clear all')
           ),
           // Right side: action buttons
-          selectedCount > 0 && h('div', { className: 'flex flex-wrap gap-2' },
+          selectedCount > 0 && h('div', { className: 'flex flex-wrap gap-2 min-w-0' },
             children
           )
         ),

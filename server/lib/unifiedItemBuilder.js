@@ -9,68 +9,21 @@
  * nested data rather than separate arrays.
  */
 
+const clientMeta = require('./clientMeta');
+const { itemKey } = require('./itemKey');
+
 // ============================================================================
 // STATUS MAPPING
 // ============================================================================
-
-// aMule numeric status code → unified status string
-// aMule only exposes two states the frontend cares about:
-//   DOWNLOADING (0) and PAUSED (7). Everything else is treated as 'active'.
-const AMULE_STATUS_TO_UNIFIED = {
-  7: 'paused'
-  // all other codes → 'active'
-};
-
-// rtorrent statusText → unified status string
-const RTORRENT_STATUS_TO_UNIFIED = {
-  'downloading': 'active',
-  'seeding':     'seeding',
-  'paused':      'paused',
-  'stopped':     'stopped',
-  'completed':   'seeding',
-  'checking':    'checking',
-  'hashing-queued': 'hashing-queued',
-  'moving':      'moving',
-  'unknown':     'active'
-};
-
-// qBittorrent state → unified status string
-// Note: qBittorrent 5.0+ uses stoppedDL/stoppedUP instead of pausedDL/pausedUP
-const QBITTORRENT_STATUS_TO_UNIFIED = {
-  'downloading':       'active',
-  'stalledDL':         'active',
-  'metaDL':            'active',
-  'allocating':        'active',
-  'queuedDL':          'active',
-  'forcedDL':          'active',
-  'uploading':         'seeding',
-  'stalledUP':         'seeding',
-  'queuedUP':          'seeding',
-  'forcedUP':          'seeding',
-  'pausedDL':          'paused',
-  'pausedUP':          'paused',
-  'stoppedDL':         'stopped',    // qBittorrent 5.0+
-  'stoppedUP':         'stopped',    // qBittorrent 5.0+
-  'checkingDL':        'checking',
-  'checkingUP':        'checking',
-  'checkingResumeData': 'checking',
-  'moving':            'moving',
-  'error':             'error',
-  'missingFiles':      'error',
-  'unknown':           'stopped'
-};
 
 /**
  * Resolve the unified status string from a normalized item
  */
 function resolveStatus(item) {
-  if (item.clientType === 'rtorrent') {
-    return RTORRENT_STATUS_TO_UNIFIED[item.statusText] || 'active';
-  }
-  if (item.clientType === 'qbittorrent') {
-    return QBITTORRENT_STATUS_TO_UNIFIED[item.statusText] || 'active';
-  }
-  return AMULE_STATUS_TO_UNIFIED[item.status] || 'active';
+  const clientType = item.clientType;
+  const field = clientMeta.get(clientType).statusField;
+  const map = clientMeta.getStatusMap(clientType);
+  return map[item[field]] || 'active';
 }
 
 // ============================================================================
@@ -114,65 +67,30 @@ const COMMON_DEFAULTS = {
   ratio: 0,
   eta: null,  // ETA in seconds (null = complete or no speed, calculated server-side)
   peersDetailed: [],
+  instanceId: null,
   raw: {}
 };
-
-// aMule-only fields
-const AMULE_DEFAULTS = {
-  downloadPriority: null,
-  uploadPriority: null,
-  uploadSession: null,
-  requestsAccepted: null,
-  requestsAcceptedTotal: null,
-  partStatus: null,
-  gapStatus: null,
-  reqStatus: null,
-  lastSeenComplete: 0,
-  ed2kLink: null,
-  addedAt: null  // When the item was added (enriched from database)
-};
-
-// BitTorrent client fields (rtorrent and qBittorrent)
-const TORRENT_DEFAULTS = {
-  downloadPriority: null,
-  tracker: null,
-  trackers: [],
-  trackersDetailed: [],
-  message: null,
-  magnetLink: null,
-  directory: null,
-  multiFile: false,
-  addedAt: null  // When the item was added (enriched from client or database)
-};
-
-// Alias for backwards compatibility
-const RTORRENT_DEFAULTS = TORRENT_DEFAULTS;
-
-/**
- * Check if client is a BitTorrent client (rtorrent or qBittorrent)
- */
-function isTorrentClient(client) {
-  return client === 'rtorrent' || client === 'qbittorrent';
-}
 
 /**
  * Create a blank unified item with all fields initialized to defaults.
  * Only includes fields relevant to the given client.
  */
 function createBaseItem(hash, client) {
+  const defaults = clientMeta.getDefaults(client);
   return {
     hash,
     name: '',
     client,
+    networkType: clientMeta.getNetworkType(client),
     ...COMMON_DEFAULTS,
     // Deep-copy mutable common fields to avoid shared-reference bugs
     sources: { ...COMMON_DEFAULTS.sources },
     activeUploads: [],
     peersDetailed: [],
     raw: {},
-    ...(isTorrentClient(client) ? TORRENT_DEFAULTS : AMULE_DEFAULTS),
-    // Deep-copy mutable torrent array fields
-    ...(isTorrentClient(client) ? { trackers: [], trackersDetailed: [] } : {})
+    ...defaults,
+    // Deep-copy mutable array fields from defaults
+    ...(defaults.trackers ? { trackers: [], trackersDetailed: [] } : {})
   };
 }
 
@@ -204,7 +122,7 @@ function applyDownloadData(item, download) {
     item.eta = null;
   }
 
-  if (download.clientType === 'amule') {
+  if (clientMeta.isEd2k(download.clientType)) {
     // Organization
     item.categoryId = download.category ?? item.categoryId;
     item.category = download.categoryName || item.category;
@@ -229,17 +147,13 @@ function applyDownloadData(item, download) {
 
     // Links
     item.ed2kLink = download.ed2kLink || item.ed2kLink;
-  } else if (download.clientType === 'rtorrent' || download.clientType === 'qbittorrent') {
+  } else if (clientMeta.isBittorrent(download.clientType)) {
     // BitTorrent clients (rtorrent, qbittorrent) — all items are always shared/seeding
     item.shared = true;
 
-    // Determine seeding status based on client
-    if (download.clientType === 'rtorrent') {
-      item.seeding = download.statusText === 'seeding';
-    } else {
-      // qBittorrent seeding states
-      item.seeding = ['uploading', 'stalledUP', 'queuedUP', 'forcedUP'].includes(download.statusText);
-    }
+    // Determine seeding status from clientMeta
+    const seedingStatuses = clientMeta.get(download.clientType).seedingStatuses;
+    item.seeding = seedingStatuses ? seedingStatuses.includes(download.statusText) : false;
 
     // Map label/category to unified category name (empty/none -> Default)
     const label = download.label || download.category;
@@ -297,7 +211,7 @@ function applySharedData(item, sharedFile) {
     item.uploadSpeed = sharedFile.uploadSpeed;
   }
 
-  if (sharedFile.clientType === 'amule') {
+  if (clientMeta.isEd2k(sharedFile.clientType)) {
     // aMule shared files are completed downloads - mark them as such
     // (unless already set by applyDownloadData for files still downloading)
     if (!item.downloading) {
@@ -402,52 +316,41 @@ function buildUploadPeer(upload) {
 function assembleUnifiedItems(downloads, sharedFiles, uploads, categoryManager = null) {
   const itemsByHash = new Map();
 
-  // Helper: get or create an item by hash
-  const getOrCreate = (hash, client) => {
+  // Helper: get or create an item by compound key (instanceId:hash)
+  const getOrCreate = (hash, client, instanceId) => {
     if (!hash) return null;
-    const key = hash.toLowerCase();
+    const key = itemKey(instanceId, hash);
     if (!itemsByHash.has(key)) {
-      itemsByHash.set(key, createBaseItem(key, client));
+      const item = createBaseItem(hash.toLowerCase(), client);
+      item.instanceId = instanceId || null;
+      itemsByHash.set(key, item);
     }
     return itemsByHash.get(key);
   };
 
   // ── Step 1: Process downloads ──────────────────────────────────────────
   for (const download of (downloads || [])) {
-    const item = getOrCreate(download.hash, download.clientType || 'amule');
+    const item = getOrCreate(download.hash, download.clientType, download.instanceId);
     if (item) applyDownloadData(item, download);
   }
 
   // ── Step 2: Process shared files ───────────────────────────────────────
   for (const shared of (sharedFiles || [])) {
-    const item = getOrCreate(shared.hash, shared.clientType || 'amule');
+    const item = getOrCreate(shared.hash, shared.clientType, shared.instanceId);
     if (item) applySharedData(item, shared);
   }
 
-  // ── Step 3: Build fileName → hash lookup for aMule upload matching ─────
-  // aMule uploads don't carry a file hash — only the file name. We need
-  // this map to associate upload peers with the correct item.
-  const nameToHash = new Map();
-  for (const [hash, item] of itemsByHash) {
-    if (item.name && item.client === 'amule') {
-      nameToHash.set(item.name, hash);
-    }
-  }
-
-  // ── Step 4: Process uploads → add to items' activeUploads ──────────────
+  // ── Step 3: Process uploads → add to items' activeUploads ──────────────
+  // Both BitTorrent and aMule uploads carry a hash linking to the parent item:
+  //   - BitTorrent: upload.downloadHash (always present)
+  //   - aMule: upload.sharedFileHash (enriched by DataFetchService from shared files)
   for (const upload of (uploads || [])) {
-    let itemHash;
+    const hash = upload.downloadHash || upload.sharedFileHash;
+    if (!hash) continue;
 
-    if (upload.clientType === 'rtorrent' || upload.clientType === 'qbittorrent') {
-      // BitTorrent uploads carry the parent download's hash
-      itemHash = upload.downloadHash?.toLowerCase();
-    } else {
-      // aMule uploads carry only the file name
-      itemHash = nameToHash.get(upload.fileName);
-    }
-
-    if (itemHash && itemsByHash.has(itemHash)) {
-      const item = itemsByHash.get(itemHash);
+    const itemMapKey = itemKey(upload.instanceId, hash);
+    if (itemsByHash.has(itemMapKey)) {
+      const item = itemsByHash.get(itemMapKey);
       item.activeUploads.push(buildUploadPeer(upload));
     }
   }

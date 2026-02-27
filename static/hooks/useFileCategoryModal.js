@@ -11,6 +11,7 @@ import FileCategoryModal from '../components/modals/FileCategoryModal.js';
 import { useStaticData } from '../contexts/StaticDataContext.js';
 import { useAppState } from '../contexts/AppStateContext.js';
 import { useWebSocketConnection } from '../contexts/WebSocketContext.js';
+import { itemKey } from '../utils/itemKey.js';
 
 const { createElement: h } = React;
 
@@ -23,9 +24,13 @@ const { createElement: h } = React;
  * @returns {Object} { openCategoryModal, handleBatchSetCategory, FileCategoryModalElement }
  */
 export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray }) => {
-  const { dataCategories: categories, clientDefaultPaths } = useStaticData();
+  const { dataCategories: categories, clientDefaultPaths, instances, getCapabilities } = useStaticData();
   const { handleAppNavigate } = useAppState();
   const { sendMessage, addMessageHandler, removeMessageHandler } = useWebSocketConnection();
+
+  // Ref for instances to avoid re-registering permission handler on every broadcast
+  const instancesRef = useRef(instances);
+  instancesRef.current = instances;
 
   const [modalState, setModalState] = useState({
     show: false,
@@ -77,11 +82,11 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
             }
           }
 
-          // Helper to get client label
-          const getClientLabel = (client) =>
-            client === 'amule' ? 'aMule' :
-            client === 'rtorrent' ? 'rTorrent' :
-            client === 'qbittorrent' ? 'qBittorrent' : client;
+          // Look up display name from instances metadata (avoids hardcoded client-type map)
+          const getClientLabel = (clientType) => {
+            const inst = Object.values(instancesRef.current).find(i => i.type === clientType);
+            return inst?.name || clientType;
+          };
 
           // Build error message - show client labels only for mixed selections
           const clientTypes = Object.keys(errorsByClient);
@@ -115,29 +120,24 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
     return () => removeMessageHandler(handleMovePermissions);
   }, [addMessageHandler, removeMessageHandler]);
 
-  // Detect any aMule files in selection (for info message about category path)
-  const hasAmuleFiles = useMemo(() => {
-    return modalState.items.some(i => i.client === 'amule');
-  }, [modalState.items]);
-
-  // Detect aMule shared files in selection (completed files only, not downloads sharing chunks)
-  // These require manual move since aMule doesn't auto-move completed files
-  const hasAmuleSharedFiles = useMemo(() => {
-    return modalState.items.some(i => i.shared && i.client === 'amule' && !i.downloading);
-  }, [modalState.items]);
-
-  // Detect rTorrent items in selection
-  const hasRtorrentItems = useMemo(() => {
-    return modalState.items.some(i => i.client === 'rtorrent');
-  }, [modalState.items]);
-
-  // Detect qBittorrent items in selection
-  const hasQbittorrentItems = useMemo(() => {
-    return modalState.items.some(i => i.client === 'qbittorrent');
-  }, [modalState.items]);
-
-  // For aMule shared files, move is forced (they don't auto-move like downloads)
-  const forceMove = hasAmuleSharedFiles;
+  // Capability-driven flags for the modal items
+  // hasAutoMoveItems: some items auto-move on category change (e.g. aMule active downloads)
+  // hasOptionalMoveItems: some items need explicit move (checkbox) — torrent clients
+  // forceMove: some items MUST be moved for category change (shared files from auto-move clients)
+  const { hasAutoMoveItems, hasOptionalMoveItems, forceMove } = useMemo(() => {
+    let autoMove = false, optionalMove = false, forced = false;
+    for (const item of modalState.items) {
+      const caps = getCapabilities(item.instanceId);
+      if (caps.moveSharedForCategoryChange && item.shared && !item.downloading) {
+        forced = true;    // shared files must be physically moved for category change
+      } else if (caps.categoryChangeAutoMoves) {
+        autoMove = true;  // active downloads auto-move (no explicit handling needed)
+      } else {
+        optionalMove = true; // client doesn't auto-move (optional checkbox)
+      }
+    }
+    return { hasAutoMoveItems: autoMove, hasOptionalMoveItems: optionalMove, forceMove: forced };
+  }, [modalState.items, getCapabilities]);
 
   // Determine if move option should be shown for current selection and category
   const showMoveOption = useMemo(() => {
@@ -146,82 +146,43 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
     const items = modalState.items;
     if (items.length === 0) return false;
 
-    // Check for torrent client items (rtorrent and qbittorrent)
-    const rtorrentItems = items.filter(i => i.client === 'rtorrent');
-    const qbittorrentItems = items.filter(i => i.client === 'qbittorrent');
-    // Check for aMule shared items (completed files only, not downloads sharing chunks)
-    const amuleSharedItems = items.filter(i => i.shared && i.client === 'amule' && !i.downloading);
-
-    // If no items need move handling, don't show option
-    if (rtorrentItems.length === 0 && qbittorrentItems.length === 0 && amuleSharedItems.length === 0) return false;
-
-    // Check if target category has a configured path
-    // In Docker: pathMappings[client] = local path, path = remote path
-    // Native: no pathMappings, path is used for both
-    // If category has no path, clients use Default category's path
     const targetCat = categories.find(c => (c.name || c.title) === selectedCategory);
+    const defaultCat = categories.find(c => (c.name || c.title) === 'Default');
 
-    // Helper function to check if items need move for a client type
-    const checkClientNeedsMove = (clientItems, clientType) => {
-      if (clientItems.length === 0) return false;
+    // Check per-item if any file needs moving (directory differs from target)
+    // Handles multi-instance: each item's instanceId resolves its own path mapping
+    return items.some(item => {
+      const caps = getCapabilities(item.instanceId);
+      const clientType = item.client;
+      const instanceId = item.instanceId;
+      const needsManualMove = caps.moveSharedForCategoryChange && item.shared && !item.downloading;
 
-      let targetLocalPath = targetCat?.pathMappings?.[clientType] || targetCat?.path;
+      // Skip items that auto-move on category change (unless shared files need manual move)
+      if (caps.categoryChangeAutoMoves && !needsManualMove) return false;
+
+      // Resolve target path: per-instance mapping → per-type mapping → category path → Default category → client default
+      let targetLocalPath = targetCat?.pathMappings?.[instanceId] || targetCat?.pathMappings?.[clientType] || targetCat?.path;
       let targetRemotePath = targetCat?.path;
 
-      // Fall back to Default category if no path configured
-      if (!targetLocalPath) {
-        const defaultCat = categories.find(c => (c.name || c.title) === 'Default');
-        if (defaultCat) {
-          targetLocalPath = defaultCat.pathMappings?.[clientType] || defaultCat.path;
-          targetRemotePath = defaultCat.path || targetLocalPath;
-        }
+      if (!targetLocalPath && defaultCat) {
+        targetLocalPath = defaultCat.pathMappings?.[instanceId] || defaultCat.pathMappings?.[clientType] || defaultCat.path;
+        targetRemotePath = defaultCat.path || targetLocalPath;
       }
-      // Fall back to client default path if still no path
-      if (!targetLocalPath && clientDefaultPaths?.[clientType]) {
-        targetLocalPath = clientDefaultPaths[clientType];
-        targetRemotePath = clientDefaultPaths[clientType];
+      if (!targetLocalPath && clientDefaultPaths?.[instanceId]) {
+        targetLocalPath = clientDefaultPaths[instanceId];
+        targetRemotePath = clientDefaultPaths[instanceId];
       }
       targetRemotePath = targetRemotePath || targetLocalPath;
 
-      if (targetLocalPath) {
-        return clientItems.some(item => item.directory !== targetRemotePath);
+      if (!targetLocalPath) return false;
+
+      // Shared files use filePath; others use directory
+      if (needsManualMove) {
+        return item.filePath !== targetRemotePath;
       }
-      return false;
-    };
-
-    // Check each client type
-    const rtorrentNeedsMove = checkClientNeedsMove(rtorrentItems, 'rtorrent');
-    const qbittorrentNeedsMove = checkClientNeedsMove(qbittorrentItems, 'qbittorrent');
-
-    // Check aMule shared paths (uses filePath instead of directory)
-    let amuleNeedsMove = false;
-    if (amuleSharedItems.length > 0) {
-      let targetLocalPath = targetCat?.pathMappings?.amule || targetCat?.path;
-      let targetRemotePath = targetCat?.path;
-
-      // Fall back to Default category if no path configured
-      if (!targetLocalPath) {
-        const defaultCat = categories.find(c => (c.name || c.title) === 'Default');
-        if (defaultCat) {
-          targetLocalPath = defaultCat.pathMappings?.amule || defaultCat.path;
-          targetRemotePath = defaultCat.path || targetLocalPath;
-        }
-      }
-      // Fall back to client default path if still no path
-      if (!targetLocalPath && clientDefaultPaths?.amule) {
-        targetLocalPath = clientDefaultPaths.amule;
-        targetRemotePath = clientDefaultPaths.amule;
-      }
-      targetRemotePath = targetRemotePath || targetLocalPath;
-
-      if (targetLocalPath) {
-        // aMule shared files use filePath property (directory containing the file)
-        amuleNeedsMove = amuleSharedItems.some(item => item.filePath !== targetRemotePath);
-      }
-    }
-
-    return rtorrentNeedsMove || qbittorrentNeedsMove || amuleNeedsMove;
-  }, [selectedCategory, categories, modalState.items, modalState.show, clientDefaultPaths]);
+      return item.directory !== targetRemotePath;
+    });
+  }, [selectedCategory, categories, modalState.items, modalState.show, clientDefaultPaths, getCapabilities]);
 
   // Request permission check when move option becomes visible or category changes
   useEffect(() => {
@@ -236,21 +197,22 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
       return;
     }
 
-    // Get items that need move - torrent clients and aMule shared files (completed only)
-    const rtorrentItems = modalState.items.filter(i => i.client === 'rtorrent');
-    const qbittorrentItems = modalState.items.filter(i => i.client === 'qbittorrent');
-    const amuleSharedItems = modalState.items.filter(i => i.shared && i.client === 'amule' && !i.downloading);
-    const fileHashes = [...rtorrentItems, ...qbittorrentItems, ...amuleSharedItems].map(i => i.hash);
+    // Get items that need move — items where client doesn't auto-move, or shared files needing manual move
+    const moveItems = modalState.items.filter(item => {
+      const caps = getCapabilities(item.instanceId);
+      const needsManualMove = caps.moveSharedForCategoryChange && item.shared && !item.downloading;
+      return !caps.categoryChangeAutoMoves || needsManualMove;
+    });
 
-    if (fileHashes.length === 0) return;
+    if (moveItems.length === 0) return;
 
     setPermissionCheck({ loading: true, canMove: true, error: null, destPath: null });
     lastCheckedCategory.current = selectedCategory;
 
-    // Request permission check via WebSocket
+    // Request permission check via WebSocket (send items with instanceId for compound-key lookup)
     sendMessage({
       action: 'checkMovePermissions',
-      fileHashes,
+      items: moveItems.map(i => ({ fileHash: i.hash, instanceId: i.instanceId })),
       categoryName: selectedCategory
     });
   }, [showMoveOption, selectedCategory, modalState.items, modalState.show, sendMessage]);
@@ -261,9 +223,11 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
   }, []);
 
   // Open modal for single file (positional args)
-  const openCategoryModal = useCallback((fileHash, fileName, currentCategory) => {
-    // Find the item in dataArray if available
-    const item = dataArray?.find(d => d.hash === fileHash);
+  const openCategoryModal = useCallback((fileHash, fileName, currentCategory, instanceId = null) => {
+    // Find the item in dataArray if available — use instanceId for precise match
+    const item = dataArray?.find(d =>
+      instanceId ? (d.instanceId === instanceId && d.hash === fileHash) : d.hash === fileHash
+    );
     const initialCategory = currentCategory || 'Default';
     setSelectedCategory(initialCategory);
     lastCheckedCategory.current = null;
@@ -274,16 +238,18 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
       fileName: fileName || '',
       fileCount: 0,
       currentCategory: initialCategory,
+      instanceId,
       items: item ? [item] : []
     });
   }, [dataArray]);
 
-  // Handle batch category change (uses getSelectedHashes and dataArray)
+  // Handle batch category change (uses getSelectedHashes — returns compound keys)
   const handleBatchSetCategory = useCallback(() => {
     if (!getSelectedHashes || !dataArray) return;
-    const fileHashes = getSelectedHashes();
-    if (fileHashes.length === 0) return;
-    const selectedItems = dataArray.filter(d => fileHashes.includes(d.hash));
+    const compoundKeys = getSelectedHashes();
+    if (compoundKeys.length === 0) return;
+    const keySet = new Set(compoundKeys);
+    const selectedItems = dataArray.filter(d => keySet.has(itemKey(d.instanceId, d.hash)));
     const firstSelected = selectedItems[0];
     const initialCategory = firstSelected?.category || 'Default';
     setSelectedCategory(initialCategory);
@@ -291,9 +257,9 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
     setPermissionCheck({ loading: false, canMove: true, error: null, destPath: null });
     setModalState({
       show: true,
-      fileHash: fileHashes,
+      fileHash: compoundKeys,  // compound keys, not raw hashes
       fileName: '',
-      fileCount: fileHashes.length,
+      fileCount: compoundKeys.length,
       currentCategory: initialCategory,
       items: selectedItems
     });
@@ -313,12 +279,24 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
   }, [closeModal, handleAppNavigate]);
 
   // Handle submit and close
-  const handleSubmit = useCallback((fileHash, categoryName, options = {}) => {
+  const handleSubmit = useCallback((fileHashOrCompoundKeys, categoryName, options = {}) => {
     if (onSubmit) {
-      onSubmit(fileHash, categoryName, options);
+      // For batch: compound keys → resolve to pre-built items with instanceId
+      if (Array.isArray(fileHashOrCompoundKeys) && fileHashOrCompoundKeys.length > 0 &&
+          typeof fileHashOrCompoundKeys[0] === 'string') {
+        const keySet = new Set(fileHashOrCompoundKeys);
+        const items = dataArray
+          .filter(d => keySet.has(itemKey(d.instanceId, d.hash)))
+          .map(d => ({ fileHash: d.hash, instanceId: d.instanceId }));
+        onSubmit(items, categoryName, options);
+      } else {
+        // Single item — wrap as array with instanceId for proper resolution
+        const item = modalState.items[0];
+        onSubmit([{ fileHash: fileHashOrCompoundKeys, instanceId: item?.instanceId }], categoryName, options);
+      }
     }
     closeModal();
-  }, [onSubmit, closeModal]);
+  }, [onSubmit, closeModal, dataArray, modalState.items]);
 
   // Pre-rendered modal element
   const FileCategoryModalElement = useMemo(() => {
@@ -333,10 +311,8 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
       onCategoryChange: handleCategoryChange,
       showMoveOption,
       permissionCheck,
-      hasAmuleFiles,
-      hasAmuleSharedFiles,
-      hasRtorrentItems,
-      hasQbittorrentItems,
+      hasAutoMoveItems,
+      hasOptionalMoveItems,
       forceMove,
       onSubmit: handleSubmit,
       onClose: closeModal,
@@ -353,10 +329,8 @@ export const useFileCategoryModal = ({ onSubmit, getSelectedHashes, dataArray })
     handleCategoryChange,
     showMoveOption,
     permissionCheck,
-    hasAmuleFiles,
-    hasAmuleSharedFiles,
-    hasRtorrentItems,
-    hasQbittorrentItems,
+    hasAutoMoveItems,
+    hasOptionalMoveItems,
     forceMove,
     handleSubmit,
     closeModal,

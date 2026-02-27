@@ -6,8 +6,8 @@
 const BaseModule = require('../lib/BaseModule');
 const logger = require('../lib/logger');
 
-// Singleton managers - imported directly instead of injected
-const rtorrentManager = require('./rtorrentManager');
+// Client registry - replaces direct singleton manager imports
+const registry = require('../lib/ClientRegistry');
 
 const log = logger.log.bind(logger);
 
@@ -25,12 +25,14 @@ class RtorrentAPI extends BaseModule {
     app.get('/api/rtorrent/files/:hash', async (req, res) => {
       try {
         const { hash } = req.params;
+        const { instanceId } = req.query;
 
-        if (!rtorrentManager || !rtorrentManager.isConnected()) {
+        const rtMgr = registry.get(instanceId);
+        if (!rtMgr) {
           return res.status(503).json({ error: 'rtorrent not connected' });
         }
 
-        const files = await rtorrentManager.getFiles(hash);
+        const files = await rtMgr.getFiles(hash);
         res.json({ files });
       } catch (err) {
         log('Error fetching torrent files:', err.message);

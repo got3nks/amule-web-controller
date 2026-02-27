@@ -5,6 +5,7 @@
 
 const fs = require('fs').promises;
 const path = require('path');
+const cookieSignature = require('cookie-signature');
 const BaseModule = require('../lib/BaseModule');
 const config = require('./config');
 const logger = require('../lib/logger');
@@ -14,21 +15,71 @@ const autoRefreshManager = require('./autoRefreshManager');
 const moveOperationManager = require('../lib/MoveOperationManager');
 const { checkPathPermissions, resolveItemPath, resolveCategoryDestPaths } = require('../lib/pathUtils');
 
-// Singleton managers - imported directly instead of injected
-const amuleManager = require('./amuleManager');
-const rtorrentManager = require('./rtorrentManager');
-const qbittorrentManager = require('./qbittorrentManager');
+// Client registry and metadata for multi-instance manager lookups
+const registry = require('../lib/ClientRegistry');
+const clientMeta = require('../lib/clientMeta');
+const { itemKey } = require('../lib/itemKey');
+const { parseTorrentBuffer } = require('../lib/torrentUtils');
 const geoIPManager = require('./geoIPManager');
 const authManager = require('./authManager');
 const categoryManager = require('../lib/CategoryManager');
 const prowlarrAPI = require('./prowlarrAPI');
 const eventScriptingManager = require('../lib/EventScriptingManager');
 
+// Capability requirements per WS action (actions not listed require no specific capability)
+const ACTION_CAPABILITIES = {
+  search: ['search'],
+  getPreviousSearchResults: ['search'],
+  batchDownloadSearchResults: ['add_downloads'],
+  addEd2kLinks: ['add_downloads'],
+  addMagnetLinks: ['add_downloads'],
+  addTorrentFile: ['add_downloads'],
+  batchPause: ['pause_resume'],
+  batchResume: ['pause_resume'],
+  batchStop: ['pause_resume'],
+  batchDelete: ['remove_downloads'],
+  batchSetFileCategory: ['assign_categories'],
+  createCategory: ['manage_categories'],
+  updateCategory: ['manage_categories'],
+  deleteCategory: ['manage_categories'],
+  getServersList: ['view_servers'],
+  serverDoAction: ['view_servers'],
+  getServerInfo: ['view_servers'],
+  getLog: ['view_logs'],
+  getAppLog: ['view_logs'],
+  getQbittorrentLog: ['view_logs'],
+  getStatsTree: ['view_statistics'],
+  refreshSharedFiles: ['view_shared'],
+  checkDeletePermissions: ['remove_downloads'],
+  checkMovePermissions: ['move_files'],
+};
+
 class WebSocketHandlers extends BaseModule {
   constructor() {
     super();
     // Track when the last aMule search was performed
     this.lastAmuleSearchTimestamp = 0;
+    this.lastAmuleSearchInstanceId = null;
+  }
+
+  /**
+   * Resolve manager by instanceId (preferred) or first of clientType (fallback).
+   * @param {string|null} instanceId - Instance ID to look up directly
+   * @param {string|null} clientType - Client type fallback (e.g. 'rtorrent', 'qbittorrent', 'amule')
+   * @returns {Object|null} Manager instance or null
+   */
+  _getManager(instanceId, clientType) {
+    if (instanceId) {
+      const mgr = registry.get(instanceId);
+      if (mgr) return mgr;
+    }
+    if (clientType) {
+      const all = registry.getByType(clientType);
+      const fallback = all.find(m => m.isConnected?.()) || all.find(m => m.isEnabled?.()) || all[0] || null;
+      if (fallback) logger.log(`⚠️ [WebSocket._getManager] No instanceId provided, falling back to ${clientType} instance "${fallback.instanceId}"`);
+      return fallback;
+    }
+    return null;
   }
 
   /**
@@ -42,18 +93,18 @@ class WebSocketHandlers extends BaseModule {
     return cookieHeader.split(';').reduce((acc, cookie) => {
       const [key, value] = cookie.trim().split('=');
       if (key && value) {
-        // URL decode the cookie value
-        acc[key] = decodeURIComponent(value);
+        try { acc[key] = decodeURIComponent(value); } catch { acc[key] = value; }
       }
       return acc;
     }, {});
   }
 
   /**
-   * Parse signed session cookie to extract session ID
+   * Parse and verify signed session cookie to extract session ID.
    * Express-session uses format: s:<sessionId>.<signature>
+   * The signature is verified using the session secret via cookie-signature.
    * @param {string} signedCookie - Signed cookie value
-   * @returns {string|null} Session ID or null if invalid
+   * @returns {string|null} Session ID or null if invalid/tampered
    */
   parseSignedCookie(signedCookie) {
     if (!signedCookie) return null;
@@ -63,16 +114,16 @@ class WebSocketHandlers extends BaseModule {
       return null;
     }
 
-    // Remove 's:' prefix
-    const withoutPrefix = signedCookie.slice(2);
+    // Verify signature using session secret
+    const secret = config.ensureSessionSecret();
+    const unsigned = cookieSignature.unsign(signedCookie.slice(2), secret);
 
-    // Extract session ID (everything before the first '.')
-    const dotIndex = withoutPrefix.indexOf('.');
-    if (dotIndex === -1) {
+    // unsign() returns false if signature is invalid
+    if (unsigned === false) {
       return null;
     }
 
-    return withoutPrefix.slice(0, dotIndex);
+    return unsigned;
   }
 
   // Create client-specific logger
@@ -108,8 +159,6 @@ class WebSocketHandlers extends BaseModule {
       send: (data) => ws.send(JSON.stringify(data)),
       clientInfo: { username, nickname, clientIp },
       broadcast: this.broadcast,
-      amuleManager,
-      rtorrentManager,
       categoryManager
     };
   }
@@ -118,13 +167,15 @@ class WebSocketHandlers extends BaseModule {
   handleConnection(ws, req) {
     // Get username from configurable header (for proxy auth like Authelia)
     // Falls back to 'remote-user' if not configured, then 'unknown'
-    const historyConfig = config.getConfig()?.history || {};
-    const usernameHeader = (historyConfig.usernameHeader || 'remote-user').toLowerCase();
-    const username = req.headers[usernameHeader] || 'unknown';
+    const proxyConfig = config.getTrustedProxyConfig();
+    const usernameHeader = (proxyConfig.usernameHeader || 'remote-user').toLowerCase();
+    let username = req.headers[usernameHeader] || 'unknown';
     const nickname = req.headers['remote-name'] || 'unknown';
     const clientIp = getClientIP(req);
 
     // Check authentication if enabled
+    let sessionUser = null;
+    let sessionId = null;
     const authEnabled = config.getAuthEnabled();
     if (authEnabled) {
       // Parse cookies from WebSocket upgrade request
@@ -146,7 +197,7 @@ class WebSocketHandlers extends BaseModule {
       }
 
       // Parse signed cookie to extract session ID
-      const sessionId = this.parseSignedCookie(signedSessionCookie);
+      sessionId = this.parseSignedCookie(signedSessionCookie);
 
       if (!sessionId) {
         ws.close(1008, 'Authentication required');
@@ -160,6 +211,12 @@ class WebSocketHandlers extends BaseModule {
         this.log(`🚫 WebSocket rejected from ${clientIp}: Invalid or expired session`);
         return;
       }
+
+      // Extract user info from session
+      sessionUser = authManager.getSessionUser(sessionId);
+      if (sessionUser && sessionUser.username) {
+        username = sessionUser.username;
+      }
     }
 
     const geoData = geoIPManager.getGeoIPData(clientIp);
@@ -167,22 +224,56 @@ class WebSocketHandlers extends BaseModule {
 
     const context = this.createContext(ws, username, nickname, clientIp);
 
+    // Attach user info to context for capability enforcement
+    if (sessionUser) {
+      context.clientInfo.userId = sessionUser.userId;
+      context.clientInfo.isAdmin = sessionUser.isAdmin;
+      context.clientInfo.capabilities = sessionUser.capabilities;
+    } else if (!authEnabled) {
+      // Auth disabled — treat all connections as admin
+      context.clientInfo.isAdmin = true;
+    }
+
+    // Attach user info to ws object for per-client broadcast filtering
+    ws.user = {
+      userId: sessionUser?.userId || null,
+      username: sessionUser?.username || username,
+      isAdmin: authEnabled ? (sessionUser?.isAdmin || false) : true,
+      capabilities: sessionUser?.capabilities || []
+    };
+
     context.log(`New WebSocket connection from ${clientIp}${locationInfo}`);
     context.send({ type: 'connected', message: 'Connected to aMule Controller' });
-    context.send({ type: 'search-lock', locked: amuleManager.isSearchInProgress() });
+    context.send({ type: 'search-lock', locked: registry.getByType('amule').some(m => m.isSearchInProgress()) });
 
-    // Send cached batch update to newly connected client (if available)
+    // Send cached batch update to newly connected client (if available), filtered by ownership
     const cachedBatchUpdate = autoRefreshManager.getCachedBatchUpdate();
     if (cachedBatchUpdate) {
-      context.send({ type: 'batch-update', data: cachedBatchUpdate });
+      const filtered = this._filterBatchUpdateForUser(cachedBatchUpdate, context.clientInfo);
+      context.send({ type: 'batch-update', data: filtered });
       context.log('Sent cached batch update to new client');
+    }
+
+    // Periodic session re-validation (every 5 minutes)
+    let sessionHeartbeat = null;
+    if (authEnabled && sessionId) {
+      sessionHeartbeat = setInterval(() => {
+        if (!authManager.validateSession(sessionId)) {
+          context.log(`Session expired for ${username}, closing WebSocket`);
+          clearInterval(sessionHeartbeat);
+          ws.close(4001, 'Session expired');
+        }
+      }, 5 * 60 * 1000);
     }
 
     ws.on('message', async message => {
       await this.handleMessage(message, context);
     });
 
-    ws.on('close', () => context.log(`WebSocket connection closed from ${clientIp}`));
+    ws.on('close', () => {
+      if (sessionHeartbeat) clearInterval(sessionHeartbeat);
+      context.log(`WebSocket connection closed from ${clientIp}`);
+    });
     ws.on('error', (err) => context.log('WebSocket error:', err));
   }
 
@@ -192,21 +283,32 @@ class WebSocketHandlers extends BaseModule {
       const data = JSON.parse(message);
       context.log(`Received action: ${data.action}`, data);
 
-      if (amuleManager.isEnabled() && !amuleManager.isConnected()) {
-        await amuleManager.initClient();
+      // Capability gate: check if the user has the required capability for this action
+      const requiredCaps = ACTION_CAPABILITIES[data.action];
+      if (requiredCaps && !this._hasCapability(context, ...requiredCaps)) {
+        logger.warn(`[WS Auth] Capability denied: user="${context.clientInfo.username}" (id=${context.clientInfo.userId}) missing [${requiredCaps.join(', ')}] for action="${data.action}"`);
+        context.send({ type: 'error', message: 'Insufficient permissions' });
+        return;
+      }
+
+      // Auto-reconnect all enabled-but-disconnected aMule instances
+      for (const mgr of registry.getByType('amule')) {
+        if (mgr.isEnabled() && !mgr.isConnected()) {
+          try { await mgr.initClient(); } catch (e) { /* will retry on next message */ }
+        }
       }
 
       switch (data.action) {
         case 'search': await this.handleSearch(data, context); break;
-        case 'getPreviousSearchResults': await this.handleGetPreviousSearchResults(context); break;
-        case 'refreshSharedFiles': await this.handleRefreshSharedFiles(context); break;
-        case 'getServersList': await this.handleGetServersList(context); break;
+        case 'getPreviousSearchResults': await this.handleGetPreviousSearchResults(data, context); break;
+        case 'refreshSharedFiles': await this.handleRefreshSharedFiles(data, context); break;
+        case 'getServersList': await this.handleGetServersList(data, context); break;
         case 'serverDoAction': await this.handleServerDoAction(data, context); break;
-        case 'getStatsTree': await this.handleGetStatsTree(context); break;
-        case 'getServerInfo': await this.handleGetServerInfo(context); break;
-        case 'getLog': await this.handleGetLog(context); break;
+        case 'getStatsTree': await this.handleGetStatsTree(data, context); break;
+        case 'getServerInfo': await this.handleGetServerInfo(data, context); break;
+        case 'getLog': await this.handleGetLog(data, context); break;
         case 'getAppLog': await this.handleGetAppLog(context); break;
-        case 'getQbittorrentLog': await this.handleGetQbittorrentLog(context); break;
+        case 'getQbittorrentLog': await this.handleGetQbittorrentLog(data, context); break;
         case 'batchDownloadSearchResults': await this.handleBatchDownloadSearchResults(data, context); break;
         case 'addEd2kLinks': await this.handleAddEd2kLinks(data, context); break;
         case 'addMagnetLinks': await this.handleAddMagnetLinks(data, context); break;
@@ -234,38 +336,49 @@ class WebSocketHandlers extends BaseModule {
 
   // Handler implementations
   async handleSearch(data, context) {
-    if (!context.amuleManager.acquireSearchLock()) {
-      context.send({ type: 'error', message: 'Another search is running' });
+    const manager = this._getManager(data.instanceId, 'amule');
+    if (!manager) {
+      context.send({ type: 'error', message: 'No aMule instance available' });
+      return;
+    }
+    if (!manager.acquireSearchLock()) {
+      context.send({ type: 'error', message: 'Another search is running on this instance' });
       return;
     }
 
-    context.broadcast({ type: 'search-lock', locked: true });
+    const searchFilter = { filter: u => u?.isAdmin || u?.capabilities?.includes('search') };
+    context.broadcast({ type: 'search-lock', locked: true }, searchFilter);
 
     try {
-      const result = await context.amuleManager.getClient().searchAndWaitResults(data.query, data.type, data.extension);
-      // Track timestamp for comparison with Prowlarr results
+      const result = await manager.search(data.query, data.type, data.extension);
+      // Track timestamp and instance for comparison with Prowlarr results
       this.lastAmuleSearchTimestamp = Date.now();
-      context.broadcast({ type: 'search-results', data: result.results || [] });
-      context.log(`Search completed: ${result.resultsLength || 0} results found`);
+      this.lastAmuleSearchInstanceId = manager.instanceId;
+      context.broadcast({ type: 'search-results', data: result.results || [], instanceId: manager.instanceId }, searchFilter);
+      context.log(`Search completed on ${manager.displayName}: ${result.resultsLength || 0} results found`);
     } catch (err) {
       context.log('Search error:', err);
       context.send({ type: 'error', message: 'Search failed: ' + err.message });
     } finally {
-      context.amuleManager.releaseSearchLock();
-      context.broadcast({ type: 'search-lock', locked: false });
+      manager.releaseSearchLock();
+      context.broadcast({ type: 'search-lock', locked: false }, searchFilter);
     }
   }
 
-  async handleGetPreviousSearchResults(context) {
+  async handleGetPreviousSearchResults(data, context) {
     try {
       // Get Prowlarr cached results (already transformed)
       const prowlarrCache = prowlarrAPI.getCachedResults();
 
-      // Get aMule cached results
+      // Get aMule cached results from the specified or last-searched instance
+      const instanceId = data?.instanceId || this.lastAmuleSearchInstanceId;
+      const manager = this._getManager(instanceId, 'amule');
       let amuleResults = [];
       try {
-        const result = await context.amuleManager.getClient().getSearchResults();
-        amuleResults = result.results || [];
+        if (manager) {
+          const result = await manager.getSearchResults();
+          amuleResults = result.results || [];
+        }
       } catch (err) {
         // aMule might not be connected, that's ok
         context.log('aMule search results not available:', err.message);
@@ -276,7 +389,7 @@ class WebSocketHandlers extends BaseModule {
         context.send({ type: 'previous-search-results', data: prowlarrCache.results });
         context.log(`Previous search results: ${prowlarrCache.results.length} Prowlarr results (more recent)`);
       } else {
-        context.send({ type: 'previous-search-results', data: amuleResults });
+        context.send({ type: 'previous-search-results', data: amuleResults, instanceId: manager?.instanceId });
         context.log(`Previous search results: ${amuleResults.length} aMule results`);
       }
     } catch (err) {
@@ -285,11 +398,22 @@ class WebSocketHandlers extends BaseModule {
     }
   }
 
-  async handleRefreshSharedFiles(context) {
+  async handleRefreshSharedFiles(data, context) {
     try {
-      await context.amuleManager.getClient().refreshSharedFiles();
+      const managers = registry.getByType('amule').filter(m => m.isConnected());
+      if (managers.length === 0) {
+        context.send({ type: 'error', message: 'No aMule instance available' });
+        return;
+      }
+      for (const mgr of managers) {
+        try {
+          await mgr.refreshSharedFiles();
+          context.log(`Shared files refresh command sent to ${mgr.displayName}`);
+        } catch (err) {
+          context.log(`Shared files refresh failed for ${mgr.displayName}: ${err.message}`);
+        }
+      }
       context.send({ type: 'shared-files-refreshed', message: 'Shared files reloaded successfully' });
-      context.log('Shared files refresh command sent to aMule');
       // Broadcast unified items after refresh
       setTimeout(async () => {
         await this.broadcastItemsUpdate(context);
@@ -300,10 +424,15 @@ class WebSocketHandlers extends BaseModule {
     }
   }
 
-  async handleGetServersList(context) {
+  async handleGetServersList(data, context) {
     try {
-      const servers = await context.amuleManager.getClient().getServerList();
-      context.send({ type: 'servers-update', data: servers });
+      const manager = this._getManager(data?.instanceId, 'amule');
+      if (!manager) {
+        context.send({ type: 'error', message: 'No aMule instance available' });
+        return;
+      }
+      const servers = await manager.getServerList();
+      context.send({ type: 'servers-update', data: servers, instanceId: manager.instanceId });
       context.log('Servers list fetched successfully');
     } catch (err) {
       context.log('Get servers list error:', err);
@@ -313,28 +442,34 @@ class WebSocketHandlers extends BaseModule {
 
   async handleServerDoAction(data, context) {
     try {
-      const { ip, port, serverAction } = data;
+      const { ip, port, serverAction, instanceId } = data;
       if (!ip || !port || !serverAction) {
         throw new Error('Missing required parameters: ip, port, or serverAction');
       }
 
+      const manager = this._getManager(instanceId, 'amule');
+      if (!manager) {
+        context.send({ type: 'error', message: 'No aMule instance available' });
+        return;
+      }
+
       let success;
-      
+
       switch (serverAction) {
         case 'connect':
-          success = await context.amuleManager.getClient().connectServer(ip, port);
+          success = await manager.connectServer(ip, port);
           break;
         case 'disconnect':
-          success = await context.amuleManager.getClient().disconnectServer(ip, port);
+          success = await manager.disconnectServer(ip, port);
           break;
         case 'remove':
-          success = await context.amuleManager.getClient().removeServer(ip, port);
+          success = await manager.removeServer(ip, port);
           break;
         default:
           throw new Error(`Unknown action: ${serverAction}`);
       }
 
-      context.send({ type: 'server-action', data: success });
+      context.send({ type: 'server-action', data: success, instanceId: manager.instanceId });
       context.log(`Action ${serverAction} on server ${ip}:${port} ${success ? 'completed successfully' : 'failed'}`);
     } catch (err) {
       context.log('Server action error:', err);
@@ -342,15 +477,15 @@ class WebSocketHandlers extends BaseModule {
     }
   }
 
-  async handleGetStatsTree(context) {
+  async handleGetStatsTree(data, context) {
     try {
-      const client = context.amuleManager.getClient();
-      if (!client) {
+      const manager = this._getManager(data?.instanceId, 'amule');
+      if (!manager) {
         context.send({ type: 'error', message: 'aMule client not connected. Please complete setup first.' });
         return;
       }
-      const statsTree = await client.getStatsTree();
-      context.send({ type: 'stats-tree-update', data: statsTree });
+      const statsTree = await manager.getStatsTree();
+      context.send({ type: 'stats-tree-update', data: statsTree, instanceId: manager.instanceId });
       context.log('Stats tree fetched successfully');
     } catch (err) {
       context.log('Get stats tree error:', err);
@@ -358,10 +493,15 @@ class WebSocketHandlers extends BaseModule {
     }
   }
 
-  async handleGetServerInfo(context) {
+  async handleGetServerInfo(data, context) {
     try {
-      const serverInfo = await context.amuleManager.getClient().getServerInfo();
-      context.send({ type: 'server-info-update', data: serverInfo });
+      const manager = this._getManager(data?.instanceId, 'amule');
+      if (!manager) {
+        context.send({ type: 'error', message: 'No aMule instance available' });
+        return;
+      }
+      const serverInfo = await manager.getServerInfo();
+      context.send({ type: 'server-info-update', data: serverInfo, instanceId: manager.instanceId });
       context.log('Server info fetched successfully');
     } catch (err) {
       context.log('Get server info error:', err);
@@ -369,10 +509,15 @@ class WebSocketHandlers extends BaseModule {
     }
   }
 
-  async handleGetLog(context) {
+  async handleGetLog(data, context) {
     try {
-      const log = await context.amuleManager.getClient().getLog();
-      context.send({ type: 'log-update', data: log });
+      const manager = this._getManager(data?.instanceId, 'amule');
+      if (!manager) {
+        context.send({ type: 'error', message: 'No aMule instance available' });
+        return;
+      }
+      const log = await manager.getLog();
+      context.send({ type: 'log-update', data: log, instanceId: manager.instanceId });
       context.log('Log fetched successfully');
     } catch (err) {
       context.log('Get log error:', err);
@@ -390,10 +535,15 @@ class WebSocketHandlers extends BaseModule {
     }
   }
 
-  async handleGetQbittorrentLog(context) {
+  async handleGetQbittorrentLog(data, context) {
     try {
-      const log = await qbittorrentManager.getLog();
-      context.send({ type: 'qbittorrent-log-update', data: log });
+      const qbMgr = this._getManager(data?.instanceId, 'qbittorrent');
+      if (!qbMgr) {
+        context.send({ type: 'error', message: 'No qBittorrent instance registered' });
+        return;
+      }
+      const log = await qbMgr.getLog();
+      context.send({ type: 'qbittorrent-log-update', data: log, instanceId: qbMgr.instanceId });
     } catch (err) {
       context.log('Get qBittorrent log error:', err);
       context.send({ type: 'error', message: 'Failed to fetch qBittorrent log: ' + err.message });
@@ -404,29 +554,30 @@ class WebSocketHandlers extends BaseModule {
     try {
       const { fileHashes, categoryId: rawCategoryId, categoryName } = data;
 
+      if (!fileHashes || !Array.isArray(fileHashes) || fileHashes.length === 0) {
+        throw new Error('No file hashes provided for batch download');
+      }
+
+      const manager = this._getManager(data.instanceId, 'amule');
+      if (!manager) { throw new Error('No aMule instance available'); }
+
       // Support both legacy categoryId and new categoryName
       let categoryId = 0;
       if (categoryName) {
         // Ensure category exists in aMule (creates if needed)
         // This handles rTorrent-only categories that don't have an amuleId yet
-        categoryId = await context.categoryManager?.ensureAmuleCategory(categoryName) ?? 0;
+        categoryId = await manager.ensureAmuleCategoryId(categoryName) ?? 0;
         context.log(`Category lookup: name="${categoryName}" → amuleId=${categoryId}`);
       } else if (rawCategoryId !== undefined && rawCategoryId !== null) {
         categoryId = rawCategoryId;
         context.log(`Using legacy categoryId: ${categoryId}`);
       }
-
-      if (!fileHashes || !Array.isArray(fileHashes) || fileHashes.length === 0) {
-        throw new Error('No file hashes provided for batch download');
-      }
-
-      const client = context.amuleManager.getClient();
       const username = context.clientInfo.username !== 'unknown' ? context.clientInfo.username : null;
 
-      // Set up file info callback once for all downloads
-      client.setFileInfoCallback(async (hash) => {
+      // File info callback for history tracking (resolves hash → filename/size from search results)
+      const fileInfoCallback = async (hash) => {
         try {
-          const searchResults = await client.getSearchResults();
+          const searchResults = await manager.getSearchResults();
           const results = searchResults?.results || [];
           const file = results.find(r => {
             const resultHash = r.fileHash || r.raw?.EC_TAG_SEARCHFILE_HASH;
@@ -441,13 +592,16 @@ class WebSocketHandlers extends BaseModule {
           // Silently fail - filename will be 'Unknown'
         }
         return { filename: 'Unknown', size: null };
-      });
+      };
 
       const results = [];
       for (const fileHash of fileHashes) {
         try {
-          const success = await client.downloadSearchResult(fileHash, categoryId, username);
+          const success = await manager.addSearchResult(fileHash, categoryId, username, fileInfoCallback);
           results.push({ fileHash, success });
+          if (success && context.clientInfo.userId && this.userManager) {
+            this.userManager.recordOwnership(itemKey(manager.instanceId, fileHash), context.clientInfo.userId);
+          }
           context.log(`Download ${success ? 'started' : 'failed'} for: ${fileHash} (category: ${categoryId})`);
         } catch (err) {
           context.log(`Download failed for ${fileHash}: ${err.message}`);
@@ -474,7 +628,6 @@ class WebSocketHandlers extends BaseModule {
   async handleAddEd2kLinks(data, context) {
     try {
       const links = data.links;
-      const categoryId = data.categoryId || 0;
       const username = context.clientInfo.username !== 'unknown' ? context.clientInfo.username : null;
 
       const cleaned = links
@@ -486,12 +639,30 @@ class WebSocketHandlers extends BaseModule {
         return;
       }
 
+      const manager = this._getManager(data.instanceId, 'amule');
+      if (!manager) { throw new Error('No aMule instance available for ED2K links'); }
+
+      // Resolve category: prefer categoryName (new), fall back to categoryId (legacy)
+      let categoryId = data.categoryId || 0;
+      if (data.categoryName) {
+        const resolved = await manager.ensureAmuleCategoryId(data.categoryName);
+        categoryId = resolved ?? 0;
+        context.log(`Category lookup: name="${data.categoryName}" → amuleId=${categoryId}`);
+      }
+
       const results = [];
       for (const link of cleaned) {
         context.log(`Adding ED2K link: ${link} (category: ${categoryId})`);
         // Process links sequentially using the existing queue to maintain order and avoid saturating aMule
-        const success = await context.amuleManager.getClient().addEd2kLink(link, categoryId, username);
+        const success = await manager.addEd2kLink(link, categoryId, username);
         results.push({ link, success });
+        // Record ownership — extract hash from ed2k link format: ed2k://|file|name|size|hash|/
+        if (success && context.clientInfo.userId && this.userManager) {
+          const hashMatch = link.match(/\|([a-fA-F0-9]{32})\|/);
+          if (hashMatch) {
+            this.userManager.recordOwnership(itemKey(manager.instanceId, hashMatch[1]), context.clientInfo.userId);
+          }
+        }
       }
 
       // Broadcast unified items for instant UI feedback
@@ -506,19 +677,13 @@ class WebSocketHandlers extends BaseModule {
 
   async handleAddMagnetLinks(data, context) {
     try {
-      const { links, label, clientId = 'rtorrent' } = data;
+      const { links, label, clientId = 'rtorrent', instanceId } = data;
 
-      // Route to appropriate client
-      if (clientId === 'qbittorrent') {
-        if (!qbittorrentManager || !qbittorrentManager.isConnected()) {
-          context.send({ type: 'error', message: 'qBittorrent is not connected' });
-          return;
-        }
-      } else {
-        if (!context.rtorrentManager || !context.rtorrentManager.isConnected()) {
-          context.send({ type: 'error', message: 'rTorrent is not connected' });
-          return;
-        }
+      // Resolve manager from registry
+      const manager = this._getManager(instanceId, clientId);
+      if (!manager || !manager.isConnected()) {
+        context.send({ type: 'error', message: `${clientId} is not connected` });
+        return;
       }
 
       if (!links || !Array.isArray(links) || links.length === 0) {
@@ -542,38 +707,24 @@ class WebSocketHandlers extends BaseModule {
 
       const username = context.clientInfo.username !== 'unknown' ? context.clientInfo.username : null;
       const results = [];
+      const addOptions = { categoryName: label || '', savePath: directory, priority: category?.priority, start: true, username };
+      const clientName = manager.displayName || clientId;
 
-      if (clientId === 'qbittorrent') {
-        // qBittorrent handling
-        for (const magnetUri of links) {
-          try {
-            context.log(`Adding magnet link to qBittorrent: ${magnetUri.substring(0, 60)}... (category: ${label || 'none'}${directory ? `, path: ${directory}` : ''})`);
-            await qbittorrentManager.addMagnet(magnetUri, {
-              category: label || '',
-              savepath: directory,
-              username
-            });
-            results.push({ link: magnetUri, success: true });
-          } catch (err) {
-            context.log(`Failed to add magnet to qBittorrent: ${err.message}`);
-            results.push({ link: magnetUri, success: false, error: err.message });
+      for (const magnetUri of links) {
+        try {
+          context.log(`Adding magnet link to ${clientName}: ${magnetUri.substring(0, 60)}... (category: ${label || 'none'}${directory ? `, path: ${directory}` : ''})`);
+          await manager.addMagnet(magnetUri, addOptions);
+          results.push({ link: magnetUri, success: true });
+          // Record ownership — extract hash from magnet URI xt=urn:btih:<hash>
+          if (context.clientInfo.userId && this.userManager) {
+            const hashMatch = magnetUri.match(/xt=urn:btih:([a-fA-F0-9]{40})/i);
+            if (hashMatch) {
+              this.userManager.recordOwnership(itemKey(manager.instanceId, hashMatch[1]), context.clientInfo.userId);
+            }
           }
-        }
-      } else {
-        // rTorrent handling
-        // Map category priority to rtorrent priority
-        const { mapPriorityToRtorrent } = require('../lib/CategoryManager');
-        const rtorrentPriority = category ? mapPriorityToRtorrent(category.priority) : null;
-
-        for (const magnetUri of links) {
-          try {
-            context.log(`Adding magnet link to rTorrent: ${magnetUri.substring(0, 60)}... (label: ${label || 'none'}${directory ? `, path: ${directory}` : ''}${rtorrentPriority !== null ? `, priority: ${rtorrentPriority}` : ''})`);
-            await context.rtorrentManager.addMagnet(magnetUri, { label: label || '', directory, priority: rtorrentPriority, start: true, username });
-            results.push({ link: magnetUri, success: true });
-          } catch (err) {
-            context.log(`Failed to add magnet to rTorrent: ${err.message}`);
-            results.push({ link: magnetUri, success: false, error: err.message });
-          }
+        } catch (err) {
+          context.log(`Failed to add magnet to ${clientName}: ${err.message}`);
+          results.push({ link: magnetUri, success: false, error: err.message });
         }
       }
 
@@ -589,19 +740,13 @@ class WebSocketHandlers extends BaseModule {
 
   async handleAddTorrentFile(data, context) {
     try {
-      const { fileData, fileName, label, clientId = 'rtorrent' } = data;
+      const { fileData, fileName, label, clientId = 'rtorrent', instanceId } = data;
 
-      // Route to appropriate client
-      if (clientId === 'qbittorrent') {
-        if (!qbittorrentManager || !qbittorrentManager.isConnected()) {
-          context.send({ type: 'error', message: 'qBittorrent is not connected' });
-          return;
-        }
-      } else {
-        if (!context.rtorrentManager || !context.rtorrentManager.isConnected()) {
-          context.send({ type: 'error', message: 'rTorrent is not connected' });
-          return;
-        }
+      // Resolve manager from registry
+      const manager = this._getManager(instanceId, clientId);
+      if (!manager || !manager.isConnected()) {
+        context.send({ type: 'error', message: `${clientId} is not connected` });
+        return;
       }
 
       if (!fileData) {
@@ -626,28 +771,23 @@ class WebSocketHandlers extends BaseModule {
       // fileData is base64 encoded - convert to Buffer
       const buffer = Buffer.from(fileData, 'base64');
       const username = context.clientInfo.username !== 'unknown' ? context.clientInfo.username : null;
+      const clientName = manager.displayName || clientId;
 
-      if (clientId === 'qbittorrent') {
-        // qBittorrent handling
-        context.log(`Adding torrent file to qBittorrent: ${fileName} (category: ${label || 'none'}${directory ? `, path: ${directory}` : ''})`);
+      context.log(`Adding torrent file to ${clientName}: ${fileName} (category: ${label || 'none'}${directory ? `, path: ${directory}` : ''})`);
 
-        await qbittorrentManager.addTorrentRaw(buffer, {
-          category: label || '',
-          savepath: directory,
-          filename: fileName,
-          username
-        });
-      } else {
-        // rTorrent handling
-        // Map category priority to rtorrent priority
-        const { mapPriorityToRtorrent } = require('../lib/CategoryManager');
-        const rtorrentPriority = category ? mapPriorityToRtorrent(category.priority) : null;
+      await manager.addTorrentRaw(buffer, {
+        categoryName: label || '', savePath: directory, priority: category?.priority,
+        start: true, filename: fileName, username
+      });
 
-        context.log(`Adding torrent file to rTorrent: ${fileName} (label: ${label || 'none'}${directory ? `, path: ${directory}` : ''}${rtorrentPriority !== null ? `, priority: ${rtorrentPriority}` : ''})`);
-
-        // Use addTorrentRaw to send raw data directly to rtorrent
-        // This works even when rtorrent is on a different machine/container
-        await context.rtorrentManager.addTorrentRaw(buffer, { label: label || '', directory, priority: rtorrentPriority, start: true, username });
+      // Record ownership — extract hash from torrent buffer
+      if (context.clientInfo.userId && this.userManager) {
+        try {
+          const { hash } = parseTorrentBuffer(buffer);
+          if (hash) {
+            this.userManager.recordOwnership(itemKey(manager.instanceId, hash), context.clientInfo.userId);
+          }
+        } catch (e) { /* best-effort */ }
       }
 
       // Broadcast unified items for instant UI feedback
@@ -684,6 +824,11 @@ class WebSocketHandlers extends BaseModule {
       }
 
       const trimmedTitle = title.trim();
+
+      // Validate category name — block path-unsafe characters
+      if (/[\/\\\x00]/.test(trimmedTitle) || trimmedTitle.includes('..')) {
+        throw new Error('Category name contains invalid characters');
+      }
 
       // Convert color from aMule BGR integer to hex if needed
       const { amuleColorToHex } = require('../lib/CategoryManager');
@@ -723,10 +868,9 @@ class WebSocketHandlers extends BaseModule {
       context.send({
         type: 'category-created',
         success: true,
-        categoryId: category.amuleId,
         message: `Category "${trimmedTitle}" created successfully`
       });
-      context.log(`Category created: ${trimmedTitle}${category.amuleId !== null ? ` (aMule ID: ${category.amuleId})` : ''}`);
+      context.log(`Category created: ${trimmedTitle}`);
     } catch (err) {
       context.log('Create category error:', err);
       context.send({
@@ -738,9 +882,8 @@ class WebSocketHandlers extends BaseModule {
 
   async handleUpdateCategory(data, context) {
     try {
-      const { categoryId, title, name, path, pathMappings, comment, color, priority } = data;
+      const { title, name, path, pathMappings, comment, color, priority } = data;
 
-      // Support both legacy categoryId and new name-based lookup
       const categoryName = name || title;
 
       if (!categoryName || categoryName.trim() === '') {
@@ -749,11 +892,7 @@ class WebSocketHandlers extends BaseModule {
 
       const trimmedName = categoryName.trim();
 
-      // Find the category - support both by name and by amuleId
       let category = context.categoryManager.getByName(trimmedName);
-      if (!category && categoryId !== undefined && categoryId !== null) {
-        category = context.categoryManager.getByAmuleId(categoryId);
-      }
 
       if (!category) {
         throw new Error(`Category "${trimmedName}" not found`);
@@ -796,13 +935,16 @@ class WebSocketHandlers extends BaseModule {
 
       // Handle rename if title differs from current name (also updates aMule)
       const newTitle = title?.trim();
+      if (newTitle && (/[\/\\\x00]/.test(newTitle) || newTitle.includes('..'))) {
+        throw new Error('Category name contains invalid characters');
+      }
       if (newTitle && newTitle !== category.name) {
         const renameResult = await context.categoryManager.rename(category.name, newTitle);
-        // If rename failed verification in aMule, stop and report error
-        if (renameResult.amuleVerification && !renameResult.amuleVerification.verified) {
+        if (renameResult.clientVerification) {
+          const v = renameResult.clientVerification;
           context.send({
             type: 'error',
-            message: `Failed to rename category in aMule: ${renameResult.amuleVerification.mismatches?.join(', ') || 'verification failed'}`
+            message: `Failed to rename category in ${v.clientType} (${v.instanceId}): ${v.mismatches?.join(', ') || 'verification failed'}`
           });
           return;
         }
@@ -818,11 +960,12 @@ class WebSocketHandlers extends BaseModule {
         priority: priority !== undefined ? priority : undefined
       });
 
-      // Check for aMule verification failure
-      if (updateResult.amuleVerification && !updateResult.amuleVerification.verified) {
+      // Check for client verification failure
+      if (updateResult.clientVerification) {
+        const v = updateResult.clientVerification;
         context.send({
           type: 'error',
-          message: `Category saved locally but aMule sync failed: ${updateResult.amuleVerification.mismatches?.join(', ') || 'verification failed'}`
+          message: `Category saved locally but ${v.clientType} sync failed (${v.instanceId}): ${v.mismatches?.join(', ') || 'verification failed'}`
         });
       }
 
@@ -850,22 +993,19 @@ class WebSocketHandlers extends BaseModule {
 
   async handleDeleteCategory(data, context) {
     try {
-      const { categoryId, name } = data;
+      const { name } = data;
 
-      // Support both legacy categoryId and new name-based deletion
-      let category;
-      if (name) {
-        category = context.categoryManager.getByName(name);
-      } else if (categoryId !== undefined && categoryId !== null) {
-        category = context.categoryManager.getByAmuleId(categoryId);
+      if (!name) {
+        throw new Error('Category name is required');
       }
+
+      const category = context.categoryManager.getByName(name);
 
       if (!category) {
         throw new Error('Category not found');
       }
 
       const categoryName = category.name;
-      const amuleId = category.amuleId;
 
       // Delete from unified category manager (also deletes from aMule if connected)
       await context.categoryManager.delete(categoryName);
@@ -882,7 +1022,7 @@ class WebSocketHandlers extends BaseModule {
         success: true,
         message: 'Category deleted successfully'
       });
-      context.log(`Category deleted: ${categoryName}${amuleId !== null ? ` (aMule ID: ${amuleId})` : ''}`);
+      context.log(`Category deleted: ${categoryName}`);
     } catch (err) {
       context.log('Delete category error:', err);
       context.send({
@@ -890,6 +1030,55 @@ class WebSocketHandlers extends BaseModule {
         message: 'Failed to delete category: ' + err.message
       });
     }
+  }
+
+  // ============================================================================
+  // AUTHORIZATION HELPERS
+  // ============================================================================
+
+  /**
+   * Check if context user has all the specified capabilities
+   * Admins implicitly have all capabilities
+   */
+  _hasCapability(context, ...caps) {
+    if (context.clientInfo.isAdmin) return true;
+    const userCaps = context.clientInfo.capabilities;
+    if (!Array.isArray(userCaps)) return false;
+    return caps.every(c => userCaps.includes(c));
+  }
+
+  /**
+   * Check if context user can mutate a specific download item
+   * Admins and users with edit_all_downloads can mutate any item.
+   * Otherwise, user must own the item.
+   */
+  _canMutateItem(context, key) {
+    if (context.clientInfo.isAdmin) return true;
+    if (context.clientInfo.capabilities?.includes('edit_all_downloads')) return true;
+    if (!context.clientInfo.userId) return false;
+    return this.userManager?.isOwnedBy(key, context.clientInfo.userId) ?? true;
+  }
+
+  /**
+   * Filter a batch-update message for a specific user's ownership
+   */
+  _filterBatchUpdateForUser(batchData, clientInfo) {
+    const items = batchData.items || [];
+    if (!clientInfo || clientInfo.isAdmin || clientInfo.capabilities?.includes('view_all_downloads')) {
+      // Annotate items with ownership flag for frontend mutation gating
+      if (!clientInfo?.userId || !this.userManager || clientInfo?.isAdmin) {
+        return { ...batchData, items: items.map(i => ({ ...i, ownedByMe: true })) };
+      }
+      const ownedKeys = this.userManager.getOwnedKeys(clientInfo.userId);
+      return { ...batchData, items: items.map(i => ({ ...i, ownedByMe: ownedKeys.has(itemKey(i.instanceId, i.hash)) })) };
+    }
+    // Ownership-filtered — all surviving items are owned
+    if (!clientInfo.userId || !this.userManager) return batchData;
+    const ownedKeys = this.userManager.getOwnedKeys(clientInfo.userId);
+    return {
+      ...batchData,
+      items: items.filter(item => ownedKeys.has(itemKey(item.instanceId, item.hash))).map(i => ({ ...i, ownedByMe: true }))
+    };
   }
 
   // ============================================================================
@@ -904,7 +1093,29 @@ class WebSocketHandlers extends BaseModule {
   async broadcastItemsUpdate(context) {
     try {
       const batchData = await dataFetchService.getBatchData();
-      context.broadcast({ type: 'batch-update', data: { items: batchData.items } });
+      context.broadcast({ type: 'batch-update', data: { items: batchData.items } }, {
+        transform: (msg, user) => {
+          const items = msg.data.items || [];
+          if (!user || user.isAdmin || user.capabilities?.includes('view_all_downloads')) {
+            // Annotate items with ownership flag for frontend mutation gating
+            if (!user?.userId || !this.userManager || user?.isAdmin) {
+              return { ...msg, data: { ...msg.data, items: items.map(i => ({ ...i, ownedByMe: true })) } };
+            }
+            const ownedKeys = this.userManager.getOwnedKeys(user.userId);
+            return { ...msg, data: { ...msg.data, items: items.map(i => ({ ...i, ownedByMe: ownedKeys.has(itemKey(i.instanceId, i.hash)) })) } };
+          }
+          // Ownership-filtered — all surviving items are owned
+          if (!user.userId || !this.userManager) return msg;
+          const ownedKeys = this.userManager.getOwnedKeys(user.userId);
+          return {
+            ...msg,
+            data: {
+              ...msg.data,
+              items: items.filter(item => ownedKeys.has(itemKey(item.instanceId, item.hash))).map(i => ({ ...i, ownedByMe: true }))
+            }
+          };
+        }
+      });
     } catch (err) {
       context.log('Failed to broadcast items update:', err.message);
     }
@@ -918,67 +1129,60 @@ class WebSocketHandlers extends BaseModule {
   /**
    * Generic batch operation executor for pause/resume/stop
    * @param {Object} opts - Operation config
-   * @param {Array} opts.items - Items to operate on ({ fileHash, clientType, fileName })
+   * @param {Array} opts.items - Items to operate on ({ fileHash, clientType, instanceId, fileName })
    * @param {Object} opts.context - WebSocket context
    * @param {string} opts.name - Action name for logging (e.g. 'pause')
    * @param {string} opts.responseType - WebSocket response type (e.g. 'batch-pause-complete')
-   * @param {Function|null} opts.rtorrentFn - async (rtorrentManager, hash) => void, or null if unsupported
-   * @param {Function|null} opts.qbittorrentFn - async (qbittorrentManager, hash) => void, or null if unsupported
-   * @param {Function|null} opts.amuleFn - async (amuleClient, hash) => bool, or null if unsupported
+   * @param {Function} opts.method - Unified method: async (manager, hash) => result
+   *   result === false → "rejected" error (aMule pattern).
    */
-  async _executeBatchOperation({ items, context, name, responseType, rtorrentFn, qbittorrentFn, amuleFn }) {
+  async _executeBatchOperation({ items, context, name, responseType, method }) {
     const label = name.charAt(0).toUpperCase() + name.slice(1);
     try {
       if (!items || !Array.isArray(items) || items.length === 0) {
         throw new Error(`No items provided for batch ${name}`);
       }
+      if (items.length > 1000) {
+        throw new Error(`Batch ${name} exceeds maximum size of 1000 items`);
+      }
 
       const results = [];
       for (const item of items) {
+        // Ownership check: skip items user doesn't own
+        const key = itemKey(item.instanceId, item.fileHash);
+        if (!this._canMutateItem(context, key)) {
+          logger.warn(`[WS Auth] Ownership denied: user="${context.clientInfo.username}" (id=${context.clientInfo.userId}) cannot mutate ${key} (action="${name}")`);
+          results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error: 'Permission denied', denied: true });
+          continue;
+        }
+
+        let manager;
         try {
-          if (item.clientType === 'rtorrent') {
-            if (!rtorrentFn) {
-              const error = `${label} is not supported for rtorrent`;
-              context.log(`${label} failed for ${item.fileName || item.fileHash}: ${error}`);
-              results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error });
-            } else if (context.rtorrentManager?.isConnected()) {
-              await rtorrentFn(context.rtorrentManager, item.fileHash);
-              results.push({ fileHash: item.fileHash, success: true });
-            } else {
-              const error = 'rtorrent not connected';
-              context.log(`${label} failed for ${item.fileName || item.fileHash}: ${error}`);
-              results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error });
-            }
-          } else if (item.clientType === 'qbittorrent') {
-            if (!qbittorrentFn) {
-              const error = `${label} is not supported for qBittorrent`;
-              context.log(`${label} failed for ${item.fileName || item.fileHash}: ${error}`);
-              results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error });
-            } else if (qbittorrentManager?.isConnected()) {
-              await qbittorrentFn(qbittorrentManager, item.fileHash);
-              results.push({ fileHash: item.fileHash, success: true });
-            } else {
-              const error = 'qBittorrent not connected';
-              context.log(`${label} failed for ${item.fileName || item.fileHash}: ${error}`);
-              results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error });
-            }
-          } else if (amuleFn) {
-            const success = await amuleFn(context.amuleManager.getClient(), item.fileHash);
-            if (success) {
-              results.push({ fileHash: item.fileHash, success: true });
-            } else {
-              const error = 'aMule rejected request';
-              context.log(`${label} failed for ${item.fileName || item.fileHash}: ${error}`);
-              results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error });
-            }
-          } else {
-            const error = `${label} is not supported for aMule`;
+          manager = registry.get(item.instanceId);
+          if (!manager) {
+            const error = item.instanceId ? `Instance "${item.instanceId}" not found` : 'No instanceId provided';
             context.log(`${label} failed for ${item.fileName || item.fileHash}: ${error}`);
-            results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error });
+            results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error: 'Client instance not found', instanceId: item.instanceId, instanceName: null });
+            continue;
+          }
+          if (!manager.isConnected()) {
+            const error = `${manager.clientType} not connected`;
+            context.log(`${label} failed for ${item.fileName || item.fileHash}: ${error}`);
+            results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error, instanceId: item.instanceId, instanceName: manager?.displayName });
+            continue;
+          }
+
+          const result = await method(manager, item.fileHash);
+          if (result === false) {
+            const error = `${manager.clientType} rejected request`;
+            context.log(`${label} failed for ${item.fileName || item.fileHash}: ${error}`);
+            results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error, instanceId: item.instanceId, instanceName: manager.displayName });
+          } else {
+            results.push({ fileHash: item.fileHash, success: true, instanceId: item.instanceId, instanceName: manager.displayName });
           }
         } catch (err) {
           context.log(`${label} failed for ${item.fileName || item.fileHash}: ${err.message}`);
-          results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error: err.message });
+          results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error: err.message, instanceId: item.instanceId, instanceName: manager?.displayName });
         }
       }
 
@@ -996,27 +1200,21 @@ class WebSocketHandlers extends BaseModule {
   async handleBatchPause(data, context) {
     await this._executeBatchOperation({
       items: data.items, context, name: 'pause', responseType: 'batch-pause-complete',
-      rtorrentFn: (mgr, hash) => mgr.stopDownload(hash),
-      qbittorrentFn: (mgr, hash) => mgr.stopDownload(hash),
-      amuleFn: (client, hash) => client.pauseDownload(hash)
+      method: (mgr, hash) => mgr.pause(hash)
     });
   }
 
   async handleBatchResume(data, context) {
     await this._executeBatchOperation({
       items: data.items, context, name: 'resume', responseType: 'batch-resume-complete',
-      rtorrentFn: (mgr, hash) => mgr.startDownload(hash),
-      qbittorrentFn: (mgr, hash) => mgr.startDownload(hash),
-      amuleFn: (client, hash) => client.resumeDownload(hash)
+      method: (mgr, hash) => mgr.resume(hash)
     });
   }
 
   async handleBatchStop(data, context) {
     await this._executeBatchOperation({
       items: data.items, context, name: 'stop', responseType: 'batch-stop-complete',
-      rtorrentFn: (mgr, hash) => mgr.closeDownload(hash),
-      qbittorrentFn: (mgr, hash) => mgr.stopDownload(hash), // qBittorrent uses pause for stop
-      amuleFn: null
+      method: (mgr, hash) => mgr.stop(hash)
     });
   }
 
@@ -1045,143 +1243,120 @@ class WebSocketHandlers extends BaseModule {
 
   async handleBatchDelete(data, context) {
     try {
-      const { items, deleteFiles, source } = data; // items: Array of { fileHash, clientType, fileName }
+      const { items, deleteFiles, source } = data; // items: Array of { fileHash, clientType, instanceId, fileName }
 
       if (!items || !Array.isArray(items) || items.length === 0) {
         throw new Error('No items provided for batch delete');
       }
+      if (items.length > 1000) {
+        throw new Error('Batch delete exceeds maximum size of 1000 items');
+      }
 
-      // Build hash→item lookup from cached unified items
+      // Build compound-key lookup from cached unified items
       const cachedItems = dataFetchService.getCachedBatchData()?.items || [];
-      const itemByHash = new Map(cachedItems.map(i => [i.hash, i]));
+      const itemByKey = new Map(cachedItems.map(i => [itemKey(i.instanceId, i.hash), i]));
 
       const results = [];
+      const instanceIdsToRefresh = new Set();
+
       for (const item of items) {
-        const cachedItem = itemByHash.get(item.fileHash?.toLowerCase());
+        // Ownership check: skip items user doesn't own
+        const ownershipKey = itemKey(item.instanceId, item.fileHash);
+        if (!this._canMutateItem(context, ownershipKey)) {
+          logger.warn(`[WS Auth] Ownership denied: user="${context.clientInfo.username}" (id=${context.clientInfo.userId}) cannot mutate ${ownershipKey} (action="batchDelete")`);
+          results.push({ fileHash: item.fileHash, fileName: item.fileName, success: false, error: 'Permission denied', denied: true });
+          continue;
+        }
+
+        const cachedItem = itemByKey.get(itemKey(item.instanceId, item.fileHash?.toLowerCase()));
         const fileName = item.fileName || cachedItem?.name;
+        const instanceId = item.instanceId || cachedItem?.instanceId;
+        const manager = registry.get(instanceId);
+
+        if (!manager) {
+          const reason = instanceId ? `Instance "${instanceId}" not found` : 'No instanceId provided';
+          context.log(`Delete failed for ${fileName || item.fileHash}: ${reason}`);
+          results.push({ fileHash: item.fileHash, fileName, success: false, error: 'Client instance not found', instanceId, instanceName: null });
+          continue;
+        }
 
         try {
-          if (item.clientType === 'rtorrent') {
-            // ── rTorrent deletion ──
-            if (!context.rtorrentManager || !context.rtorrentManager.isConnected()) {
-              results.push({ fileHash: item.fileHash, fileName, success: false, error: 'rtorrent not connected' });
-              continue;
-            }
+          const caps = clientMeta.get(manager.clientType).capabilities;
+          const isShared = caps.sharedFiles && (source === 'shared' || (cachedItem && cachedItem.shared && !cachedItem.downloading));
 
-            // Get path info before removing from rtorrent (needed for file deletion)
-            let pathInfo = null;
-            if (deleteFiles) {
-              try {
-                pathInfo = await context.rtorrentManager.getDownloadPathInfo(item.fileHash);
-              } catch (pathErr) {
-                context.log(`Failed to get path info for ${fileName || item.fileHash}: ${pathErr.message}`);
-              }
-            }
+          // Build options for deleteItem
+          const opts = { deleteFiles: !!deleteFiles, isShared };
+          if (isShared && cachedItem?.raw?.path && cachedItem?.name) {
+            opts.filePath = path.join(cachedItem.raw.path, cachedItem.name);
+          }
 
-            // Remove from rtorrent (does not delete files)
-            await context.rtorrentManager.removeDownload(item.fileHash);
+          const result = await manager.deleteItem(item.fileHash, opts);
 
-            // Delete files from disk if requested
-            if (deleteFiles && pathInfo?.basePath) {
-              const translatedPath = categoryManager.translatePath(pathInfo.basePath, 'rtorrent');
-              const deleteResult = await this.deleteFromDisk(translatedPath, context);
-              if (!deleteResult.success) {
-                results.push({ fileHash: item.fileHash, fileName, success: false, error: deleteResult.error });
-                continue;
-              }
-            }
+          if (!result.success) {
+            results.push({ fileHash: item.fileHash, fileName, success: false, error: result.error, instanceId, instanceName: manager.displayName });
+            continue;
+          }
 
-            results.push({ fileHash: item.fileHash, success: true });
-
-          } else if (item.clientType === 'qbittorrent') {
-            // ── qBittorrent deletion ──
-            if (!qbittorrentManager || !qbittorrentManager.isConnected()) {
-              results.push({ fileHash: item.fileHash, fileName, success: false, error: 'qBittorrent not connected' });
-              continue;
-            }
-
-            // qBittorrent removeDownload handles file deletion via deleteFiles flag
-            await qbittorrentManager.removeDownload(item.fileHash, deleteFiles);
-            results.push({ fileHash: item.fileHash, success: true });
-
-          } else {
-            // ── aMule deletion ──
-            if (source === 'shared') {
-              // aMule shared files require file deletion (can't just unshare)
-              if (!deleteFiles) {
-                results.push({ fileHash: item.fileHash, fileName, success: false, error: 'aMule shared files require "Delete files" option' });
-                continue;
-              }
-
-              // Get file path from cached item
-              if (!cachedItem || !cachedItem.raw?.path || !cachedItem.name) {
-                results.push({ fileHash: item.fileHash, fileName, success: false, error: 'File not found or path unavailable' });
-                continue;
-              }
-
-              const fullFilePath = path.join(cachedItem.raw.path, cachedItem.name);
-              const translatedPath = categoryManager.translatePath(fullFilePath, 'amule');
-              const deleteResult = await this.deleteFromDisk(translatedPath, context);
-
-              if (!deleteResult.success) {
-                results.push({ fileHash: item.fileHash, fileName: cachedItem.name, success: false, error: deleteResult.error });
-                continue;
-              }
-
-              results.push({ fileHash: item.fileHash, success: true });
-
-            } else {
-              // aMule download cancellation (aMule handles .part file cleanup internally)
-              const success = await context.amuleManager.getClient().cancelDownload(item.fileHash);
-              if (success) {
-                results.push({ fileHash: item.fileHash, success: true });
-              } else {
-                results.push({ fileHash: item.fileHash, fileName, success: false, error: 'aMule rejected request' });
-              }
+          // Delete files from disk if manager returned paths
+          let diskDeleteFailed = false;
+          for (const rawPath of (result.pathsToDelete || [])) {
+            const translatedPath = categoryManager.translatePath(rawPath, manager.clientType, instanceId);
+            const deleteResult = await this.deleteFromDisk(translatedPath, context);
+            if (!deleteResult.success) {
+              results.push({ fileHash: item.fileHash, fileName, success: false, error: `Failed to delete file: ${deleteResult.error}`, instanceId, instanceName: manager.displayName });
+              diskDeleteFailed = true;
+              break;
             }
           }
+          if (diskDeleteFailed) continue;
+
+          // Track instances needing shared file refresh
+          if (caps.refreshSharedAfterDelete && isShared) {
+            instanceIdsToRefresh.add(instanceId);
+          }
+
+          results.push({ fileHash: item.fileHash, success: true, instanceId, instanceName: manager.displayName });
         } catch (err) {
           context.log(`Delete failed for ${fileName || item.fileHash}: ${err.message}`);
-          results.push({ fileHash: item.fileHash, fileName, success: false, error: err.message });
+          results.push({ fileHash: item.fileHash, fileName, success: false, error: err.message, instanceId, instanceName: manager?.displayName });
         }
       }
 
-      // Post-delete cleanup: refresh aMule shared files if any were deleted
-      if (source === 'shared') {
-        const amuleDeletedCount = results.filter(r => {
-          const item = items.find(i => i.fileHash === r.fileHash);
-          return r.success && item?.clientType !== 'rtorrent';
-        }).length;
-
-        if (amuleDeletedCount > 0) {
-          try {
-            await context.amuleManager.getClient().refreshSharedFiles();
-            context.log('Triggered aMule shared files refresh after deletion');
-            await new Promise(resolve => setTimeout(resolve, 500));
-          } catch (refreshErr) {
-            context.log('Failed to refresh aMule shared files:', refreshErr.message);
-          }
+      // Post-delete: refresh shared files for applicable instances
+      for (const instId of instanceIdsToRefresh) {
+        try {
+          const mgr = registry.get(instId);
+          mgr?.refreshSharedFiles?.();
+          context.log(`Triggered shared files refresh for ${mgr?.displayName || instId}`);
+        } catch (refreshErr) {
+          context.log(`Failed to refresh shared files for ${instId}:`, refreshErr.message);
         }
+      }
+      if (instanceIdsToRefresh.size > 0) {
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
 
       // Emit fileDeleted events for successful deletions
       for (const result of results) {
         if (result.success) {
-          const item = items.find(i => i.fileHash === result.fileHash);
-          const cachedItem = itemByHash.get(result.fileHash?.toLowerCase());
-          // Build full path from cached item data
-          const dir = cachedItem?.directory || cachedItem?.filePath || null;
-          const name = result.fileName || cachedItem?.name || 'Unknown';
+          const reqItem = items.find(i => i.fileHash === result.fileHash);
+          const ci = itemByKey.get(itemKey(result.instanceId || reqItem?.instanceId, result.fileHash?.toLowerCase()));
+          const dir = ci?.directory || ci?.filePath || null;
+          const name = result.fileName || ci?.name || 'Unknown';
           const fullPath = dir ? `${dir.replace(/\/+$/, '')}/${name}` : null;
+
+          const caps = clientMeta.get(reqItem?.clientType || ci?.client)?.capabilities;
+          const isShared = caps?.sharedFiles && (source === 'shared' || (ci && ci.shared && !ci.downloading));
 
           eventScriptingManager.emit('fileDeleted', {
             hash: result.fileHash?.toLowerCase(),
+            instanceId: ci?.instanceId || reqItem?.instanceId || null,
             filename: name,
-            clientType: item?.clientType || cachedItem?.client || 'unknown',
-            deletedFromDisk: deleteFiles === true || (item?.clientType === 'amule' && source !== 'shared'),
-            category: cachedItem?.category || null,
+            clientType: reqItem?.clientType || ci?.client,
+            deletedFromDisk: deleteFiles === true || (caps?.cancelDeletesFiles && !isShared),
+            category: ci?.category || null,
             path: fullPath,
-            multiFile: cachedItem?.multiFile || false
+            multiFile: ci?.multiFile || false
           });
         }
       }
@@ -1204,16 +1379,23 @@ class WebSocketHandlers extends BaseModule {
 
   async handleBatchSetFileCategory(data, context) {
     try {
-      const { fileHashes, categoryId, categoryName, moveFiles } = data;
+      const { items: reqItems, categoryName, moveFiles } = data;
 
-      if (!fileHashes || !Array.isArray(fileHashes) || fileHashes.length === 0) {
-        throw new Error('No file hashes provided');
+      if (!reqItems || !Array.isArray(reqItems) || reqItems.length === 0) {
+        throw new Error('No items provided for batch category change');
+      }
+      if (reqItems.length > 1000) {
+        throw new Error('Batch category change exceeds maximum size of 1000 items');
       }
 
       // Support both legacy categoryId and new categoryName
       let targetCategory = null;
 
       if (categoryName) {
+        // Validate category name
+        if (/[\/\\\x00]/.test(categoryName) || categoryName.includes('..')) {
+          throw new Error('Category name contains invalid characters');
+        }
         targetCategory = context.categoryManager.getByName(categoryName);
         // Auto-create category if it doesn't exist (for "create new category" option in modal)
         if (!targetCategory) {
@@ -1225,181 +1407,103 @@ class WebSocketHandlers extends BaseModule {
           const { categories: updatedCategories, clientDefaultPaths, hasPathWarnings } = context.categoryManager.getAllForFrontend();
           context.broadcast({ type: 'categories-update', data: updatedCategories, clientDefaultPaths, hasPathWarnings });
         }
-      } else if (categoryId !== undefined && categoryId !== null) {
-        targetCategory = context.categoryManager.getByAmuleId(categoryId);
       } else {
-        throw new Error('Category ID or name is required');
+        throw new Error('Category name is required');
       }
 
       if (!targetCategory) {
         throw new Error('Target category not found');
       }
 
-      // Look up file names and client types from cached unified items
+      // Build compound-key lookup from cached unified items
       const cachedItems = dataFetchService.getCachedBatchData()?.items || [];
-      const itemByHash = new Map(cachedItems.map(i => [i.hash, i]));
+      const itemByKey = new Map(cachedItems.map(i => [itemKey(i.instanceId, i.hash), i]));
 
       const results = [];
-      for (const fileHash of fileHashes) {
-        const item = itemByHash.get(fileHash?.toLowerCase());
+      for (const reqItem of reqItems) {
+        const fileHash = reqItem.fileHash;
+
+        // Ownership check: skip items user doesn't own
+        const ownershipKey = itemKey(reqItem.instanceId, fileHash);
+        if (!this._canMutateItem(context, ownershipKey)) {
+          logger.warn(`[WS Auth] Ownership denied: user="${context.clientInfo.username}" (id=${context.clientInfo.userId}) cannot mutate ${ownershipKey} (action="batchSetFileCategory")`);
+          results.push({ fileHash, fileName: reqItem.fileName, success: false, error: 'Permission denied', denied: true });
+          continue;
+        }
+
+        const item = itemByKey.get(itemKey(reqItem.instanceId, fileHash?.toLowerCase()));
         const fileName = item?.name;
+        const instanceId = reqItem.instanceId || item?.instanceId;
+        const manager = registry.get(instanceId);
+
+        if (!manager) {
+          const reason = instanceId ? `Instance "${instanceId}" not found` : 'No instanceId provided';
+          context.log(`Set category failed for ${fileName || fileHash}: ${reason}`);
+          results.push({ fileHash, fileName, success: false, error: 'Client instance not found', instanceId, instanceName: null });
+          continue;
+        }
 
         try {
-          if (item?.client === 'rtorrent') {
-            // For rtorrent, set both label and priority based on category
-            if (context.rtorrentManager && context.rtorrentManager.isConnected()) {
-              const labelValue = targetCategory.name === 'Default' ? '' : targetCategory.name;
+          const caps = clientMeta.get(manager.clientType).capabilities;
+          const isShared = caps.sharedFiles && item?.shared && !item?.downloading;
 
-              // Map category priority to rtorrent priority
-              const { mapPriorityToRtorrent } = require('../lib/CategoryManager');
-              const rtorrentPriority = mapPriorityToRtorrent(targetCategory.priority);
-
-              // Set both label and priority in one batch call
-              await context.rtorrentManager.setLabelAndPriority(fileHash, labelValue, rtorrentPriority);
-              results.push({ fileHash, success: true });
-
-              // Check if move requested
-              if (moveFiles) {
-                const { localPath: destPathLocal, remotePath: destPathRemote } = resolveCategoryDestPaths(targetCategory, 'rtorrent');
-
-                // Only move if there's a valid local destination and it differs from current
-                // Compare with remote path since item.directory is what rtorrent reports
-                if (destPathLocal && item.directory && destPathRemote !== item.directory) {
-                  try {
-                    await moveOperationManager.queueMove({
-                      hash: fileHash,
-                      name: item.name,
-                      clientType: item.client || 'rtorrent',
-                      sourcePathRemote: item.directory,
-                      destPathLocal,
-                      destPathRemote,
-                      totalSize: item.complete ? item.size : (item.sizeDownloaded || item.size),
-                      isMultiFile: item.multiFile,
-                      categoryName: targetCategory.name
-                    });
-                    context.log(`Queued move for ${fileName || fileHash} -> ${destPathRemote}`);
-                  } catch (moveErr) {
-                    context.log(`Failed to queue move for ${fileName || fileHash}: ${moveErr.message}`);
-                    // Don't fail the category change if move queueing fails
-                  }
-                }
-              }
-            } else {
-              const error = 'rtorrent not connected';
-              context.log(`Category change failed for ${fileName || fileHash}: ${error}`);
-              results.push({ fileHash, fileName, success: false, error });
-            }
-          } else if (item?.client === 'qbittorrent') {
-            // For qBittorrent, set category
-            if (qbittorrentManager && qbittorrentManager.isConnected()) {
-              const categoryValue = targetCategory.name === 'Default' ? '' : targetCategory.name;
-              await qbittorrentManager.setCategory(fileHash, categoryValue);
-              results.push({ fileHash, success: true });
-
-              // Check if move requested - qBittorrent uses native setLocation API
-              if (moveFiles) {
-                // qBittorrent only needs remotePath (category's path) - it handles moves internally
-                const remotePath = targetCategory?.path || null;
-
-                // Only move if there's a valid destination and it differs from current
-                if (remotePath && item.directory && remotePath !== item.directory) {
-                  try {
-                    await moveOperationManager.queueMove({
-                      hash: fileHash,
-                      name: item.name,
-                      clientType: 'qbittorrent',
-                      sourcePathRemote: item.directory,
-                      destPathLocal: remotePath,  // Use remote path (qBittorrent handles moves internally)
-                      destPathRemote: remotePath,
-                      totalSize: item.complete ? item.size : (item.sizeDownloaded || item.size),
-                      isMultiFile: item.multiFile,
-                      categoryName: targetCategory.name
-                    });
-                    context.log(`Queued move for qBittorrent ${fileName || fileHash} -> ${remotePath}`);
-                  } catch (moveErr) {
-                    context.log(`Failed to queue move for ${fileName || fileHash}: ${moveErr.message}`);
-                    // Don't fail the category change if move queueing fails
-                  }
-                }
-              }
-            } else {
-              const error = 'qBittorrent not connected';
-              context.log(`Category change failed for ${fileName || fileHash}: ${error}`);
-              results.push({ fileHash, fileName, success: false, error });
-            }
-          } else if (item?.shared && item?.client === 'amule' && !item?.downloading) {
-            // aMule shared files (completed, not downloading): Move is required (aMule doesn't auto-move shared files)
-            if (!context.amuleManager || !context.amuleManager.isConnected()) {
-              const error = 'aMule not connected';
-              context.log(`Category change failed for ${fileName || fileHash}: ${error}`);
-              results.push({ fileHash, fileName, success: false, error });
+          // Set category/label (skip for shared files — they only need a move, no API call)
+          if (!isShared) {
+            if (!manager.isConnected()) {
+              results.push({ fileHash, fileName, success: false, error: `${manager.clientType} not connected`, instanceId, instanceName: manager.displayName });
               continue;
             }
 
-            // Get destination paths using shared helper
-            const { localPath: destPathLocal, remotePath: destPathRemote } = resolveCategoryDestPaths(targetCategory, 'amule');
+            const result = await manager.setCategoryOrLabel(fileHash, {
+              categoryName: targetCategory.name,
+              priority: targetCategory.priority
+            });
 
-            // Queue move if path differs (aMule shared uses filePath as directory)
-            // item.filePath is the directory containing the file
-            if (destPathLocal && item.filePath && destPathRemote !== item.filePath) {
+            if (!result.success) {
+              context.log(`Category change failed for ${fileName || fileHash}: ${result.error}`);
+              results.push({ fileHash, fileName, success: false, error: result.error, instanceId, instanceName: manager.displayName });
+              continue;
+            }
+          }
+
+          results.push({ fileHash, success: true, instanceId, instanceName: manager.displayName });
+
+          // Queue move if requested (or always for shared files — they need explicit moving)
+          if (moveFiles || isShared) {
+            const { localPath: destPathLocal, remotePath: destPathRemote } = resolveCategoryDestPaths(targetCategory, manager.clientType, item?.instanceId);
+            const sourcePath = item?.directory || item?.filePath;
+
+            if (destPathLocal && sourcePath && destPathRemote !== sourcePath) {
               try {
                 await moveOperationManager.queueMove({
                   hash: fileHash,
-                  name: item.name,
-                  clientType: 'amule',
-                  sourcePathRemote: item.filePath,
+                  instanceId: item?.instanceId,
+                  name: item?.name,
+                  clientType: manager.clientType,
+                  sourcePathRemote: sourcePath,
                   destPathLocal,
                   destPathRemote,
-                  totalSize: item.complete ? item.size : (item.sizeDownloaded || item.size),
-                  isMultiFile: false, // aMule files are always single files
+                  totalSize: item?.complete ? item.size : (item?.sizeDownloaded || item?.size),
+                  isMultiFile: clientMeta.hasCapability(manager.clientType, 'multiFile') && (item?.multiFile || false),
                   categoryName: targetCategory.name
                 });
-                context.log(`Queued move for aMule shared file ${fileName || fileHash} -> ${destPathRemote}`);
+                context.log(`Queued move for ${fileName || fileHash} -> ${destPathRemote}`);
               } catch (moveErr) {
                 context.log(`Failed to queue move for ${fileName || fileHash}: ${moveErr.message}`);
                 // Don't fail the category change if move queueing fails
               }
             }
-            results.push({ fileHash, success: true });
-          } else {
-            // For aMule downloads, use categoryId
-            // Note: aMule handles file moves automatically on category change for downloads
-            if (!context.amuleManager || !context.amuleManager.isConnected()) {
-              const error = 'aMule not connected';
-              context.log(`Category change failed for ${fileName || fileHash}: ${error}`);
-              results.push({ fileHash, fileName, success: false, error });
-              continue;
-            }
-
-            // Ensure category exists in aMule (creates on demand if needed)
-            const amuleIdToUse = await context.categoryManager.ensureAmuleCategory(targetCategory.name);
-
-            if (amuleIdToUse === null) {
-              const error = 'Could not resolve aMule category ID';
-              context.log(`Category change failed for ${fileName || fileHash}: ${error}`);
-              results.push({ fileHash, fileName, success: false, error });
-              continue;
-            }
-
-            const success = await context.amuleManager.getClient().setFileCategory(fileHash, amuleIdToUse);
-            if (success) {
-              results.push({ fileHash, success: true });
-            } else {
-              const error = 'aMule rejected request';
-              context.log(`Category change failed for ${fileName || fileHash}: ${error}`);
-              results.push({ fileHash, fileName, success: false, error });
-            }
           }
         } catch (err) {
           context.log(`Category change failed for ${fileName || fileHash}: ${err.message}`);
-          results.push({ fileHash, fileName, success: false, error: err.message });
+          results.push({ fileHash, fileName, success: false, error: err.message, instanceId, instanceName: manager?.displayName });
         }
       }
 
       // Emit categoryChanged events for successful operations
       for (const result of results) {
         if (result.success) {
-          const item = itemByHash.get(result.fileHash?.toLowerCase());
+          const item = itemByKey.get(itemKey(result.instanceId, result.fileHash?.toLowerCase()));
           const oldCategory = item?.category || 'Default';
           // Only emit if category actually changed
           if (oldCategory !== targetCategory.name) {
@@ -1410,6 +1514,7 @@ class WebSocketHandlers extends BaseModule {
 
             eventScriptingManager.emit('categoryChanged', {
               hash: result.fileHash?.toLowerCase(),
+              instanceId: item?.instanceId || null,
               filename: itemName,
               clientType: item?.client || 'unknown',
               oldCategory,
@@ -1425,13 +1530,13 @@ class WebSocketHandlers extends BaseModule {
       await this.broadcastItemsUpdate(context);
 
       const successCount = results.filter(r => r.success).length;
-      const displayName = targetCategory?.name || `ID ${categoryId}`;
+      const displayName = targetCategory?.name || categoryName;
       context.send({
         type: 'batch-category-changed',
         results,
-        message: `Changed category for ${successCount}/${fileHashes.length} files`
+        message: `Changed category for ${successCount}/${reqItems.length} files`
       });
-      context.log(`Batch category change: ${successCount}/${fileHashes.length} -> "${displayName}"${moveFiles ? ' (with move)' : ''}`);
+      context.log(`Batch category change: ${successCount}/${reqItems.length} -> "${displayName}"${moveFiles ? ' (with move)' : ''}`);
     } catch (err) {
       context.log('Batch set file category error:', err);
       context.send({ type: 'error', message: 'Batch category change failed: ' + err.message });
@@ -1445,21 +1550,22 @@ class WebSocketHandlers extends BaseModule {
    */
   async handleCheckDeletePermissions(data, context) {
     try {
-      const { fileHashes, source } = data;
+      const { items: reqItems, source } = data;
 
-      if (!fileHashes || !Array.isArray(fileHashes) || fileHashes.length === 0) {
+      if (!reqItems || !Array.isArray(reqItems) || reqItems.length === 0) {
         context.send({ type: 'delete-permissions', results: [] });
         return;
       }
 
-      // Get cached items to look up file paths
+      // Build compound-key lookup from cached unified items
       const cachedItems = dataFetchService.getCachedBatchData()?.items || [];
-      const itemByHash = new Map(cachedItems.map(i => [i.hash, i]));
+      const itemByKey = new Map(cachedItems.map(i => [itemKey(i.instanceId, i.hash), i]));
 
       const results = [];
 
-      for (const fileHash of fileHashes) {
-        const item = itemByHash.get(fileHash?.toLowerCase());
+      for (const reqItem of reqItems) {
+        const fileHash = reqItem.fileHash;
+        const item = itemByKey.get(itemKey(reqItem.instanceId, fileHash?.toLowerCase()));
 
         if (!item) {
           results.push({
@@ -1471,30 +1577,21 @@ class WebSocketHandlers extends BaseModule {
           continue;
         }
 
-        const clientType = item.client || 'amule';
+        const clientType = item.client;
+        const caps = clientMeta.get(clientType)?.capabilities || {};
+        const isShared = caps.sharedFiles && item.shared && !item.downloading;
 
-        // aMule active downloads: aMule handles temp file deletion internally
-        // No permission check needed - aMule always deletes the temp file
-        if (item.client === 'amule' && source === 'downloads') {
+        // Client handles deletion internally (no filesystem permission needed)
+        // cancelDeletesFiles: client auto-deletes temp files on cancel (e.g., aMule active downloads)
+        // apiDeletesFiles: client API handles file deletion (e.g., qBittorrent)
+        // removeSharedMustDeleteFiles: shared files need explicit disk deletion (exempt from cancelDeletesFiles shortcut)
+        if ((caps.cancelDeletesFiles && !(isShared && caps.removeSharedMustDeleteFiles)) || caps.apiDeletesFiles) {
           results.push({
             fileHash,
             clientType,
             canDelete: true,
-            reason: 'amule_managed',
-            message: 'aMule manages temp file deletion'
-          });
-          continue;
-        }
-
-        // qBittorrent: handles file deletion natively via API
-        // No permission check needed - qBittorrent deletes files internally
-        if (item.client === 'qbittorrent') {
-          results.push({
-            fileHash,
-            clientType,
-            canDelete: true,
-            reason: 'qbittorrent_managed',
-            message: 'qBittorrent manages file deletion'
+            reason: 'managed',
+            message: 'Client manages file deletion'
           });
           continue;
         }
@@ -1559,9 +1656,9 @@ class WebSocketHandlers extends BaseModule {
    */
   async handleCheckMovePermissions(data, context) {
     try {
-      const { fileHashes, categoryName } = data;
+      const { items: reqItems, categoryName } = data;
 
-      if (!fileHashes || !Array.isArray(fileHashes) || fileHashes.length === 0) {
+      if (!reqItems || !Array.isArray(reqItems) || reqItems.length === 0) {
         context.send({ type: 'move-permissions', results: [], canMove: false });
         return;
       }
@@ -1578,17 +1675,18 @@ class WebSocketHandlers extends BaseModule {
         return;
       }
 
-      // Get cached items to look up file paths and client types
+      // Build compound-key lookup from cached unified items
       const cachedItems = dataFetchService.getCachedBatchData()?.items || [];
-      const itemByHash = new Map(cachedItems.map(i => [i.hash, i]));
+      const itemByKey = new Map(cachedItems.map(i => [itemKey(i.instanceId, i.hash), i]));
 
       const results = [];
       const sourcePathsByClient = new Map(); // Map<clientType, Map<translatedPath, remotePath>>
       const destPathsByClient = new Map(); // Map<clientType, { localPath, remotePath }>
 
       // First pass: collect all source paths and validate items
-      for (const fileHash of fileHashes) {
-        const item = itemByHash.get(fileHash?.toLowerCase());
+      for (const reqItem of reqItems) {
+        const fileHash = reqItem.fileHash;
+        const item = itemByKey.get(itemKey(reqItem.instanceId, fileHash?.toLowerCase()));
 
         if (!item) {
           results.push({
@@ -1601,24 +1699,25 @@ class WebSocketHandlers extends BaseModule {
         }
 
         const clientType = item.client || 'amule';
-        const isQbittorrent = clientType === 'qbittorrent';
+        const hasNativeMove = clientMeta.hasCapability(clientType, 'nativeMove');
 
-        // Get destination paths for this client type (cached per client)
-        // qBittorrent only needs remotePath (category's path) - it handles moves natively
-        if (!destPathsByClient.has(clientType)) {
-          if (isQbittorrent) {
-            // qBittorrent: only need the category's path (what qBittorrent sees)
+        // Get destination paths for this instance (cached per instanceId)
+        // Clients with nativeMove only need remotePath (category's path) - they handle moves internally
+        const cacheKey = item.instanceId || clientType;
+        if (!destPathsByClient.has(cacheKey)) {
+          if (hasNativeMove) {
+            // Native-move clients: only need the category's path (what the client sees)
             const remotePath = targetCategory?.path || null;
-            destPathsByClient.set(clientType, { localPath: remotePath, remotePath });
+            destPathsByClient.set(cacheKey, { localPath: remotePath, remotePath, clientType });
           } else {
-            destPathsByClient.set(clientType, resolveCategoryDestPaths(targetCategory, clientType));
+            destPathsByClient.set(cacheKey, { ...resolveCategoryDestPaths(targetCategory, clientType, item.instanceId), clientType });
           }
         }
-        const { localPath: localDestPath, remotePath: remoteDestPath } = destPathsByClient.get(clientType);
+        const { localPath: localDestPath, remotePath: remoteDestPath } = destPathsByClient.get(cacheKey);
 
         // Check if destination is configured
-        // qBittorrent only needs remotePath, others need localPath
-        const destPath = isQbittorrent ? remoteDestPath : localDestPath;
+        // Native-move clients only need remotePath, others need localPath
+        const destPath = hasNativeMove ? remoteDestPath : localDestPath;
         if (!destPath) {
           results.push({
             fileHash,
@@ -1667,6 +1766,7 @@ class WebSocketHandlers extends BaseModule {
           fileHash,
           name: item.name,
           clientType,
+          instanceId: item.instanceId,
           sourcePath: pathInfo.remotePath,
           translatedSourcePath: pathInfo.localPath,
           canMove: null, // Will be determined after path checks
@@ -1675,16 +1775,16 @@ class WebSocketHandlers extends BaseModule {
         });
       }
 
-      // Check destination paths accessibility (one per client type)
-      // Skip for qBittorrent - it handles moves natively and validates paths itself
-      const destErrors = new Map(); // Map<clientType, errorMessage>
-      const destAccessible = new Map(); // Map<clientType, boolean>
+      // Check destination paths accessibility (one per instance)
+      // Skip for clients with nativeMove - they handle moves internally and validate paths themselves
+      const destErrors = new Map(); // Map<cacheKey, errorMessage>
+      const destAccessible = new Map(); // Map<cacheKey, boolean>
       let primaryDestPath = null; // For response (use first client's dest path)
 
-      for (const [clientType, { localPath, remotePath }] of destPathsByClient) {
-        // qBittorrent: skip permission check, assume accessible (qBittorrent validates internally)
-        if (clientType === 'qbittorrent') {
-          destAccessible.set(clientType, true);
+      for (const [cacheKey, { localPath, remotePath, clientType }] of destPathsByClient) {
+        // Native-move clients: skip permission check, assume accessible (client validates internally)
+        if (clientMeta.hasCapability(clientType, 'nativeMove')) {
+          destAccessible.set(cacheKey, true);
           if (!primaryDestPath) {
             primaryDestPath = remotePath || localPath;
           }
@@ -1692,8 +1792,8 @@ class WebSocketHandlers extends BaseModule {
         }
 
         if (!localPath) {
-          destErrors.set(clientType, 'No destination path configured');
-          destAccessible.set(clientType, false);
+          destErrors.set(cacheKey, 'No destination path configured');
+          destAccessible.set(cacheKey, false);
           continue;
         }
 
@@ -1709,26 +1809,26 @@ class WebSocketHandlers extends BaseModule {
 
         const displayPath = remotePath || localPath;
         if (destCheck.exists && destCheck.writable) {
-          destAccessible.set(clientType, true);
+          destAccessible.set(cacheKey, true);
         } else {
-          destAccessible.set(clientType, false);
+          destAccessible.set(cacheKey, false);
           const errorMsg = destCheck.errorCode === 'not_found'
             ? `Destination path not found: ${displayPath}`
             : destCheck.errorCode === 'not_writable'
               ? `No write permission for destination: ${displayPath}`
               : `Cannot access destination: ${destCheck.error}`;
-          destErrors.set(clientType, errorMsg);
+          destErrors.set(cacheKey, errorMsg);
           const pathInfo = localPath !== remotePath ? `local: ${localPath}, remote: ${remotePath}` : `path: ${localPath}`;
-          context.log(`⚠️ Move permission check failed (dest, ${clientType}): ${errorMsg} [${pathInfo}]`);
+          context.log(`⚠️ Move permission check failed (dest, ${cacheKey}): ${errorMsg} [${pathInfo}]`);
         }
       }
 
       // Check source paths accessibility (grouped by client type)
-      // Skip for qBittorrent - it handles moves natively
+      // Skip for clients with nativeMove - they handle moves internally
       const sourceErrors = new Map(); // Map<translatedPath, errorMessage>
       for (const [clientType, pathMap] of sourcePathsByClient) {
-        // qBittorrent: skip permission check
-        if (clientType === 'qbittorrent') continue;
+        // Native-move clients: skip permission check
+        if (clientMeta.hasCapability(clientType, 'nativeMove')) continue;
 
         for (const [localPath, remotePath] of pathMap) {
           const srcCheck = await checkPathPermissions(localPath, {
@@ -1756,12 +1856,12 @@ class WebSocketHandlers extends BaseModule {
       for (const result of results) {
         if (result.canMove !== null) continue; // Already determined
 
-        const clientType = result.clientType || 'amule';
+        const lookupKey = result.instanceId || result.clientType;
 
-        if (!destAccessible.get(clientType)) {
+        if (!destAccessible.get(lookupKey)) {
           result.canMove = false;
           result.reason = 'dest_error';
-          result.message = destErrors.get(clientType) || 'Destination not accessible';
+          result.message = destErrors.get(lookupKey) || 'Destination not accessible';
         } else if (result.translatedSourcePath) {
           const srcError = sourceErrors.get(result.translatedSourcePath);
           if (srcError) {

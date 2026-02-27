@@ -13,3 +13,5 @@ export { default as AddDownloadModal } from './AddDownloadModal.js';
 export { default as StatsTreeModal } from './StatsTreeModal.js';
 export { default as FileInfoModal } from './FileInfoModal.js';
 export { default as DirectoryBrowserModal } from './DirectoryBrowserModal.js';
+export { default as UserModal } from './UserModal.js';
+export { default as ProfileModal } from './ProfileModal.js';

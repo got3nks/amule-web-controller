@@ -5,6 +5,7 @@
  * via the Apprise CLI.
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -172,6 +173,34 @@ class NotificationManager extends BaseModule {
   }
 
   /**
+   * Validate a string component for use in Apprise URLs.
+   * Rejects control characters, newlines, and other dangerous chars.
+   * @param {string} value - Value to validate
+   * @returns {boolean} True if safe
+   */
+  _isSafeUrlComponent(value) {
+    if (typeof value !== 'string') return false;
+    // Reject control chars (0x00-0x1F, 0x7F), newlines, carriage returns
+    return !/[\x00-\x1f\x7f]/.test(value);
+  }
+
+  /**
+   * Validate a webhook/custom URL.
+   * Must be a well-formed HTTP(S) URL or recognized Apprise scheme.
+   * @param {string} url - URL to validate
+   * @returns {boolean} True if valid
+   */
+  _isValidUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    if (!this._isSafeUrlComponent(url)) return false;
+    // Accept http/https URLs
+    if (/^https?:\/\/.+/.test(url)) return true;
+    // Accept recognized Apprise schemes (e.g., discord://, tgram://, slack://, json://, etc.)
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/.+/.test(url)) return true;
+    return false;
+  }
+
+  /**
    * Build Apprise URL from service configuration
    * @param {Object} service - Service configuration
    * @returns {string|null} Apprise URL or null if invalid
@@ -179,47 +208,67 @@ class NotificationManager extends BaseModule {
   _buildAppriseUrl(service) {
     const { type, config: cfg } = service;
 
+    // Validate all config values for control characters
+    const cfgValues = Object.values(cfg || {});
+    for (const val of cfgValues) {
+      if (typeof val === 'string' && !this._isSafeUrlComponent(val)) {
+        this.log('[NotificationManager] Rejected service config with control characters');
+        return null;
+      }
+    }
+
+    const e = encodeURIComponent;
+
     switch (type) {
       case 'discord':
         if (!cfg.webhook_id || !cfg.webhook_token) return null;
-        return `discord://${cfg.webhook_id}/${cfg.webhook_token}`;
+        return `discord://${e(cfg.webhook_id)}/${e(cfg.webhook_token)}`;
 
       case 'telegram':
         if (!cfg.bot_token || !cfg.chat_id) return null;
-        return `tgram://${cfg.bot_token}/${cfg.chat_id}`;
+        return `tgram://${e(cfg.bot_token)}/${e(cfg.chat_id)}`;
 
       case 'slack':
         if (!cfg.token_a || !cfg.token_b || !cfg.token_c) return null;
-        const channel = cfg.channel ? `/#${cfg.channel}` : '';
-        return `slack://${cfg.token_a}/${cfg.token_b}/${cfg.token_c}${channel}`;
+        const channel = cfg.channel ? `/#${e(cfg.channel)}` : '';
+        return `slack://${e(cfg.token_a)}/${e(cfg.token_b)}/${e(cfg.token_c)}${channel}`;
 
       case 'pushover':
         if (!cfg.user_key || !cfg.api_token) return null;
-        return `pover://${cfg.user_key}@${cfg.api_token}`;
+        return `pover://${e(cfg.user_key)}@${e(cfg.api_token)}`;
 
       case 'ntfy':
         if (!cfg.topic) return null;
         const host = cfg.host || 'ntfy.sh';
-        return `ntfy://${host}/${cfg.topic}`;
+        return `ntfy://${e(host)}/${e(cfg.topic)}`;
 
       case 'gotify':
         if (!cfg.host || !cfg.token) return null;
-        return `gotify://${cfg.host}/${cfg.token}`;
+        return `gotify://${e(cfg.host)}/${e(cfg.token)}`;
 
       case 'email':
         if (!cfg.smtp_host || !cfg.smtp_user || !cfg.to_email) return null;
         const port = cfg.smtp_port || 587;
-        const password = cfg.smtp_password ? `:${cfg.smtp_password}` : '';
+        const password = cfg.smtp_password ? `:${e(cfg.smtp_password)}` : '';
         const secure = cfg.smtp_secure ? 's' : '';
-        return `mailto${secure}://${cfg.smtp_user}${password}@${cfg.smtp_host}:${port}?to=${cfg.to_email}`;
+        return `mailto${secure}://${e(cfg.smtp_user)}${password}@${e(cfg.smtp_host)}:${port}?to=${e(cfg.to_email)}`;
 
       case 'webhook':
         if (!cfg.url) return null;
+        if (!this._isValidUrl(cfg.url)) {
+          this.log('[NotificationManager] Rejected invalid webhook URL');
+          return null;
+        }
         // JSON webhook
         return `json://${cfg.url.replace(/^https?:\/\//, '')}`;
 
       case 'custom':
-        return cfg.url || null;
+        if (!cfg.url) return null;
+        if (!this._isValidUrl(cfg.url)) {
+          this.log('[NotificationManager] Rejected invalid custom URL');
+          return null;
+        }
+        return cfg.url;
 
       default:
         return null;
@@ -231,11 +280,7 @@ class NotificationManager extends BaseModule {
    * @returns {string} UUID-like string
    */
   _generateId() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-      const r = Math.random() * 16 | 0;
-      const v = c === 'x' ? r : (r & 0x3 | 0x8);
-      return v.toString(16);
-    });
+    return crypto.randomUUID();
   }
 
   // ==========================================================================
@@ -480,7 +525,7 @@ class NotificationManager extends BaseModule {
    * @returns {string} Title
    */
   _buildNotificationTitle(eventType, eventData) {
-    const client = eventData.clientType || null;
+    const client = eventData.instanceName || eventData.clientType || null;
     let label;
     switch (eventType) {
       case 'downloadAdded':    label = '⬇️ New Download'; break;

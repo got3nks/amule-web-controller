@@ -7,8 +7,8 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { Icon, AlertBox } from '../common/index.js';
-import { PasswordField, EnableToggle } from '../settings/index.js';
+import { Icon, AlertBox, Portal } from '../common/index.js';
+import { ConfigField, PasswordField, EnableToggle } from '../settings/index.js';
 import { getServiceTypeOptions, getServiceSchema, validateServiceConfig } from '../../utils/notificationServiceSchemas.js';
 
 const { createElement: h, useState, useEffect } = React;
@@ -52,18 +52,12 @@ const ServiceConfigForm = ({ type, name, enabled, config, onChange, schema }) =>
 
   return h('div', { className: 'space-y-4' },
     // Service name
-    h('div', {},
-      h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
-        'Service Name'
-      ),
-      h('input', {
-        type: 'text',
-        value: name,
-        onChange: (e) => onChange({ name: e.target.value }),
-        placeholder: `My ${schema.name}`,
-        className: 'w-full h-10 px-3 rounded-lg text-sm border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500'
-      })
-    ),
+    h(ConfigField, {
+      label: 'Service Name',
+      value: name,
+      onChange: (value) => onChange({ name: value }),
+      placeholder: `My ${schema.name}`
+    }),
 
     // Enabled toggle
     h(EnableToggle, {
@@ -94,11 +88,12 @@ const ServiceConfigForm = ({ type, name, enabled, config, onChange, schema }) =>
         );
       }
 
-      return h('div', { key: field.key },
-        h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' },
-          field.label,
-          field.required && h('span', { className: 'text-red-500 ml-1' }, '*')
-        ),
+      return h(ConfigField, {
+        key: field.key,
+        label: field.label,
+        description: field.helpText,
+        required: field.required
+      },
         field.type === 'password'
           ? h(PasswordField, {
               value: config[field.key] || '',
@@ -111,8 +106,7 @@ const ServiceConfigForm = ({ type, name, enabled, config, onChange, schema }) =>
               onChange: (e) => updateConfig(field.key, e.target.value),
               placeholder: field.placeholder,
               className: 'w-full h-10 px-3 rounded-lg text-sm border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500'
-            }),
-        field.helpText && h('p', { className: 'mt-1 text-xs text-gray-500 dark:text-gray-400' }, field.helpText)
+            })
       );
     }),
 
@@ -232,12 +226,13 @@ const ServiceModal = ({ isOpen, onClose, onSave, editService = null }) => {
 
   if (!isOpen) return null;
 
-  return h('div', {
-    className: 'fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50',
-    onClick: (e) => e.target === e.currentTarget && onClose()
-  },
+  return h(Portal, null,
     h('div', {
-      className: 'w-full max-w-lg bg-white dark:bg-gray-800 rounded-xl shadow-xl overflow-hidden'
+      className: 'fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50',
+      onClick: (e) => e.target === e.currentTarget && onClose()
+    },
+    h('div', {
+      className: 'modal-full w-full max-w-lg bg-white dark:bg-gray-800 rounded-xl shadow-xl overflow-hidden flex flex-col'
     },
       // Header
       h('div', { className: 'flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700' },
@@ -265,7 +260,7 @@ const ServiceModal = ({ isOpen, onClose, onSave, editService = null }) => {
       ),
 
       // Content
-      h('div', { className: 'px-6 py-4 max-h-[60vh] overflow-y-auto' },
+      h('div', { className: 'px-6 py-4 flex-1 overflow-y-auto' },
         step === 1 && h(ServiceTypeSelector, { onSelect: handleTypeSelect }),
         step === 2 && h(ServiceConfigForm, {
           type,
@@ -275,26 +270,28 @@ const ServiceModal = ({ isOpen, onClose, onSave, editService = null }) => {
           onChange: handleChange,
           schema
         }),
-        error && h(AlertBox, { type: 'error', className: 'mt-4' },
-          h('p', {}, error)
-        )
       ),
 
       // Footer (only in step 2)
-      step === 2 && h('div', { className: 'flex justify-end gap-3 px-6 py-4 border-t border-gray-200 dark:border-gray-700' },
-        h('button', {
-          onClick: onClose,
-          disabled: saving,
-          className: 'px-4 py-2 text-sm font-medium rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 transition-colors'
-        }, 'Cancel'),
-        h('button', {
-          onClick: handleSave,
-          disabled: saving,
-          className: 'px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors'
-        }, saving ? 'Saving...' : editService ? 'Save Changes' : 'Add Service')
+      step === 2 && h('div', { className: 'px-6 py-4 border-t border-gray-200 dark:border-gray-700' },
+        error && h('div', { className: 'mb-3' },
+          h(AlertBox, { type: 'error' }, h('p', {}, error))
+        ),
+        h('div', { className: 'flex justify-end gap-3' },
+          h('button', {
+            onClick: onClose,
+            disabled: saving,
+            className: 'px-4 py-2 text-sm font-medium rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 transition-colors'
+          }, 'Cancel'),
+          h('button', {
+            onClick: handleSave,
+            disabled: saving,
+            className: 'px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors'
+          }, saving ? 'Saving...' : editService ? 'Save Changes' : 'Add Service')
+        )
       )
     )
-  );
+  ));
 };
 
 export default ServiceModal;

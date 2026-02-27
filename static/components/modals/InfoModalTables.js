@@ -14,6 +14,7 @@ import React from 'https://esm.sh/react@18.2.0';
 import { Icon, FlagIcon, Tooltip, IconButton } from '../common/index.js';
 import { formatBytes } from '../../utils/index.js';
 import { formatFieldName, formatFieldValue } from '../../utils/fieldFormatters.js';
+import { TRACKER_CONFIGS } from '../../utils/fieldRegistry.js';
 
 const { createElement: h, useState, useMemo } = React;
 
@@ -136,12 +137,11 @@ export const ExportLinkSection = ({ exportLink, linkLabel, copyStatus, onCopy })
  * @param {Array} fields - Array of [key, value] pairs
  * @param {boolean} expanded - Whether section is expanded
  * @param {function} onToggle - Toggle handler
- * @param {Array} categories - Categories list for formatting (optional)
  */
-export const CategoryFieldsSection = ({ category, fields, expanded, onToggle, categories = [] }) => {
+export const CategoryFieldsSection = ({ category, fields, expanded, onToggle }) => {
   // Filter out null values
   const validFields = fields.filter(([key, value]) => {
-    const formatted = formatFieldValue(key, value, { categories });
+    const formatted = formatFieldValue(key, value);
     return formatted !== null;
   });
 
@@ -163,7 +163,7 @@ export const CategoryFieldsSection = ({ category, fields, expanded, onToggle, ca
     ),
     expanded && h('div', { className: 'divide-y divide-gray-200 dark:divide-gray-700' },
       validFields.map(([key, value]) => {
-        const formattedValue = formatFieldValue(key, value, { categories });
+        const formattedValue = formatFieldValue(key, value);
         if (formattedValue === null) return null;
 
         return h('div', {
@@ -661,60 +661,20 @@ export const FilesTreeSection = ({ files, loading, error }) => {
 };
 
 /**
- * qBittorrent tracker status codes
- * 0 = Disabled, 1 = Not contacted yet, 2 = Working, 3 = Updating, 4 = Not working
- */
-const QBITTORRENT_TRACKER_STATUS = {
-  0: { label: 'Disabled', active: false },
-  1: { label: 'Not Contacted', active: false },
-  2: { label: 'Active', active: true },
-  3: { label: 'Updating', active: true },
-  4: { label: 'Error', active: false }
-};
-
-/**
- * Normalize tracker data to handle both rtorrent and qBittorrent field naming
+ * Normalize tracker data using config-driven approach
  * @param {Object} tracker - Raw tracker object
+ * @param {Object} config - Tracker config from TRACKER_CONFIGS
  * @returns {Object} Normalized tracker object
  */
-const normalizeTracker = (tracker) => {
-  // Handle qBittorrent's field naming
-  // qBittorrent uses: status (int), num_seeds, num_leeches, num_downloaded, msg
-  // rtorrent uses: enabled (bool), scrapeComplete, scrapeIncomplete, scrapeDownloaded
-
-  let enabled = tracker.enabled;
-  if (enabled === undefined && tracker.status !== undefined) {
-    // qBittorrent: status 2 or 3 means active
-    const statusInfo = QBITTORRENT_TRACKER_STATUS[tracker.status] || { active: false };
-    enabled = statusInfo.active;
-  }
-
-  // Scrape stats - qBittorrent uses num_seeds/num_leeches/num_downloaded
-  const scrapeComplete = tracker.scrapeComplete ?? tracker.num_seeds ?? -1;
-  const scrapeIncomplete = tracker.scrapeIncomplete ?? tracker.num_leeches ?? -1;
-  const scrapeDownloaded = tracker.scrapeDownloaded ?? tracker.num_downloaded ?? -1;
-
-  // Status message (qBittorrent provides this as 'msg')
-  const message = tracker.message || tracker.msg || '';
-
-  // Get status label for qBittorrent
-  let statusLabel = enabled ? 'Active' : 'Disabled';
-  if (tracker.status !== undefined) {
-    const statusInfo = QBITTORRENT_TRACKER_STATUS[tracker.status];
-    if (statusInfo) {
-      statusLabel = statusInfo.label;
-    }
-  }
-
-  return {
-    ...tracker,
-    enabled,
-    scrapeComplete,
-    scrapeIncomplete,
-    scrapeDownloaded,
-    message,
-    statusLabel
-  };
+const normalizeTracker = (tracker, config) => {
+  const url = tracker[config.urlField] || '';
+  const enabled = config.getEnabled(tracker);
+  const statusLabel = config.getStatusLabel(tracker, enabled);
+  const scrapeComplete = config.seedsField ? (tracker[config.seedsField] ?? -1) : -1;
+  const scrapeIncomplete = config.leechersField ? (tracker[config.leechersField] ?? -1) : -1;
+  const scrapeDownloaded = config.downloadedField ? (tracker[config.downloadedField] ?? -1) : -1;
+  const message = config.messageField ? (tracker[config.messageField] || '') : '';
+  return { ...tracker, url, enabled, scrapeComplete, scrapeIncomplete, scrapeDownloaded, message, statusLabel };
 };
 
 /**
@@ -722,7 +682,7 @@ const normalizeTracker = (tracker) => {
  * Supports both rtorrent and qBittorrent field naming conventions
  * @param {Array} trackers - Array of tracker objects
  */
-export const TrackersTable = ({ trackers }) => {
+export const TrackersTable = ({ trackers, clientType }) => {
   const [sort, setSort] = useState({ key: 'scrapeComplete', direction: 'desc' });
 
   const handleSort = (key) => {
@@ -732,11 +692,12 @@ export const TrackersTable = ({ trackers }) => {
     }));
   };
 
-  // Normalize trackers to handle both rtorrent and qBittorrent field naming
+  // Normalize trackers using config-driven approach
   const normalizedTrackers = useMemo(() => {
     if (!trackers || trackers.length === 0) return [];
-    return trackers.map(normalizeTracker);
-  }, [trackers]);
+    const config = TRACKER_CONFIGS[clientType] || TRACKER_CONFIGS.rtorrent;
+    return trackers.map(t => normalizeTracker(t, config));
+  }, [trackers, clientType]);
 
   // Check if any tracker has a message (to show/hide message column)
   const hasMessages = useMemo(() => {

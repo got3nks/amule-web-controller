@@ -11,6 +11,7 @@ import ClientIcon from './ClientIcon.js';
 import TrackerLabel from './TrackerLabel.js';
 import { useDynamicFontSize } from '../../hooks/index.js';
 import { formatBytes } from '../../utils/index.js';
+import { useStaticData } from '../../contexts/StaticDataContext.js';
 
 const { createElement: h, useRef } = React;
 
@@ -31,6 +32,7 @@ const { createElement: h, useRef } = React;
 const MobileCardHeader = ({
   showBadge = false,
   clientType,
+  instanceId,
   fileName,
   fileSize,
   trackerDomain,
@@ -45,14 +47,28 @@ const MobileCardHeader = ({
   const actionsRef = useRef(null);
   const hasActions = !selectionMode && actions;
   const hasCheckbox = selectionMode && onSelectionToggle;
+  const { instances, multiInstanceTypes } = useStaticData();
+  const isMulti = multiInstanceTypes?.has(clientType);
+  const instanceInfo = isMulti && instanceId ? instances?.[instanceId] : null;
 
-  // Client-specific colors for the badge (matches header filter toggle)
-  const isRtorrent = clientType === 'rtorrent';
-  const badgeBgClass = showBadge
-    ? (isRtorrent
-        ? 'bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-300'
-        : 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300')
-    : 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300';
+  // Determine network type from instance metadata (future-proof for new clients)
+  // Falls back to 'ed2k' default when instances haven't loaded yet
+  const networkType = instanceId && instances?.[instanceId]?.networkType
+    || (clientType && Object.values(instances).find(i => i.type === clientType)?.networkType)
+    || 'ed2k';
+  const isBittorrent = networkType === 'bittorrent';
+
+  // Badge background: use instance color when available, else network-type color
+  const badgeStyle = instanceInfo?.color
+    ? { backgroundColor: instanceInfo.color, textShadow: '0 1px 2px rgba(0,0,0,0.3)' }
+    : undefined;
+  const badgeBgClass = instanceInfo?.color
+    ? 'text-white'
+    : (showBadge
+        ? (isBittorrent
+            ? 'bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-300'
+            : 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300')
+        : 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300');
 
   // Show size badge if we have fileSize or showBadge (for client icon)
   const showSizeBadge = fileSize > 0 || showBadge;
@@ -78,11 +94,14 @@ const MobileCardHeader = ({
             overflow: 'hidden'
           }
         }, fileName || 'Unknown'),
-        // Size badge (optionally with client icon)
+        // Size badge (optionally with client icon and instance name)
         showSizeBadge && h('span', {
-          className: `flex-shrink-0 px-1.5 py-px rounded-full text-xs font-medium ${badgeBgClass} whitespace-nowrap flex items-center gap-1`
+          className: `flex-shrink-0 px-1.5 py-px rounded-full text-xs font-medium ${badgeBgClass} whitespace-nowrap flex items-center gap-1`,
+          style: badgeStyle
         },
           showBadge && h(ClientIcon, { clientType, size: 12, title: '' }),
+          instanceInfo && h('span', { className: 'text-[10px] max-w-[8ch] truncate inline-block align-middle' }, instanceInfo.name),
+          instanceInfo && fileSize > 0 && h('span', { className: 'opacity-50' }, '·'),
           fileSize > 0 ? formatBytes(fileSize) : null
         ),
         h(TrackerLabel, { tracker: trackerDomain, maxWidth: 100, className: 'flex-shrink-0' })

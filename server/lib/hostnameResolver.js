@@ -7,7 +7,7 @@
 
 const dns = require('dns').promises;
 const logger = require('./logger');
-const { ipToString, isValidIP } = require('./networkUtils');
+const { isValidIP } = require('./networkUtils');
 
 class HostnameResolver {
   constructor(options = {}) {

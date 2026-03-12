@@ -235,7 +235,7 @@ class BaseClientManager extends BaseModule {
 
   /**
    * Merge cached tracker/peer data into item objects.
-   * Sets trackersDetailed, peersDetailed, and optionally trackers (simple URL array).
+   * Sets trackersDetailed, peersDetailed (role-stamped), and optionally trackers (simple URL array).
    * @param {Array} items - Download/torrent objects with a .hash property
    */
   _mergeTrackerData(items) {
@@ -254,7 +254,7 @@ class BaseClientManager extends BaseModule {
       }
 
       const peerCached = this._peerCache.get(hash);
-      item.peersDetailed = peerCached?.peers || [];
+      item.peersDetailed = (peerCached?.peers || []).map(p => ({ ...p, role: 'peer' }));
     }
   }
 

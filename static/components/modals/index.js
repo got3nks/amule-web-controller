@@ -15,3 +15,4 @@ export { default as FileInfoModal } from './FileInfoModal.js';
 export { default as DirectoryBrowserModal } from './DirectoryBrowserModal.js';
 export { default as UserModal } from './UserModal.js';
 export { default as ProfileModal } from './ProfileModal.js';
+export { default as FileRenameModal } from './FileRenameModal.js';

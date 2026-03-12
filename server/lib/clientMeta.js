@@ -54,7 +54,8 @@ const CLIENT_TYPES = {
       apiDeletesFiles: false,      // no API-level delete-with-files flag
       refreshSharedAfterDelete: true, // needs refreshSharedFiles() after shared file deletion
       categories: true,            // supports named categories
-      logs: true                   // has fetchable log output
+      logs: true,                  // has fetchable log output
+      renameFile: true             // can rename downloads and shared files
     }
   },
   rtorrent: {

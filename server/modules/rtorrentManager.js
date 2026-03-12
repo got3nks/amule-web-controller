@@ -8,7 +8,7 @@ const BaseClientManager = require('../lib/BaseClientManager');
 const logger = require('../lib/logger');
 const clientMeta = require('../lib/clientMeta');
 const { parseMagnetUri, parseTorrentBuffer } = require('../lib/torrentUtils');
-const { normalizeRtorrentDownload, extractRtorrentUploads } = require('../lib/downloadNormalizer');
+const { normalizeRtorrentDownload } = require('../lib/downloadNormalizer');
 
 
 class RtorrentManager extends BaseClientManager {
@@ -240,22 +240,18 @@ class RtorrentManager extends BaseClientManager {
     const rawDownloads = await this.getDownloads();
 
     if (!rawDownloads || rawDownloads.length === 0) {
-      return { downloads: [], sharedFiles: [], uploads: [] };
+      return { downloads: [], sharedFiles: [] };
     }
 
-    // Normalize all downloads
+    // Normalize all downloads (peers already embedded with role: 'peer')
     const downloads = rawDownloads.map(d => normalizeRtorrentDownload(d));
-
-    // Extract uploads (peers with active upload) from raw data
-    const uploads = extractRtorrentUploads(rawDownloads);
 
     // Stamp instanceId on all normalized items
     const instanceId = this.instanceId;
     downloads.forEach(d => { d.instanceId = instanceId; });
-    uploads.forEach(u => { u.instanceId = instanceId; });
 
     // For torrent clients, downloads ARE shared files (all torrents seed)
-    return { downloads, sharedFiles: downloads, uploads };
+    return { downloads, sharedFiles: downloads };
   }
 
   // ============================================================================

@@ -72,10 +72,10 @@ const MobileNavFooter = ({ currentView, onNavigate }) => {
     return dataItems.filter(i => i.downloading).length;
   }, [dataItems]);
 
-  // Count active uploads for badge (items with activeUploads)
+  // Count active uploads for badge (peers with uploadRate > 0)
   const activeUploadCount = useMemo(() => {
     if (!dataItems) return 0;
-    return dataItems.reduce((sum, i) => sum + (i.activeUploads?.length || 0), 0);
+    return dataItems.reduce((sum, i) => sum + (i.peers || []).filter(p => p.uploadRate > 0).length, 0);
   }, [dataItems]);
 
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);

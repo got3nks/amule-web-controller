@@ -10,7 +10,7 @@ import React from 'https://esm.sh/react@18.2.0';
 import { Table, ContextMenu, MoreButton, Button, Select, IconButton, SelectionModeSection, EmptyState, DownloadMobileCard, MobileStatusTabs, MobileFilterPills, MobileFilterSheet, MobileFilterButton, MobileSortButton, ExpandableSearch, FilterInput, SelectionCheckbox, Tooltip, Icon } from '../common/index.js';
 import { getRowHighlightClass, DEFAULT_SORT_CONFIG, DEFAULT_SECONDARY_SORT_CONFIG, formatTitleCount, buildSpeedColumn, buildSizeColumn, buildFileNameColumn, buildStatusColumn, buildCategoryColumn, buildProgressColumn, buildSourcesColumn, buildAddedAtColumn, buildETAColumn, VIEW_TITLE_STYLES, createCategoryLabelFilter, createTrackerFilter } from '../../utils/index.js';
 import { itemKey } from '../../utils/itemKey.js';
-import { useModal, useViewDeleteModal, useBatchExport, useViewFilters, usePageSelection, useItemActions, useCategoryFilterOptions, useItemContextMenu, useColumnConfig, getSecondarySortConfig, useFileInfoModal, useFileCategoryModal } from '../../hooks/index.js';
+import { useModal, useViewDeleteModal, useBatchExport, useViewFilters, usePageSelection, useItemActions, useCategoryFilterOptions, useItemContextMenu, useColumnConfig, getSecondarySortConfig, useFileInfoModal, useFileCategoryModal, useFileRenameModal } from '../../hooks/index.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useActions } from '../../contexts/ActionsContext.js';
@@ -138,6 +138,8 @@ const DownloadsView = () => {
   // ============================================================================
   // Info modal
   const { openFileInfo, FileInfoElement } = useFileInfoModal();
+  // Rename modal
+  const { openRenameModal, FileRenameElement } = useFileRenameModal();
 
   // Add download modal
   const {
@@ -208,6 +210,7 @@ const DownloadsView = () => {
     onPause: handlePause,
     onResume: handleResume,
     onStop: handleStop,
+    onRename: openRenameModal,
     onCopyLink: handleCopyLink,
     copiedHash,
     infoLabel: 'Download Details',
@@ -478,6 +481,8 @@ const DownloadsView = () => {
     FileCategoryModalElement,
 
     FileInfoElement,
+
+    FileRenameElement,
 
     DeleteModalElement,
 

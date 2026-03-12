@@ -20,7 +20,7 @@ const CURRENT_VERSION = 1;
 
 const ALL_CAPABILITIES = [
   'search', 'add_downloads', 'remove_downloads', 'pause_resume',
-  'assign_categories', 'move_files', 'manage_categories',
+  'assign_categories', 'move_files', 'rename_files', 'manage_categories',
   'view_history', 'clear_history', 'view_shared', 'view_uploads',
   'view_statistics', 'view_logs', 'view_servers',
   'view_all_downloads', 'edit_all_downloads'

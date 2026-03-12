@@ -529,7 +529,7 @@ export const buildUploadSpeedColumn = ({
   width,
   render: (item) => {
     const ulSpeed = item[speedKey] || 0;
-    const activeUploads = showActiveUploads ? (item.activeUploads || []).length : 0;
+    const activeUploads = showActiveUploads ? (item.peers || []).filter(p => p.uploadRate > 0).length : 0;
     const isDisabled = typeof disabled === 'function' ? disabled(item) : disabled;
     const isClickable = onClick && !isDisabled;
 

@@ -7,7 +7,7 @@ const DelugeClient = require('../lib/deluge/DelugeClient');
 const BaseClientManager = require('../lib/BaseClientManager');
 const logger = require('../lib/logger');
 const { parseMagnetUri, parseTorrentBuffer } = require('../lib/torrentUtils');
-const { normalizeDelugeDownload, extractDelugeUploads } = require('../lib/downloadNormalizer');
+const { normalizeDelugeDownload } = require('../lib/downloadNormalizer');
 
 
 class DelugeManager extends BaseClientManager {
@@ -314,22 +314,18 @@ class DelugeManager extends BaseClientManager {
     const rawTorrents = await this.getTorrents();
 
     if (!rawTorrents || rawTorrents.length === 0) {
-      return { downloads: [], sharedFiles: [], uploads: [] };
+      return { downloads: [], sharedFiles: [] };
     }
 
-    // Normalize all torrents
+    // Normalize all torrents (peers already embedded with role: 'peer')
     const downloads = rawTorrents.map(t => normalizeDelugeDownload(t.hash, t));
-
-    // Extract uploads (peers with active upload) from normalized data
-    const uploads = extractDelugeUploads(downloads);
 
     // Stamp instanceId on all normalized items
     const instanceId = this.instanceId;
     downloads.forEach(d => { d.instanceId = instanceId; });
-    uploads.forEach(u => { u.instanceId = instanceId; });
 
     // For torrent clients, downloads ARE shared files (all torrents seed)
-    return { downloads, sharedFiles: downloads, uploads };
+    return { downloads, sharedFiles: downloads };
   }
 
   // ============================================================================

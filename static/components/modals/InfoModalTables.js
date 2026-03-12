@@ -251,14 +251,38 @@ const normalizePeer = (peer) => {
   };
 };
 
+// Download state labels for aMule sources
+const DL_STATE_LABELS = {
+  0: 'Downloading', 1: 'On Queue', 2: 'Connected', 3: 'Connecting',
+  4: 'Wait Callback', 5: 'Req Hashset', 6: 'No Needed Parts', 7: 'Too Many Conns',
+  8: 'Too Many Conns IP', 9: 'Low to Low ID', 10: 'Banned', 11: 'Error',
+  12: 'Wait Callback (Kad)', 13: 'None'
+};
+
+const UL_STATE_LABELS = {
+  0: 'Uploading', 1: 'On Queue', 2: 'Wait Callback', 3: 'Connecting',
+  4: 'Pending', 5: 'Low to Low ID', 6: 'Banned', 7: 'Error', 8: 'None'
+};
+
+const SOURCE_FROM_LABELS = {
+  0: '-', 1: 'Server', 2: 'Remote', 3: 'Kad',
+  4: 'Exchange', 5: 'Passive', 6: 'Link', 7: 'Seeds', 8: 'Search'
+};
+
 /**
- * Peers table component for rtorrent downloads/shared files and aMule uploads
- * Supports both rtorrent and qBittorrent field naming conventions
+ * Peers table component for torrent peers, aMule upload peers, and aMule download sources
  * @param {Array} peers - Array of peer objects
- * @param {boolean} isAmule - If true, hide torrent-specific columns (Done, Downloaded, DL)
+ * @param {string} variant - 'torrent' (default), 'amule-upload', or 'amule-source'
+ * @param {boolean} isAmule - Deprecated, use variant instead
  */
-export const PeersTable = ({ peers, isAmule = false }) => {
-  const [sort, setSort] = useState({ key: 'uploadRate', direction: 'desc' });
+export const PeersTable = ({ peers, variant, isAmule = false }) => {
+  // Backward compatibility: isAmule=true → 'amule-upload'
+  const mode = variant || (isAmule ? 'amule-upload' : 'torrent');
+  const isSource = mode === 'amule-source';
+  const isUpload = mode === 'amule-upload';
+  const isAmuleMode = isSource || isUpload;
+
+  const [sort, setSort] = useState({ key: isSource ? 'downloadRate' : 'uploadRate', direction: 'desc' });
 
   const handleSort = (key) => {
     setSort(prev => ({
@@ -330,6 +354,26 @@ export const PeersTable = ({ peers, isAmule = false }) => {
           aVal = a.peerDownloadTotal || 0;
           bVal = b.peerDownloadTotal || 0;
           break;
+        case 'downloadState':
+          aVal = a.downloadState ?? 99;
+          bVal = b.downloadState ?? 99;
+          break;
+        case 'uploadState':
+          aVal = a.uploadState ?? 99;
+          bVal = b.uploadState ?? 99;
+          break;
+        case 'sourceFrom':
+          aVal = a.sourceFrom ?? 99;
+          bVal = b.sourceFrom ?? 99;
+          break;
+        case 'remoteQueueRank':
+          aVal = a.remoteQueueRank ?? 999999;
+          bVal = b.remoteQueueRank ?? 999999;
+          break;
+        case 'userName':
+          aVal = a.userName || '';
+          bVal = b.userName || '';
+          break;
         default:
           return 0;
       }
@@ -349,97 +393,139 @@ export const PeersTable = ({ peers, isAmule = false }) => {
       h('thead', null,
         h('tr', { className: 'bg-gray-50 dark:bg-gray-700/50' },
           h(SortableHeader, { label: 'Address', sortKey: 'address', currentSort: sort, onSort: handleSort }),
+          isAmuleMode && h(SortableHeader, { label: 'User', sortKey: 'userName', currentSort: sort, onSort: handleSort }),
           h(SortableHeader, { label: 'Client', sortKey: 'client', currentSort: sort, onSort: handleSort }),
           // Flags column (torrents only)
-          !isAmule && h('th', { className: 'px-2 py-1.5 text-center font-medium text-gray-600 dark:text-gray-300' }, 'Flags'),
-          // Done column (torrents only - peer's download progress)
-          !isAmule && h(SortableHeader, { label: 'Done', sortKey: 'completedPercent', currentSort: sort, onSort: handleSort, align: 'right' }),
-          // Downloaded column (torrents only - bytes downloaded from peer)
-          !isAmule && h(SortableHeader, { label: 'Downloaded', sortKey: 'downloadTotal', currentSort: sort, onSort: handleSort, align: 'right' }),
-          // Session upload (aMule only)
-          isAmule && h(SortableHeader, { label: 'Session', sortKey: 'uploadSession', currentSort: sort, onSort: handleSort, align: 'right' }),
-          h(SortableHeader, { label: 'Uploaded', sortKey: 'uploadTotal', currentSort: sort, onSort: handleSort, align: 'right' }),
-          // DL rate column (torrents only)
-          !isAmule && h(SortableHeader, { label: 'DL', sortKey: 'downloadRate', currentSort: sort, onSort: handleSort, align: 'right' }),
-          h(SortableHeader, { label: 'UL', sortKey: 'uploadRate', currentSort: sort, onSort: handleSort, align: 'right' }),
-          // Peer's own download stats (rtorrent only - qBittorrent doesn't provide this)
-          !isAmule && hasPeerStats && h(SortableHeader, { label: 'Peer DL', sortKey: 'peerDownloadRate', currentSort: sort, onSort: handleSort, align: 'right' }),
-          !isAmule && hasPeerStats && h(SortableHeader, { label: 'Peer Total', sortKey: 'peerDownloadTotal', currentSort: sort, onSort: handleSort, align: 'right' })
+          !isAmuleMode && h('th', { className: 'px-2 py-1.5 text-center font-medium text-gray-600 dark:text-gray-300' }, 'Flags'),
+          // Done column (torrents only)
+          !isAmuleMode && h(SortableHeader, { label: 'Done', sortKey: 'completedPercent', currentSort: sort, onSort: handleSort, align: 'right' }),
+          // Downloaded column (torrents only)
+          !isAmuleMode && h(SortableHeader, { label: 'Downloaded', sortKey: 'downloadTotal', currentSort: sort, onSort: handleSort, align: 'right' }),
+          // State column (aMule sources: download state, aMule uploads: upload state)
+          isAmuleMode && h(SortableHeader, { label: 'State', sortKey: isSource ? 'downloadState' : 'uploadState', currentSort: sort, onSort: handleSort }),
+          // Source type (aMule only)
+          isAmuleMode && h(SortableHeader, { label: 'Source', sortKey: 'sourceFrom', currentSort: sort, onSort: handleSort }),
+          // Queue rank (aMule sources only)
+          isSource && h(SortableHeader, { label: 'Queue', sortKey: 'remoteQueueRank', currentSort: sort, onSort: handleSort, align: 'right' }),
+          // Session upload (aMule uploads only)
+          isUpload && h(SortableHeader, { label: 'Session', sortKey: 'uploadSession', currentSort: sort, onSort: handleSort, align: 'right' }),
+          // Transfer totals
+          isUpload && h(SortableHeader, { label: 'Uploaded', sortKey: 'uploadTotal', currentSort: sort, onSort: handleSort, align: 'right' }),
+          isSource && h(SortableHeader, { label: 'Downloaded', sortKey: 'downloadTotal', currentSort: sort, onSort: handleSort, align: 'right' }),
+          // DL rate column (torrents + sources)
+          !isUpload && h(SortableHeader, { label: 'DL', sortKey: 'downloadRate', currentSort: sort, onSort: handleSort, align: 'right' }),
+          // UL rate column (torrents + uploads)
+          !isSource && h(SortableHeader, { label: 'UL', sortKey: 'uploadRate', currentSort: sort, onSort: handleSort, align: 'right' }),
+          // Peer's own download stats (rtorrent only)
+          !isAmuleMode && hasPeerStats && h(SortableHeader, { label: 'Peer DL', sortKey: 'peerDownloadRate', currentSort: sort, onSort: handleSort, align: 'right' }),
+          !isAmuleMode && hasPeerStats && h(SortableHeader, { label: 'Peer Total', sortKey: 'peerDownloadTotal', currentSort: sort, onSort: handleSort, align: 'right' })
         )
       ),
       h('tbody', { className: 'divide-y divide-gray-200 dark:divide-gray-700' },
         sortedPeers.map((peer, idx) => {
           const ipPort = `${peer.address}:${peer.port}`;
           const geoTitle = [peer.geoData?.city, peer.geoData?.country].filter(Boolean).join(', ');
+          const stateLabel = isSource
+            ? (DL_STATE_LABELS[peer.downloadState] || `?(${peer.downloadState})`)
+            : isUpload
+              ? (UL_STATE_LABELS[peer.uploadState] || `?(${peer.uploadState})`)
+              : '';
+          const stateColor = isSource
+            ? (peer.downloadState === 0 ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400')
+            : isUpload
+              ? (peer.uploadState === 0 ? 'text-blue-600 dark:text-blue-400' : 'text-gray-600 dark:text-gray-400')
+              : '';
 
           return h('tr', {
             key: `${peer.address}-${peer.port}-${idx}`,
             className: 'hover:bg-gray-50 dark:hover:bg-gray-700/30'
           },
-            // Address column with flag, hostname/IP, and optional city
+            // Address column with flag, hostname/IP, userName, and optional city
             h('td', { className: 'px-2 py-1.5 text-gray-900 dark:text-gray-100' },
               h('div', { className: 'flex items-center gap-1.5' },
-                // Country flag
                 peer.geoData?.countryCode && h(FlagIcon, {
                   countryCode: peer.geoData.countryCode,
                   size: 14,
                   title: geoTitle || peer.geoData.countryCode
                 }),
-                // Hostname (with IP tooltip) or IP:port
                 peer.hostname
                   ? h(Tooltip, { content: ipPort, position: 'top' },
                       h('span', { className: 'font-mono cursor-help' }, peer.hostname)
                     )
                   : h('span', { className: 'font-mono' }, ipPort),
-                // City (if available and no hostname shown)
                 !peer.hostname && peer.geoData?.city && h('span', {
                   className: 'text-gray-500 dark:text-gray-400 text-[10px]'
                 }, `(${peer.geoData.city})`)
               )
             ),
+            // Username column (aMule only)
+            isAmuleMode && h('td', {
+              className: 'px-2 py-1.5 text-gray-600 dark:text-gray-400 truncate max-w-[120px]',
+              title: peer.userName
+            }, peer.userName || '-'),
             h('td', {
               className: 'px-2 py-1.5 text-gray-600 dark:text-gray-400 truncate max-w-[150px]',
               title: peer.client
             }, peer.client),
             // Flags column (torrents only)
-            !isAmule && h('td', { className: 'px-2 py-1.5 text-center' },
+            !isAmuleMode && h('td', { className: 'px-2 py-1.5 text-center' },
               peer.flags && h('span', {
                 className: 'px-1.5 py-0.5 rounded text-xs font-mono bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400',
                 title: `${peer.isEncrypted ? 'Encrypted' : ''}${peer.isEncrypted && peer.isIncoming ? ', ' : ''}${peer.isIncoming ? 'Incoming' : ''}`
               }, peer.flags)
             ),
             // Done column (torrents only)
-            !isAmule && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
+            !isAmuleMode && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
               peer.completedPercent != null ? `${peer.completedPercent}%` : '-'
             ),
             // Downloaded column (torrents only)
-            !isAmule && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
+            !isAmuleMode && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
               formatBytes(peer.downloadTotal)
             ),
-            // Session upload column (aMule only)
-            isAmule && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
+            // State column (aMule only)
+            isAmuleMode && h('td', { className: `px-2 py-1.5 ${stateColor}` },
+              h('span', {
+                className: 'px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-700'
+              }, stateLabel)
+            ),
+            // Source type (aMule only)
+            isAmuleMode && h('td', { className: 'px-2 py-1.5 text-gray-600 dark:text-gray-400' },
+              SOURCE_FROM_LABELS[peer.sourceFrom] || '-'
+            ),
+            // Queue rank (aMule sources only)
+            isSource && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
+              peer.remoteQueueRank != null && peer.remoteQueueRank > 0 ? peer.remoteQueueRank : '-'
+            ),
+            // Session upload (aMule uploads only)
+            isUpload && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
               formatBytes(peer.uploadSession || 0)
             ),
-            h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
+            // Upload total (aMule uploads)
+            isUpload && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
               formatBytes(peer.uploadTotal)
             ),
-            // DL rate column (torrents only)
-            !isAmule && h('td', { className: 'px-2 py-1.5 text-right' },
+            // Download total (aMule sources)
+            isSource && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
+              formatBytes(peer.downloadTotal)
+            ),
+            // DL rate (torrents + sources)
+            !isUpload && h('td', { className: 'px-2 py-1.5 text-right' },
               peer.downloadRate > 0
                 ? h('span', { className: 'text-green-600 dark:text-green-400' },
                     `${formatBytes(peer.downloadRate)}/s`
                   )
                 : h('span', { className: 'text-gray-400' }, '-')
             ),
-            h('td', { className: 'px-2 py-1.5 text-right' },
+            // UL rate (torrents + uploads)
+            !isSource && h('td', { className: 'px-2 py-1.5 text-right' },
               peer.uploadRate > 0
                 ? h('span', { className: 'text-blue-600 dark:text-blue-400' },
                     `${formatBytes(peer.uploadRate)}/s`
                   )
                 : h('span', { className: 'text-gray-400' }, '-')
             ),
-            // Peer's own download rate (rtorrent only - qBittorrent doesn't provide this)
-            !isAmule && hasPeerStats && h('td', { className: 'px-2 py-1.5 text-right' },
+            // Peer's own download rate (rtorrent only)
+            !isAmuleMode && hasPeerStats && h('td', { className: 'px-2 py-1.5 text-right' },
               peer.peerDownloadRate > 0
                 ? h('span', { className: 'text-purple-600 dark:text-purple-400' },
                     `${formatBytes(peer.peerDownloadRate)}/s`
@@ -447,7 +533,7 @@ export const PeersTable = ({ peers, isAmule = false }) => {
                 : h('span', { className: 'text-gray-400' }, '-')
             ),
             // Peer's total downloaded (rtorrent only)
-            !isAmule && hasPeerStats && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
+            !isAmuleMode && hasPeerStats && h('td', { className: 'px-2 py-1.5 text-right text-gray-600 dark:text-gray-400' },
               formatBytes(peer.peerDownloadTotal)
             )
           );

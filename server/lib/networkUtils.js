@@ -7,27 +7,6 @@
 const clientMeta = require('./clientMeta');
 
 /**
- * Convert IP from number to string (aMule sends IPs as little-endian integers)
- * @param {number|string} ip - IP as number or string
- * @returns {string|null} - IP string or null if invalid
- */
-function ipToString(ip) {
-  if (typeof ip === 'string') {
-    return ip;
-  }
-  if (typeof ip === 'number' && ip > 0) {
-    // Convert 32-bit little-endian integer to dotted quad
-    return [
-      ip & 0xFF,
-      (ip >>> 8) & 0xFF,
-      (ip >>> 16) & 0xFF,
-      (ip >>> 24) & 0xFF
-    ].join('.');
-  }
-  return null;
-}
-
-/**
  * Validate IP address format
  * @param {string} ip - IP to validate
  * @returns {boolean}
@@ -79,7 +58,6 @@ function getClientSoftwareName(item) {
 }
 
 module.exports = {
-  ipToString,
   isValidIP,
   CLIENT_SOFTWARE_LABELS,
   getClientSoftwareName

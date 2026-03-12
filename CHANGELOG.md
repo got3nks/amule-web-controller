@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - Unified Peers, Incremental Updates, File Rename
+
+### ✨ Added
+
+- **aMule incremental updates** — new `getUpdate()` method in amule-ec-node uses `EC_OP_GET_UPDATE` with `EC_DETAIL_INC_UPDATE` for stateful incremental polling. Only changed fields are transferred after the initial full response, significantly reducing bandwidth and CPU usage for aMule connections. Replaces the previous full-queue polling approach (`getDownloadQueue` + `getSharedFiles` + `getClients`)
+- **Download Sources table in FileInfoModal** — aMule download sources (peers we download from) now have a dedicated table section with columns for User, State, Source origin, Queue rank, Downloaded, and DL speed. Previously only upload peers were shown
+- **aMule peer state labels** — download states (Downloading, On Queue, Connecting, etc.), upload states, and source origin labels (Server, Kad, Exchange, etc.) are displayed in human-readable form in the peers tables
+- **File rename** — rename downloads and shared files from the context menu (aMule only). Gated by `renameFile` client capability and `rename_files` user permission. New `FileRenameModal` with smart filename selection (selects name without extension)
+- **Rename files user capability** — new `rename_files` capability in the Downloads group, configurable per-user in the User Management UI. Included by default in Full preset and SSO auto-provisioned users
+
+### ♻️ Refactored
+
+- **Unified peers model** — replaced three separate peer arrays (`peersDetailed`, `activeUploads`, `downloadSources`) with a single `item.peers` array across all 5 client types. Each peer carries a `role` field: `'peer'` (BitTorrent), `'upload'` (aMule upload), `'download'` (aMule source). Eliminates ~200 lines of duplicated peer extraction/normalization code
+- **Peers embedded in source objects** — managers now embed peers directly into download/shared file objects instead of returning separate arrays. Simplifies the data pipeline from 5 parameters to 3 in `assembleUnifiedItems()`
+- **Removed source names caching from QueuedAmuleClient** — the `getDownloadQueueWithCache` wrapper and `mergeSourceNames` logic are replaced by amule-ec-node's native incremental update with deep merge, which handles the aMule EC protocol's ID-based source name diffing correctly
+- **Removed dead `ipToString`** — IP decoding now lives solely in amule-ec-node (EC protocol-specific little-endian uint32 conversion). Removed unused function and imports from `networkUtils.js`, `downloadNormalizer.js`, `geoIPManager.js`, `hostnameResolver.js`
+
+### 🐛 Fixed
+
+- **Stale item removal** — aMule `getUpdate()` uses set-based reconciliation to remove disconnected peers, completed downloads, and unshared files from the incremental cache
+- **Deep merge for incremental EC updates** — raw tag tree merging uses deep merge with ID-based array reconciliation, matching aMule GUI's `CPartFile_Encoder` behaviour. Fixes Source Reported Filenames disappearing after incremental updates replaced nested objects with partial data
+- **Empty download source rows** — peers in "Connecting" state with no IP are now filtered out in `amuleManager.fetchData()`
+- **UploadsView duplicate rows** — peer IDs generated from `address:port` and row keys include `parentHash` to prevent duplicates when the same peer appears across multiple torrents
+
+---
+
 ## [3.2.3] - Unraid Template & Empty Env Var Fix
 
 ### ✨ Added

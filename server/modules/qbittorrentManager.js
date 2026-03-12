@@ -7,7 +7,7 @@ const QBittorrentClient = require('../lib/qbittorrent/QBittorrentClient');
 const BaseClientManager = require('../lib/BaseClientManager');
 const logger = require('../lib/logger');
 const { parseMagnetUri, parseTorrentBuffer } = require('../lib/torrentUtils');
-const { normalizeQBittorrentDownload, extractQBittorrentUploads } = require('../lib/downloadNormalizer');
+const { normalizeQBittorrentDownload } = require('../lib/downloadNormalizer');
 
 
 class QbittorrentManager extends BaseClientManager {
@@ -280,22 +280,18 @@ class QbittorrentManager extends BaseClientManager {
     const rawTorrents = await this.getTorrents();
 
     if (!rawTorrents || rawTorrents.length === 0) {
-      return { downloads: [], sharedFiles: [], uploads: [] };
+      return { downloads: [], sharedFiles: [] };
     }
 
-    // Normalize all torrents
+    // Normalize all torrents (peers already embedded with role: 'peer')
     const downloads = rawTorrents.map(t => normalizeQBittorrentDownload(t));
-
-    // Extract uploads (peers with active upload) from raw data
-    const uploads = extractQBittorrentUploads(rawTorrents);
 
     // Stamp instanceId on all normalized items
     const instanceId = this.instanceId;
     downloads.forEach(d => { d.instanceId = instanceId; });
-    uploads.forEach(u => { u.instanceId = instanceId; });
 
     // For torrent clients, downloads ARE shared files (all torrents seed)
-    return { downloads, sharedFiles: downloads, uploads };
+    return { downloads, sharedFiles: downloads };
   }
 
   // ============================================================================

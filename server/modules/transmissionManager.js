@@ -7,7 +7,7 @@ const TransmissionClient = require('../lib/transmission/TransmissionClient');
 const BaseClientManager = require('../lib/BaseClientManager');
 const logger = require('../lib/logger');
 const { parseMagnetUri, parseTorrentBuffer } = require('../lib/torrentUtils');
-const { normalizeTransmissionDownload, extractTransmissionUploads } = require('../lib/downloadNormalizer');
+const { normalizeTransmissionDownload } = require('../lib/downloadNormalizer');
 
 
 class TransmissionManager extends BaseClientManager {
@@ -336,22 +336,18 @@ class TransmissionManager extends BaseClientManager {
     const rawTorrents = await this.getTorrents();
 
     if (!rawTorrents || rawTorrents.length === 0) {
-      return { downloads: [], sharedFiles: [], uploads: [] };
+      return { downloads: [], sharedFiles: [] };
     }
 
-    // Normalize all torrents
+    // Normalize all torrents (peers already embedded with role: 'peer')
     const downloads = rawTorrents.map(t => normalizeTransmissionDownload(t));
-
-    // Extract uploads (peers with active upload) from normalized data
-    const uploads = extractTransmissionUploads(downloads);
 
     // Stamp instanceId on all normalized items
     const instanceId = this.instanceId;
     downloads.forEach(d => { d.instanceId = instanceId; });
-    uploads.forEach(u => { u.instanceId = instanceId; });
 
     // For torrent clients, downloads ARE shared files (all torrents seed)
-    return { downloads, sharedFiles: downloads, uploads };
+    return { downloads, sharedFiles: downloads };
   }
 
   // ============================================================================

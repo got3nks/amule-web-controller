@@ -30,7 +30,7 @@ const UploadsView = () => {
   // ============================================================================
   // Flatten upload peers from all items
   const uploadPeers = useMemo(() => dataItems.flatMap(item =>
-    (item.activeUploads || []).map(peer => ({
+    (item.peers || []).filter(p => p.uploadRate > 0).map(peer => ({
       ...peer,
       // Parent item fields
       name: item.name,
@@ -384,7 +384,7 @@ const UploadsView = () => {
       pageSize,
       onPageSizeChange,
       skipSort: contextMenu.show,
-      getRowKey: (item) => item.instanceId ? `${item.instanceId}:${item.id}` : item.id,
+      getRowKey: (item) => `${item.instanceId || ''}:${item.parentHash || ''}:${item.id}`,
       getRowClassName: (item) => getRowHighlightClass(
         false,
         contextMenu.show && contextMenu.item?.id === item.id

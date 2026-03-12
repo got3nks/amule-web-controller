@@ -12,7 +12,7 @@ import { itemKey } from '../../utils/itemKey.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useDataFetch } from '../../contexts/DataFetchContext.js';
-import { useViewDeleteModal, useBatchExport, useViewFilters, usePageSelection, useItemActions, useCategoryFilterOptions, useItemContextMenu, useColumnConfig, getSecondarySortConfig, useFileInfoModal, useFileCategoryModal } from '../../hooks/index.js';
+import { useViewDeleteModal, useBatchExport, useViewFilters, usePageSelection, useItemActions, useCategoryFilterOptions, useItemContextMenu, useColumnConfig, getSecondarySortConfig, useFileInfoModal, useFileCategoryModal, useFileRenameModal } from '../../hooks/index.js';
 import { useActions } from '../../contexts/ActionsContext.js';
 import { useStickyToolbar } from '../../contexts/StickyHeaderContext.js';
 import { useCapabilities } from '../../hooks/useCapabilities.js';
@@ -138,6 +138,8 @@ const SharedView = () => {
   // ============================================================================
   // Info modal
   const { openFileInfo, FileInfoElement } = useFileInfoModal();
+  // Rename modal
+  const { openRenameModal, FileRenameElement } = useFileRenameModal();
 
   // Delete modal with batch support and permission checking
   const {
@@ -211,6 +213,7 @@ const SharedView = () => {
     onPause: handlePause,
     onResume: handleResume,
     onStop: handleStop,
+    onRename: openRenameModal,
     onCopyLink: handleCopyLink,
     copiedHash,
     actionsForBittorrentOnly: true,
@@ -476,7 +479,7 @@ const SharedView = () => {
               // Row 2: Status (if not seeding) + Current speed + active peers
               (() => {
                 const ulSpeed = item.uploadSpeed || 0;
-                const activeUploads = (item.activeUploads || []).length;
+                const activeUploads = (item.peers || []).filter(p => p.uploadRate > 0).length;
                 const statusInfo = getItemStatusInfo(item);
                 const showStatus = statusInfo.key !== 'seeding';
                 const hasSpeed = ulSpeed > 0 || activeUploads > 0;
@@ -546,6 +549,8 @@ const SharedView = () => {
     }),
 
     FileInfoElement,
+
+    FileRenameElement,
 
     FileCategoryModalElement,
 

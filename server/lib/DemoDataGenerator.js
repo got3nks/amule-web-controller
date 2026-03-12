@@ -233,6 +233,7 @@ class DemoDataGenerator {
     const uploadRate = isUploader ? this._randomBetween(50000, 500000) : 0;
 
     return {
+      role: 'peer',
       id: this._randomHash(16),
       address: this._randomIP(),
       port: this._randomBetween(10000, 65535),
@@ -257,14 +258,6 @@ class DemoDataGenerator {
       peers.push(this._generatePeer(isUploader));
     }
     return peers;
-  }
-
-  _generateActiveUploads(count) {
-    const uploads = [];
-    for (let i = 0; i < count; i++) {
-      uploads.push(this._generatePeer(true));
-    }
-    return uploads;
   }
 
   // ============================================================================
@@ -348,11 +341,9 @@ class DemoDataGenerator {
       eta = Math.floor(remainingBytes / downloadSpeed);
     }
 
-    // Generate peer data
+    // Generate peer data (unified array with role: 'peer')
     const peersCount = this._randomBetween(3, 15);
-    const peersDetailed = this._generatePeers(peersCount, 0.3);
-    const uploadersCount = type === 'seeding' ? this._randomBetween(1, 5) : 0;
-    const activeUploads = this._generateActiveUploads(uploadersCount);
+    const peers = this._generatePeers(peersCount, 0.3);
 
     const hash = this._randomHash(clientMeta.get(client).hashLength);
     const tracker = this._randomChoice(this.trackers);
@@ -387,11 +378,10 @@ class DemoDataGenerator {
         a4af: clientMeta.isEd2k(client) ? this._randomBetween(0, 5) : 0,
         notCurrent: clientMeta.isEd2k(client) ? this._randomBetween(0, 10) : 0
       },
-      activeUploads,
+      peers,
       uploadTotal,
       ratio: Math.round(ratio * 100) / 100,
       eta,
-      peersDetailed,
       raw: {},
       addedAt
     };

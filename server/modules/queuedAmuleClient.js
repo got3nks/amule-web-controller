@@ -14,9 +14,6 @@ class QueuedAmuleClient {
     this.connectionLost = false;
     this.errorHandler = null;
 
-    // Cache for EC_TAG_PARTFILE_SOURCE_NAMES data (keyed by file hash)
-    this.sourceNamesCache = new Map();
-
     // Add error handling for the underlying protocol to prevent crashes
     this.setupErrorHandlers();
 
@@ -28,14 +25,9 @@ class QueuedAmuleClient {
           return target[prop].bind(target);
         }
 
-        // Handle client methods with special handling
+        // Handle client methods — queue all calls for serialization
         if (target.client && typeof target.client[prop] === 'function') {
-          return (...args) => {
-            if (prop === 'getDownloadQueue') {
-              return target.getDownloadQueueWithCache(...args);
-            }
-            return target.queueRequest(() => target.client[prop](...args), prop);
-          };
+          return (...args) => target.queueRequest(() => target.client[prop](...args), prop);
         }
 
         // Handle properties
@@ -125,96 +117,6 @@ class QueuedAmuleClient {
       // Ignore disconnect errors
       logger.warn('[QueuedAmuleClient] Disconnect error:', err.message);
     }
-  }
-
-  /**
-   * Wrapper for getDownloadQueue that caches EC_TAG_PARTFILE_SOURCE_NAMES data
-   * aMule sends incremental updates with _value as index. We need to merge updates.
-   * This method maintains a complete cache and merges incremental changes.
-   */
-  async getDownloadQueueWithCache(...args) {
-    return this.queueRequest(async () => {
-      const result = await this.client.getDownloadQueue(...args);
-
-      if (!result || !Array.isArray(result)) {
-        return result;
-      }
-
-      // Process each file in the download queue
-      result.forEach(file => {
-        const fileHash = file?.raw?.EC_TAG_PARTFILE_HASH;
-        if (!fileHash) return;
-
-        const newSourceNames = file.raw?.EC_TAG_PARTFILE_SOURCE_NAMES;
-
-        if (newSourceNames) {
-          // Get existing cached data
-          const cached = this.sourceNamesCache.get(fileHash);
-
-          // Merge new data with cached data
-          const merged = this.mergeSourceNames(cached, newSourceNames);
-
-          // Update cache and file data
-          this.sourceNamesCache.set(fileHash, merged);
-          file.raw.EC_TAG_PARTFILE_SOURCE_NAMES = merged;
-        } else if (this.sourceNamesCache.has(fileHash)) {
-          // No SOURCE_NAMES in response, restore from cache
-          file.raw.EC_TAG_PARTFILE_SOURCE_NAMES = this.sourceNamesCache.get(fileHash);
-        }
-      });
-
-      return result;
-    }, 'getDownloadQueue');
-  }
-
-  /**
-   * Merge SOURCE_NAMES data based on _value index
-   * @param {Object} cached - Cached SOURCE_NAMES structure
-   * @param {Object} incoming - New SOURCE_NAMES data from aMule
-   * @returns {Object} Merged SOURCE_NAMES structure
-   */
-  mergeSourceNames(cached, incoming) {
-    // Extract the inner data
-    const cachedInner = cached?.EC_TAG_PARTFILE_SOURCE_NAMES;
-    const incomingInner = incoming?.EC_TAG_PARTFILE_SOURCE_NAMES;
-
-    if (!incomingInner) {
-      return cached || incoming;
-    }
-
-    // Convert to arrays for processing
-    const cachedArray = Array.isArray(cachedInner) ? cachedInner : (cachedInner ? [cachedInner] : []);
-    const incomingArray = Array.isArray(incomingInner) ? incomingInner : [incomingInner];
-
-    // Create a map of cached items by _value
-    const mergedMap = new Map();
-    cachedArray.forEach(item => {
-      if (item._value !== undefined) {
-        mergedMap.set(item._value, item);
-      }
-    });
-
-    // Merge incoming items
-    incomingArray.forEach(item => {
-      if (item._value !== undefined) {
-        const existing = mergedMap.get(item._value);
-        if (existing) {
-          // Update existing entry - merge properties
-          mergedMap.set(item._value, { ...existing, ...item });
-        } else {
-          // Add new entry
-          mergedMap.set(item._value, item);
-        }
-      }
-    });
-
-    // Convert back to array and sort by _value
-    const mergedArray = Array.from(mergedMap.values()).sort((a, b) => a._value - b._value);
-
-    // Return in the same structure format
-    return {
-      EC_TAG_PARTFILE_SOURCE_NAMES: mergedArray.length === 1 ? mergedArray[0] : mergedArray
-    };
   }
 
   // Status methods - not queued as they're synchronous checks

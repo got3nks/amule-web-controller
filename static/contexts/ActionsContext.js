@@ -295,6 +295,10 @@ const useWebSocketActions = () => {
     sendMessage({ action: 'batchDelete', items, deleteFiles, source });
   };
 
+  const handleRenameFile = (fileHash, newName, instanceId) => {
+    sendMessage({ action: 'renameFile', fileHash, newName, instanceId });
+  };
+
   return {
     categories: {
       create: handleCreateCategory,
@@ -318,7 +322,8 @@ const useWebSocketActions = () => {
       pause: handlePauseDownload,
       resume: handleResumeDownload,
       stop: handleStopDownload,
-      deleteFile: handleDeleteFile
+      deleteFile: handleDeleteFile,
+      renameFile: handleRenameFile
     }
   };
 };

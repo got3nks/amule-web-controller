@@ -48,6 +48,7 @@ const getDefaultExpanded = (variant) => {
   }
   if (variant === 'ed2k-download') {
     return {
+      'Download Sources': true,
       'Active Uploads': true,
       'File Identification': true,
       'Source Information': true,
@@ -226,11 +227,14 @@ const FileInfoModal = ({ hash, instanceId, onClose }) => {
   const isComplete = isTorrent && liveItem.progress >= 100;
   const torrentMessage = isTorrent ? (liveItem.message || '') : '';
   const trackersDetailed = isTorrent ? (liveItem.trackersDetailed || []) : [];
-  const peersDetailedTorrent = isTorrent ? (liveItem.peersDetailed || []) : [];
+  const allPeers = liveItem.peers || [];
 
-  // ed2k (shared or downloading with active upload peers)
-  const peersDetailedAmule = !isTorrent
-    ? (liveItem.activeUploads || []) : [];
+  // BitTorrent: all peers shown together (bidirectional)
+  const peersDetailedTorrent = isTorrent ? allPeers : [];
+
+  // aMule: split by role for separate sections
+  const downloadSourcesAmule = !isTorrent ? allPeers.filter(p => p.role === 'download') : [];
+  const peersDetailedAmule = !isTorrent ? allPeers.filter(p => p.role === 'upload') : [];
 
   // --- Categorized fields ---
   let categorizedFields = {};
@@ -409,13 +413,21 @@ const FileInfoModal = ({ hash, instanceId, onClose }) => {
           onToggle: () => toggleSection('Trackers')
         }, h(TrackersTable, { trackers: trackersDetailed, clientType: instances[liveItem.instanceId]?.type })),
 
+        // --- ed2k: Download Sources (peers we download from) section ---
+        !isTorrent && downloadSourcesAmule.length > 0 && h(CollapsibleTableSection, {
+          title: 'Download Sources',
+          count: downloadSourcesAmule.length,
+          expanded: expandedSections['Download Sources'],
+          onToggle: () => toggleSection('Download Sources')
+        }, h(PeersTable, { peers: downloadSourcesAmule, variant: 'amule-source' })),
+
         // --- ed2k: Active Uploads (peers) section ---
         !isTorrent && peersDetailedAmule.length > 0 && h(CollapsibleTableSection, {
           title: 'Active Uploads',
           count: peersDetailedAmule.length,
           expanded: expandedSections['Active Uploads'],
           onToggle: () => toggleSection('Active Uploads')
-        }, h(PeersTable, { peers: peersDetailedAmule, isAmule: true })),
+        }, h(PeersTable, { peers: peersDetailedAmule, variant: 'amule-upload' })),
 
         // --- All variants: Categorized fields ---
         Object.entries(categorizedFields).map(([category, fields]) =>

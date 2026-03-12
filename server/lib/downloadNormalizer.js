@@ -3,7 +3,7 @@
  * Shared utility functions for normalizing download data from different clients
  */
 
-const { ipToString, getClientSoftwareName } = require('./networkUtils');
+const { getClientSoftwareName, CLIENT_SOFTWARE_LABELS } = require('./networkUtils');
 
 // ============================================================================
 // HELPERS
@@ -100,7 +100,7 @@ function normalizeAmuleDownload(download, resolveCategoryName = () => 'Default')
     downloaded: download.fileSizeDownloaded,
     category: catId,
     categoryName,
-    ed2kLink: download.EC_TAG_PARTFILE_ED2K_LINK || download.raw?.EC_TAG_PARTFILE_ED2K_LINK || null,
+    ed2kLink: download.ed2kLink || download.EC_TAG_PARTFILE_ED2K_LINK || download.raw?.EC_TAG_PARTFILE_ED2K_LINK || null,
     // Explicit pass-through of library-mapped fields used by the builder
     progress: download.progress || 0,
     speed: download.speed || 0,
@@ -142,7 +142,7 @@ function normalizeAmuleSharedFile(file, categories = []) {
     categoryName,
     // Map EC_TAG fields to canonical names
     priority: file.priority ?? file.EC_TAG_KNOWNFILE_PRIO ?? file.raw?.EC_TAG_KNOWNFILE_PRIO ?? null,
-    ed2kLink: file.EC_TAG_PARTFILE_ED2K_LINK || file.raw?.EC_TAG_PARTFILE_ED2K_LINK || null,
+    ed2kLink: file.ed2kLink || file.EC_TAG_PARTFILE_ED2K_LINK || file.raw?.EC_TAG_PARTFILE_ED2K_LINK || null,
     // Explicit pass-through of library-mapped fields used by the builder
     transferredTotal: file.transferredTotal || 0,
     transferred: file.transferred ?? null,
@@ -158,22 +158,66 @@ function normalizeAmuleSharedFile(file, categories = []) {
  * @param {Object} upload - Raw aMule upload object
  * @returns {Object} Normalized upload entry
  */
-function normalizeAmuleUpload(upload) {
+function _resolveClientSoftware(client) {
+  const softwareId = client.software ?? null;
+  const baseName = (softwareId !== null && CLIENT_SOFTWARE_LABELS[softwareId]) || 'Unknown';
+  const version = client.softwareVersion;
+  const software = version && version !== 'Unknown' ? `${baseName} ${version}` : baseName;
+  return { software, softwareId };
+}
+
+function normalizeAmuleUpload(client) {
+  // Accepts parsed client objects from getUpdate().clients
+  const { software, softwareId } = _resolveClientSoftware(client);
+
   return {
+    role: 'upload',
     clientType: 'amule',
-    id: upload.EC_TAG_CLIENT_HASH || '',
-    fileName: upload.EC_TAG_PARTFILE_NAME || '',
-    fileSize: upload.EC_TAG_PARTFILE_SIZE_FULL || 0,
-    address: upload.EC_TAG_CLIENT_USER_IP_STR || ipToString(upload.EC_TAG_CLIENT_USER_IP) || '',
-    port: upload.EC_TAG_CLIENT_USER_PORT || 0,
-    software: getClientSoftwareName(upload),
-    softwareId: upload.EC_TAG_CLIENT_SOFTWARE ?? null,
-    uploadRate: upload.EC_TAG_CLIENT_UP_SPEED || 0,
-    downloadRate: 0,
-    uploadTotal: upload.EC_TAG_CLIENT_UPLOAD_TOTAL || 0,
-    uploadSession: upload.EC_TAG_CLIENT_UPLOAD_SESSION ?? null,
+    id: client.userHash || '',
+    userName: client.userName || '',
+    fileName: client.transferFileName || '',
+    fileSize: 0,
+    address: client.ip || '',
+    port: client.port || 0,
+    software,
+    softwareId,
+    uploadRate: client.upSpeed || 0,
+    downloadRate: client.downSpeed || 0,
+    uploadTotal: client.uploadTotal || 0,
+    uploadSession: client.uploadSession ?? null,
+    uploadState: client.uploadState,
+    sourceFrom: client.sourceFrom,
     completedPercent: null,
-    isEncrypted: false,
+    isEncrypted: client.obfuscation > 0,
+    isIncoming: false
+  };
+}
+
+/**
+ * Normalize an aMule download source (peer we download from).
+ * @param {Object} client - Parsed client object from getUpdate().clients
+ * @returns {Object} Normalized download source entry
+ */
+function normalizeAmuleDownloadSource(client) {
+  const { software, softwareId } = _resolveClientSoftware(client);
+
+  return {
+    role: 'download',
+    clientType: 'amule',
+    id: client.userHash || '',
+    userName: client.userName || '',
+    fileName: client.remoteFilename || '',
+    address: client.ip || '',
+    port: client.port || 0,
+    software,
+    softwareId,
+    downloadRate: client.downSpeed || 0,
+    uploadRate: client.upSpeed || 0,
+    downloadTotal: client.downloadTotal || 0,
+    downloadState: client.downloadState,
+    sourceFrom: client.sourceFrom,
+    remoteQueueRank: client.remoteQueueRank ?? null,
+    isEncrypted: client.obfuscation > 0,
     isIncoming: false
   };
 }
@@ -209,7 +253,7 @@ function normalizeRtorrentDownload(download) {
     category: download.label || '', // Alias for consistency with qBittorrent
     label: download.label,
     directory: download.directory,
-    peers: download.peers,
+    peerCounts: download.peers,
     isComplete: download.isComplete,
     isActive: download.isActive,
     isMultiFile: download.isMultiFile || false,
@@ -217,7 +261,7 @@ function normalizeRtorrentDownload(download) {
     trackers,
     trackersDetailed: download.trackersDetailed || [],
     trackerDomain,
-    peersDetailed: download.peersDetailed || [],
+    peersDetailed: (download.peersDetailed || []).map(p => ({ ...p, role: 'peer' })),
     message: download.message || '',
 
     raw: { clientType: 'rtorrent', ...download },
@@ -229,62 +273,6 @@ function normalizeRtorrentDownload(download) {
   };
 }
 
-/**
- * Normalize rtorrent peer to upload entry format
- * @param {Object} peer - rtorrent peer object (from peersDetailed)
- * @param {Object} download - Parent download object (for file info)
- * @returns {Object} Normalized upload entry
- */
-function normalizeRtorrentPeer(peer, download) {
-  const address = peer.address || '';
-  const port = peer.port || 0;
-  const trackerDomain = extractTrackerDomain(download.trackers);
-
-  return {
-    clientType: 'rtorrent',
-    id: `${download.hash}-${address}:${port}`,
-    fileName: download.name,
-    fileSize: download.size,
-    address,
-    port,
-    software: peer.client || 'Unknown',
-    softwareId: null,
-    uploadRate: peer.uploadRate || 0,
-    downloadRate: peer.downloadRate || 0,
-    uploadTotal: peer.uploadTotal || 0,
-    uploadSession: null,
-    completedPercent: peer.completedPercent || 0,
-    isEncrypted: peer.isEncrypted || false,
-    isIncoming: peer.isIncoming || false,
-    downloadHash: download.hash,
-    downloadName: download.name,
-    label: download.label || null,
-    trackerDomain: trackerDomain || null
-  };
-}
-
-/**
- * Extract active upload entries from rtorrent downloads
- * Only includes peers that are currently receiving data (uploadRate > 0)
- * @param {Array} downloads - Array of raw rtorrent downloads
- * @returns {Array} Array of upload entries
- */
-function extractRtorrentUploads(downloads) {
-  const uploads = [];
-
-  for (const download of downloads) {
-    const peers = download.peersDetailed || [];
-
-    for (const peer of peers) {
-      // Only include peers we're actively uploading to
-      if (peer.uploadRate > 0) {
-        uploads.push(normalizeRtorrentPeer(peer, download));
-      }
-    }
-  }
-
-  return uploads;
-}
 
 // ============================================================================
 // QBITTORRENT NORMALIZERS
@@ -415,12 +403,12 @@ function normalizeQBittorrentDownload(torrent) {
     message: getQBittorrentMessage(torrent), // Error message or tracker status
 
     // Peers
-    peers: {
+    peerCounts: {
       total: (torrent.num_leechs || 0) + (torrent.num_seeds || 0),
       connected: (torrent.num_leechs || 0) + (torrent.num_seeds || 0),
       seeders: torrent.num_seeds || 0
     },
-    peersDetailed: torrent.peersDetailed || [],
+    peersDetailed: (torrent.peersDetailed || []).map(p => ({ ...p, role: 'peer' })),
 
     // Trackers
     trackers: trackers.map(t => t.url).filter(Boolean),
@@ -439,63 +427,6 @@ function normalizeQBittorrentDownload(torrent) {
   };
 }
 
-/**
- * Normalize qBittorrent peer to upload entry format
- * Peers are already normalized in qbittorrentManager (downloadRate, uploadRate, etc.)
- * @param {Object} peer - qBittorrent peer object (from peersDetailed, already normalized)
- * @param {Object} torrent - Parent torrent object (for file info)
- * @returns {Object} Normalized upload entry
- */
-function normalizeQBittorrentPeer(peer, torrent) {
-  const address = peer.address || '';
-  const port = peer.port || 0;
-  const trackerDomain = extractTrackerDomain(torrent.trackers || []);
-
-  return {
-    clientType: 'qbittorrent',
-    id: `${torrent.hash}-${address}:${port}`,
-    fileName: torrent.name,
-    fileSize: torrent.size,
-    address,
-    port,
-    software: peer.client || 'Unknown',
-    softwareId: null,
-    uploadRate: peer.uploadRate || 0,
-    downloadRate: peer.downloadRate || 0,
-    uploadTotal: peer.uploadTotal || 0,
-    uploadSession: null,
-    completedPercent: peer.completedPercent || 0,
-    isEncrypted: peer.isEncrypted || false,
-    isIncoming: peer.isIncoming || false,
-    downloadHash: torrent.hash,
-    downloadName: torrent.name,
-    label: torrent.category || null,
-    trackerDomain: trackerDomain || null
-  };
-}
-
-/**
- * Extract active upload entries from qBittorrent torrents
- * Only includes peers that are currently receiving data (up_speed > 0)
- * @param {Array} torrents - Array of raw qBittorrent torrents
- * @returns {Array} Array of upload entries
- */
-function extractQBittorrentUploads(torrents) {
-  const uploads = [];
-
-  for (const torrent of torrents) {
-    const peers = torrent.peersDetailed || [];
-
-    for (const peer of peers) {
-      // Only include peers we're actively uploading to
-      if (peer.uploadRate > 0) {
-        uploads.push(normalizeQBittorrentPeer(peer, torrent));
-      }
-    }
-  }
-
-  return uploads;
-}
 
 // ============================================================================
 // DELUGE NORMALIZERS
@@ -548,12 +479,12 @@ function normalizeDelugeDownload(hash, torrent) {
     message: torrent.state === 'Error' ? (torrent.message || 'Error') : '',
 
     // Peers
-    peers: {
+    peerCounts: {
       total: (torrent.num_peers || 0) + (torrent.num_seeds || 0),
       connected: (torrent.num_peers || 0) + (torrent.num_seeds || 0),
       seeders: torrent.num_seeds || 0
     },
-    peersDetailed: torrent.peersDetailed || [],
+    peersDetailed: (torrent.peersDetailed || []).map(p => ({ ...p, role: 'peer' })),
 
     // Trackers
     trackers: trackerUrls,
@@ -572,61 +503,6 @@ function normalizeDelugeDownload(hash, torrent) {
   };
 }
 
-/**
- * Normalize Deluge peer to upload entry format
- * @param {Object} peer - Normalized peer object (from peersDetailed)
- * @param {Object} torrent - Parent torrent context { hash, name, size, label, trackers }
- * @returns {Object} Normalized upload entry
- */
-function normalizeDelugePeer(peer, torrent) {
-  const address = peer.address || peer.ip || '';
-  const port = peer.port || 0;
-  const trackerDomain = extractTrackerDomain(torrent.trackers || []);
-
-  return {
-    clientType: 'deluge',
-    id: `${torrent.hash}-${address}:${port}`,
-    fileName: torrent.name,
-    fileSize: torrent.size,
-    address,
-    port,
-    software: peer.client || 'Unknown',
-    softwareId: null,
-    uploadRate: peer.uploadRate || peer.up_speed || 0,
-    downloadRate: peer.downloadRate || peer.down_speed || 0,
-    uploadTotal: peer.uploadTotal || 0,
-    uploadSession: null,
-    completedPercent: peer.completedPercent || Math.round((peer.progress || 0) * 100),
-    isEncrypted: peer.isEncrypted || false,
-    isIncoming: peer.isIncoming || false,
-    downloadHash: torrent.hash,
-    downloadName: torrent.name,
-    label: torrent.label || null,
-    trackerDomain: trackerDomain || null
-  };
-}
-
-/**
- * Extract active upload entries from Deluge torrents
- * Only includes peers that are currently receiving data (uploadRate > 0)
- * @param {Array} torrents - Array of normalized Deluge torrents (with peersDetailed)
- * @returns {Array} Array of upload entries
- */
-function extractDelugeUploads(torrents) {
-  const uploads = [];
-
-  for (const torrent of torrents) {
-    const peers = torrent.peersDetailed || [];
-
-    for (const peer of peers) {
-      if ((peer.uploadRate || peer.up_speed || 0) > 0) {
-        uploads.push(normalizeDelugePeer(peer, torrent));
-      }
-    }
-  }
-
-  return uploads;
-}
 
 // ============================================================================
 // TRANSMISSION NORMALIZERS
@@ -695,12 +571,12 @@ function normalizeTransmissionDownload(torrent) {
     message: torrent.error > 0 ? (torrent.errorString || 'Error') : '',
 
     // Peers
-    peers: {
+    peerCounts: {
       total: torrent.peersConnected || 0,
       connected: torrent.peersConnected || 0,
       seeders: 0
     },
-    peersDetailed: torrent.peersDetailed || [],
+    peersDetailed: (torrent.peersDetailed || []).map(p => ({ ...p, role: 'peer' })),
 
     // Trackers
     trackers: trackerUrls,
@@ -719,73 +595,14 @@ function normalizeTransmissionDownload(torrent) {
   };
 }
 
-/**
- * Normalize Transmission peer to upload entry format
- * @param {Object} peer - Transmission peer object
- * @param {Object} torrent - Parent torrent context (normalized)
- * @returns {Object} Normalized upload entry
- */
-function normalizeTransmissionPeer(peer, torrent) {
-  const address = peer.address || '';
-  const port = peer.port || 0;
-  const trackerDomain = extractTrackerDomain(torrent.trackers || []);
-
-  return {
-    clientType: 'transmission',
-    id: `${torrent.hash}-${address}:${port}`,
-    fileName: torrent.name,
-    fileSize: torrent.size,
-    address,
-    port,
-    software: peer.client || peer.clientName || 'Unknown',
-    softwareId: null,
-    uploadRate: peer.uploadRate || peer.rateToPeer || 0,
-    downloadRate: peer.downloadRate || peer.rateToClient || 0,
-    uploadTotal: peer.uploadTotal || 0,
-    uploadSession: null,
-    completedPercent: peer.completedPercent != null ? peer.completedPercent : (peer.progress != null ? Math.round(peer.progress * 100) : 0),
-    isEncrypted: peer.isEncrypted || false,
-    isIncoming: peer.isIncoming || false,
-    downloadHash: torrent.hash,
-    downloadName: torrent.name,
-    label: torrent.label || null,
-    trackerDomain: trackerDomain || null
-  };
-}
-
-/**
- * Extract active upload entries from Transmission torrents
- * Only includes peers that are currently receiving data (rateToPeer > 0)
- * @param {Array} torrents - Array of normalized Transmission torrents (with peersDetailed)
- * @returns {Array} Array of upload entries
- */
-function extractTransmissionUploads(torrents) {
-  const uploads = [];
-
-  for (const torrent of torrents) {
-    const peers = torrent.peersDetailed || [];
-
-    for (const peer of peers) {
-      if ((peer.uploadRate || peer.rateToPeer || 0) > 0) {
-        uploads.push(normalizeTransmissionPeer(peer, torrent));
-      }
-    }
-  }
-
-  return uploads;
-}
-
 module.exports = {
   normalizeAmuleDownload,
   normalizeAmuleSharedFile,
   normalizeAmuleUpload,
+  normalizeAmuleDownloadSource,
   normalizeRtorrentDownload,
-  extractRtorrentUploads,
   normalizeQBittorrentDownload,
-  extractQBittorrentUploads,
   normalizeDelugeDownload,
-  extractDelugeUploads,
   normalizeTransmissionDownload,
-  extractTransmissionUploads,
   extractTrackerDomain
 };

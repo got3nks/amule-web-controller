@@ -23,6 +23,7 @@ import { useCapabilities } from './useCapabilities.js';
  * @param {Function} options.onPause - Handler for pausing item (optional)
  * @param {Function} options.onResume - Handler for resuming item (optional)
  * @param {Function} options.onStop - Handler for stopping item (optional - rtorrent only)
+ * @param {Function} options.onRename - Handler for renaming item (optional - shows menu item if provided)
  * @param {Function} options.onCopyLink - Handler for copying export link (optional)
  * @param {string|null} options.copiedHash - Hash of recently copied item for "Copied!" feedback
  * @param {string} options.infoLabel - Label for info menu item (default: 'File Details')
@@ -42,6 +43,7 @@ export const useItemContextMenu = ({
   onPause,
   onResume,
   onStop,
+  onRename,
   onCopyLink,
   copiedHash = null,
   infoLabel = 'File Details',
@@ -132,6 +134,19 @@ export const useItemContextMenu = ({
       });
     }
 
+    // Rename (only for clients with renameFile capability, gated on ownership)
+    if (onRename && caps.renameFile && hasCap('rename_files') && canMutate) {
+      menuItems.push({
+        label: 'Rename',
+        icon: 'edit',
+        iconColor: 'text-indigo-600 dark:text-indigo-400',
+        onClick: () => {
+          onRename(item);
+          closeContextMenu?.();
+        }
+      });
+    }
+
     // Export link (read-only action, not gated on ownership)
     if (onCopyLink) {
       const hasExportLink = isBittorrent || !!item.ed2kLink || !!getExportLink(item);
@@ -188,6 +203,7 @@ export const useItemContextMenu = ({
     onPause,
     onResume,
     onStop,
+    onRename,
     onCopyLink,
     onDelete,
     deleteLabel,

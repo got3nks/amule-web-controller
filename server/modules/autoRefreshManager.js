@@ -273,13 +273,13 @@ class AutoRefreshManager extends BaseModule {
           knownKeys.add(key);
         }
 
-        // Clients with sharedMeansComplete (aMule): only mark active from downloads list
-        // (completion comes from shared files loop below)
-        // Other clients: mark active/completed directly from progress
-        const separateCompletion = clientMeta.hasCapability(manager.clientType, 'sharedMeansComplete');
-        if (d.progress >= 100 && !separateCompletion) {
+        // Mark active/completed directly from progress for ALL clients.
+        // (Previously aMule relied on shared files for completion, but with
+        // incremental EC updates, completed downloads stay in the downloads
+        // list at 100% and never appear as new shared files in getUpdate().)
+        if (d.progress >= 100) {
           completedKeys.add(key);
-        } else if (d.progress < 100) {
+        } else {
           activeKeys.add(key);
         }
 
@@ -292,6 +292,8 @@ class AutoRefreshManager extends BaseModule {
 
       // Process shared files for completion (only clients with separate shared files)
       // These mark items as completed if not still downloading
+      // (Also serves as a fallback — downloads at 100% are already in completedKeys
+      // from the loop above, but shared-only files without a downloads entry are caught here.)
       for (const f of (batchData._sharedFilesForHistory || [])) {
         const manager = registry.get(f.instanceId);
         if (!manager) continue;

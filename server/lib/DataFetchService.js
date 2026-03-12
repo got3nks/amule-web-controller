@@ -79,11 +79,8 @@ class DataFetchService extends BaseModule {
    */
   _enrichItems(items) {
     for (const item of items) {
-      if (item.activeUploads.length > 0) {
-        item.activeUploads = this._enrichPeers(item.activeUploads);
-      }
-      if (item.peersDetailed.length > 0) {
-        item.peersDetailed = this._enrichPeers(item.peersDetailed);
+      if (item.peers.length > 0) {
+        item.peers = this._enrichPeers(item.peers);
       }
     }
 
@@ -178,7 +175,6 @@ class DataFetchService extends BaseModule {
 
     let allDownloads = [];
     let allShared = [];
-    let allUploads = [];
     let categories = [];
     let clientDefaultPaths = {};
     let hasPathWarnings = false;
@@ -207,14 +203,13 @@ class DataFetchService extends BaseModule {
         const data = await manager.fetchData(categoriesForNormalizer);
         allDownloads = allDownloads.concat(data.downloads);
         allShared = allShared.concat(data.sharedFiles);
-        allUploads = allUploads.concat(data.uploads);
       } catch (err) {
         this.log(`Error fetching ${manager.instanceId} data:`, err.message);
       }
     }
 
     // Build unified items from the normalized arrays
-    const items = assembleUnifiedItems(allDownloads, allShared, allUploads, categoryManager);
+    const items = assembleUnifiedItems(allDownloads, allShared, categoryManager);
 
     // Enrich all peer arrays with GeoIP and hostname data (single pass, all clients)
     this._enrichItems(items);

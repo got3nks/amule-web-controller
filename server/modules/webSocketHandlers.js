@@ -50,6 +50,7 @@ const ACTION_CAPABILITIES = {
   getQbittorrentLog: ['view_logs'],
   getStatsTree: ['view_statistics'],
   refreshSharedFiles: ['view_shared'],
+  renameFile: ['rename_files'],
   checkDeletePermissions: ['remove_downloads'],
   checkMovePermissions: ['move_files'],
 };
@@ -323,6 +324,7 @@ class WebSocketHandlers extends BaseModule {
         case 'batchStop': await this.handleBatchStop(data, context); break;
         case 'batchDelete': await this.handleBatchDelete(data, context); break;
         case 'batchSetFileCategory': await this.handleBatchSetFileCategory(data, context); break;
+        case 'renameFile': await this.handleRenameFile(data, context); break;
         case 'checkDeletePermissions': await this.handleCheckDeletePermissions(data, context); break;
         case 'checkMovePermissions': await this.handleCheckMovePermissions(data, context); break;
         default:
@@ -1194,6 +1196,42 @@ class WebSocketHandlers extends BaseModule {
     } catch (err) {
       context.log(`Batch ${name} error:`, err);
       context.send({ type: 'error', message: `Batch ${name} failed: ${err.message}` });
+    }
+  }
+
+  async handleRenameFile(data, context) {
+    try {
+      const { fileHash, newName, instanceId } = data;
+      if (!fileHash || !newName) {
+        throw new Error('fileHash and newName are required');
+      }
+
+      // Ownership check
+      const key = itemKey(instanceId, fileHash);
+      if (!this._canMutateItem(context, key)) {
+        context.send({ type: 'rename-complete', success: false, error: 'Permission denied' });
+        return;
+      }
+
+      const manager = registry.get(instanceId);
+      if (!manager || !manager.isConnected()) {
+        throw new Error('Client not connected');
+      }
+      if (!manager.renameFile) {
+        throw new Error('Rename not supported by this client');
+      }
+
+      const result = await manager.renameFile(fileHash, newName.trim());
+      if (result.success === false) {
+        context.send({ type: 'rename-complete', success: false, error: result.error || 'Rename failed' });
+      } else {
+        context.log(`Renamed ${fileHash} → "${newName}"`);
+        await this.broadcastItemsUpdate(context);
+        context.send({ type: 'rename-complete', success: true });
+      }
+    } catch (err) {
+      context.log('Rename error:', err.message);
+      context.send({ type: 'rename-complete', success: false, error: err.message });
     }
   }
 

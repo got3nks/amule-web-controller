@@ -305,7 +305,7 @@ export const FIELD_TYPES = {
 export const SKIP_FIELDS = new Set([
   'EC_TAG_PARTFILE_ED2K_LINK',
   'EC_TAG_PARTFILE_A4AFAUTO',
-  'peersDetailed',
+  'peers',
   'trackersDetailed',
   'trackers',
   'message',

@@ -6,7 +6,7 @@
 // Must match server/modules/userManager.js ALL_CAPABILITIES
 export const ALL_CAPABILITIES = [
   'search', 'add_downloads', 'remove_downloads', 'pause_resume',
-  'assign_categories', 'move_files', 'manage_categories',
+  'assign_categories', 'move_files', 'rename_files', 'manage_categories',
   'view_history', 'clear_history', 'view_shared', 'view_uploads',
   'view_statistics', 'view_logs', 'view_servers',
   'view_all_downloads', 'edit_all_downloads'
@@ -19,6 +19,7 @@ export const CAPABILITY_LABELS = {
   pause_resume: 'Pause / resume',
   assign_categories: 'Assign categories',
   move_files: 'Move files',
+  rename_files: 'Rename files',
   manage_categories: 'Manage categories',
   view_history: 'View history',
   clear_history: 'Clear history',
@@ -32,7 +33,7 @@ export const CAPABILITY_LABELS = {
 };
 
 export const CAPABILITY_GROUPS = [
-  { label: 'Downloads', caps: ['search', 'add_downloads', 'remove_downloads', 'pause_resume', 'assign_categories', 'move_files'] },
+  { label: 'Downloads', caps: ['search', 'add_downloads', 'remove_downloads', 'pause_resume', 'assign_categories', 'move_files', 'rename_files'] },
   { label: 'System', caps: ['manage_categories', 'view_history', 'view_logs', 'clear_history', 'view_servers'] },
   { label: 'Viewing', caps: ['view_shared', 'view_uploads', 'view_statistics'] },
   { label: 'Multi-User', caps: ['view_all_downloads', 'edit_all_downloads'] }

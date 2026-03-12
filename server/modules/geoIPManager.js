@@ -7,7 +7,6 @@ const maxmind = require('maxmind');
 const fs = require('fs');
 const config = require('./config');
 const BaseModule = require('../lib/BaseModule');
-const { ipToString } = require('../lib/networkUtils');
 
 class GeoIPManager extends BaseModule {
   constructor() {

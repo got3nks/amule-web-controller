@@ -62,11 +62,10 @@ const COMMON_DEFAULTS = {
   category: 'Default',
   categoryId: null,
   sources: { total: 0, connected: 0, seeders: 0, a4af: 0, notCurrent: 0 },
-  activeUploads: [],
+  peers: [],
   uploadTotal: 0,
   ratio: 0,
   eta: null,  // ETA in seconds (null = complete or no speed, calculated server-side)
-  peersDetailed: [],
   instanceId: null,
   raw: {}
 };
@@ -85,8 +84,7 @@ function createBaseItem(hash, client) {
     ...COMMON_DEFAULTS,
     // Deep-copy mutable common fields to avoid shared-reference bugs
     sources: { ...COMMON_DEFAULTS.sources },
-    activeUploads: [],
-    peersDetailed: [],
+    peers: [],
     raw: {},
     ...defaults,
     // Deep-copy mutable array fields from defaults
@@ -161,11 +159,11 @@ function applyDownloadData(item, download) {
     item.uploadSpeed = download.uploadSpeed || item.uploadSpeed;
 
     // Sources
-    const peers = download.peers || {};
+    const peerCounts = download.peerCounts || {};
     item.sources = {
-      total: peers.total || 0,
-      connected: peers.connected || 0,
-      seeders: peers.seeders || 0,
+      total: peerCounts.total || 0,
+      connected: peerCounts.connected || 0,
+      seeders: peerCounts.seeders || 0,
       a4af: 0
     };
 
@@ -183,7 +181,13 @@ function applyDownloadData(item, download) {
     item.downloadPriority = download.priority ?? item.downloadPriority;
     item.directory = download.directory || item.directory;
     item.multiFile = download.isMultiFile || item.multiFile;
-    item.peersDetailed = download.peersDetailed || item.peersDetailed;
+
+    // Copy BitTorrent peers from peersDetailed (role-stamped in normalizer)
+    if (download.peersDetailed) {
+      for (const peer of download.peersDetailed) {
+        item.peers.push(buildPeer(peer));
+      }
+    }
 
     // Links
     item.magnetLink = generateMagnetLink(download);
@@ -191,6 +195,13 @@ function applyDownloadData(item, download) {
     // Timestamps - use startedTime (when torrent was first started)
     // Treat 0 as null (0 = epoch time 1970, not a real timestamp)
     item.addedAt = download.startedTime && download.startedTime > 0 ? download.startedTime : null;
+  }
+
+  // Copy embedded peers array (aMule download sources, or any client that embeds peers)
+  if (Array.isArray(download.peers)) {
+    for (const peer of download.peers) {
+      item.peers.push(buildPeer(peer));
+    }
   }
 
   // Raw data — preserve the full original object for detail modals
@@ -267,32 +278,48 @@ function applySharedData(item, sharedFile) {
       }
     }
   }
+
+  // Copy embedded peers from shared files (aMule upload peers)
+  if (Array.isArray(sharedFile.peers)) {
+    for (const peer of sharedFile.peers) {
+      item.peers.push(buildPeer(peer));
+    }
+  }
   // For rtorrent, shared data was already applied via applyDownloadData
   // (rtorrent items are always shared — the downloads array IS the shared array)
 }
 
 /**
- * Build an activeUploads peer entry from a normalized upload record.
- * Both aMule and rtorrent uploads are already normalized to the same
- * clean field names by normalizeAmuleUpload / normalizeRtorrentPeer,
- * so a single builder handles both clients.
+ * Build a unified peer entry from any normalized peer record.
+ * Handles all clients and roles (peer/upload/download).
  */
-function buildUploadPeer(upload) {
+function buildPeer(entry) {
   return {
-    id: upload.id || '',
-    address: upload.address || '',
-    port: upload.port || 0,
-    software: upload.software || 'Unknown',
-    softwareId: upload.softwareId ?? null,
-    uploadRate: upload.uploadRate || 0,
-    downloadRate: upload.downloadRate || 0,
-    uploadTotal: upload.uploadTotal || 0,
-    uploadSession: upload.uploadSession ?? null,
-    completedPercent: upload.completedPercent ?? null,
-    isEncrypted: upload.isEncrypted || false,
-    isIncoming: upload.isIncoming || false,
-    geoData: upload.geoData || null,
-    hostname: upload.hostname || null
+    role: entry.role || 'peer',
+    id: entry.id || `${entry.address || ''}:${entry.port || 0}`,
+    userName: entry.userName || '',
+    fileName: entry.fileName || '',
+    address: entry.address || '',
+    port: entry.port || 0,
+    software: entry.software || entry.client || 'Unknown',
+    softwareId: entry.softwareId ?? null,
+    downloadRate: entry.downloadRate || 0,
+    uploadRate: entry.uploadRate || 0,
+    downloadTotal: entry.downloadTotal || 0,
+    uploadTotal: entry.uploadTotal || 0,
+    uploadSession: entry.uploadSession ?? null,
+    downloadState: entry.downloadState,
+    uploadState: entry.uploadState,
+    sourceFrom: entry.sourceFrom,
+    remoteQueueRank: entry.remoteQueueRank ?? null,
+    completedPercent: entry.completedPercent ?? null,
+    flags: entry.flags || '',
+    isEncrypted: entry.isEncrypted || false,
+    isIncoming: entry.isIncoming || false,
+    peerDownloadRate: entry.peerDownloadRate ?? null,
+    peerDownloadTotal: entry.peerDownloadTotal ?? null,
+    geoData: entry.geoData || null,
+    hostname: entry.hostname || null
   };
 }
 
@@ -303,17 +330,19 @@ function buildUploadPeer(upload) {
 /**
  * Assemble unified items from the separate data arrays.
  *
- * Takes the already-normalized downloads, sharedFiles, and uploads arrays
+ * Takes the already-normalized downloads and sharedFiles arrays
  * (as produced by the existing DataFetchService pipeline) and merges them
  * into a single items array keyed by file hash.
  *
- * @param {Array} downloads      - Normalized downloads (aMule + rtorrent)
- * @param {Array} sharedFiles    - Normalized shared files (aMule + rtorrent)
- * @param {Array} uploads        - Normalized upload entries (aMule + rtorrent)
+ * Peers are embedded directly in download/shared file objects by each manager,
+ * and copied into item.peers during applyDownloadData/applySharedData.
+ *
+ * @param {Array} downloads        - Normalized downloads (all clients, with embedded .peers/.peersDetailed)
+ * @param {Array} sharedFiles      - Normalized shared files (all clients, with embedded .peers for aMule)
  * @param {Object} categoryManager - Optional CategoryManager instance for name resolution
  * @returns {Array} Array of unified item objects
  */
-function assembleUnifiedItems(downloads, sharedFiles, uploads, categoryManager = null) {
+function assembleUnifiedItems(downloads, sharedFiles, categoryManager = null) {
   const itemsByHash = new Map();
 
   // Helper: get or create an item by compound key (instanceId:hash)
@@ -328,31 +357,16 @@ function assembleUnifiedItems(downloads, sharedFiles, uploads, categoryManager =
     return itemsByHash.get(key);
   };
 
-  // ── Step 1: Process downloads ──────────────────────────────────────────
+  // ── Step 1: Process downloads (peers copied in applyDownloadData) ──────
   for (const download of (downloads || [])) {
     const item = getOrCreate(download.hash, download.clientType, download.instanceId);
     if (item) applyDownloadData(item, download);
   }
 
-  // ── Step 2: Process shared files ───────────────────────────────────────
+  // ── Step 2: Process shared files (peers copied in applySharedData) ─────
   for (const shared of (sharedFiles || [])) {
     const item = getOrCreate(shared.hash, shared.clientType, shared.instanceId);
     if (item) applySharedData(item, shared);
-  }
-
-  // ── Step 3: Process uploads → add to items' activeUploads ──────────────
-  // Both BitTorrent and aMule uploads carry a hash linking to the parent item:
-  //   - BitTorrent: upload.downloadHash (always present)
-  //   - aMule: upload.sharedFileHash (enriched by DataFetchService from shared files)
-  for (const upload of (uploads || [])) {
-    const hash = upload.downloadHash || upload.sharedFileHash;
-    if (!hash) continue;
-
-    const itemMapKey = itemKey(upload.instanceId, hash);
-    if (itemsByHash.has(itemMapKey)) {
-      const item = itemsByHash.get(itemMapKey);
-      item.activeUploads.push(buildUploadPeer(upload));
-    }
   }
 
   return Array.from(itemsByHash.values());

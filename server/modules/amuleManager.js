@@ -11,7 +11,8 @@ const { parseEd2kLink } = require('../lib/torrentUtils');
 const {
   normalizeAmuleDownload,
   normalizeAmuleSharedFile,
-  normalizeAmuleUpload
+  normalizeAmuleUpload,
+  normalizeAmuleDownloadSource
 } = require('../lib/downloadNormalizer');
 
 class AmuleManager extends BaseClientManager {
@@ -262,56 +263,51 @@ class AmuleManager extends BaseClientManager {
 
   /**
    * Fetch and normalize all data from aMule.
-   * Handles 3 API calls (downloads, uploads, shared) with individual error handling.
+   * Uses a single getUpdate() call for downloads, shared files, and uploading clients.
    * @param {Array} categories - Categories for normalizer (path-based derivation)
    * @returns {Promise<Object>} { downloads, sharedFiles, uploads }
    */
   async fetchData(categories = []) {
     if (!this.client) {
-      return { downloads: [], sharedFiles: [], uploads: [] };
+      return { downloads: [], sharedFiles: [] };
     }
 
-    let rawDownloads = [], rawUploads = null, rawSharedFiles = [];
-
-    try {
-      rawDownloads = await this.client.getDownloadQueue();
-    } catch (err) {
-      this.log('Error fetching downloads:', err.message);
-    }
+    let updateData = null;
 
     try {
-      rawUploads = await this.client.getUploadingQueue();
+      updateData = await this.client.getUpdate();
     } catch (err) {
-      this.log('Error fetching uploads:', err.message);
+      this.log('Error fetching update:', err.message);
     }
 
-    try {
-      rawSharedFiles = await this.client.getSharedFiles();
-    } catch (err) {
-      this.log('Error fetching shared files:', err.message);
-    }
+    const rawDownloads = updateData?.downloads || [];
+    const rawSharedFiles = updateData?.sharedFiles || [];
+    const rawClients = updateData?.clients || [];
 
     // ── Normalize downloads ──────────────────────────────────────────────
     const categoryManager = require('../lib/CategoryManager');
     const resolveCategoryName = (catId) => categoryManager.getCategoryNameByAmuleId(this.instanceId, catId);
-    const downloads = (rawDownloads || []).map(d => normalizeAmuleDownload(d, resolveCategoryName));
+    const downloads = rawDownloads.map(d => normalizeAmuleDownload(d, resolveCategoryName));
 
-    // ── Normalize uploads (unwrap EC protocol quirks) ────────────────────
-    let uploads = this._normalizeUploads(rawUploads);
+    // ── Derive uploading clients (for speed aggregation + peer embedding) ─
+    // US_NONE = 8 — filter out clients that aren't uploading
+    const uploadingClients = rawClients.filter(c =>
+      c.uploadState !== undefined && c.uploadState !== 8 && c.ip
+    );
 
     // ── Aggregate upload speed by file name (for shared file assembly) ───
     const speedByFile = new Map();
-    for (const upload of uploads) {
-      const fileName = upload.fileName || '';
+    for (const client of uploadingClients) {
+      const fileName = client.transferFileName || '';
       if (!fileName) continue;
-      const speed = upload.uploadRate || 0;
+      const speed = client.upSpeed || 0;
       if (speed > 0) {
         speedByFile.set(fileName, (speedByFile.get(fileName) || 0) + speed);
       }
     }
 
     // ── Normalize shared files (attach aggregated upload speed) ──────────
-    const sharedFiles = (rawSharedFiles || []).map(f => {
+    const sharedFiles = rawSharedFiles.map(f => {
       const normalized = normalizeAmuleSharedFile(f, categories);
       return {
         ...normalized,
@@ -319,52 +315,36 @@ class AmuleManager extends BaseClientManager {
       };
     });
 
-    // ── Enrich uploads with category/size/hash from shared files ─────────
-    if (sharedFiles.length > 0 && uploads.length > 0) {
-      const sharedByName = new Map();
-      for (const sf of sharedFiles) {
-        if (sf.name) sharedByName.set(sf.name, sf);
-      }
+    // ── Embed upload peers into their shared file objects ─────────────────
+    const sharedByName = new Map();
+    for (const sf of sharedFiles) {
+      if (sf.name) sharedByName.set(sf.name, sf);
+    }
+    for (const client of uploadingClients) {
+      const normalized = normalizeAmuleUpload(client);
+      const sf = sharedByName.get(normalized.fileName);
+      if (!sf) continue;
+      if (!sf.peers) sf.peers = [];
+      sf.peers.push(normalized);
+    }
 
-      if (sharedByName.size > 0) {
-        uploads = uploads.map(upload => {
-          const sf = sharedByName.get(upload.fileName);
-          if (sf) {
-            return { ...upload, category: sf.category, fileSize: sf.size, sharedFileHash: sf.hash };
-          }
-          return upload;
-        });
-      }
+    // ── Embed download sources into their download objects ────────────────
+    // Link clients to downloads via requestFileEcid → download ecid
+    const downloadsByEcid = new Map(rawDownloads.map((d, i) => [d.ecid, downloads[i]]));
+    for (const client of rawClients) {
+      if (!client.requestFileEcid || !client.ip) continue;
+      const download = downloadsByEcid.get(client.requestFileEcid);
+      if (!download) continue;
+      if (!download.peers) download.peers = [];
+      download.peers.push(normalizeAmuleDownloadSource(client));
     }
 
     // Stamp instanceId on all normalized items
     const instanceId = this.instanceId;
     downloads.forEach(d => { d.instanceId = instanceId; });
     sharedFiles.forEach(f => { f.instanceId = instanceId; });
-    uploads.forEach(u => { u.instanceId = instanceId; });
 
-    return { downloads, sharedFiles, uploads };
-  }
-
-  /**
-   * Normalize raw aMule uploads data structure.
-   * Handles EC protocol quirks: EC_TAG_CLIENT wrapper, single-object responses.
-   * @param {*} uploadsData - Raw uploads data from aMule
-   * @returns {Array} Normalized uploads array
-   * @private
-   */
-  _normalizeUploads(uploadsData) {
-    if (!uploadsData) return [];
-
-    // Extract EC_TAG_CLIENT if present (aMule specific)
-    let uploads = uploadsData.EC_TAG_CLIENT || uploadsData;
-
-    // Normalize to array (aMule can return single object)
-    if (!Array.isArray(uploads)) {
-      uploads = uploads && typeof uploads === 'object' ? [uploads] : [];
-    }
-
-    return uploads.length > 0 ? uploads.map(normalizeAmuleUpload) : [];
+    return { downloads, sharedFiles };
   }
 
   // ============================================================================
@@ -494,6 +474,19 @@ class AmuleManager extends BaseClientManager {
    */
   async stop(hash) {
     return await this.pause(hash);
+  }
+
+  /**
+   * Rename a file (download or shared)
+   * @param {string} hash - File hash
+   * @param {string} newName - New file name
+   * @returns {Object} { success, error? }
+   */
+  async renameFile(hash, newName) {
+    if (!this.client) {
+      throw new Error('aMule not connected');
+    }
+    return await this.client.renameFile(hash, newName);
   }
 
   /**

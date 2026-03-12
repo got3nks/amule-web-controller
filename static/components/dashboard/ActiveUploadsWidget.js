@@ -15,7 +15,7 @@ const { createElement: h, useMemo } = React;
 
 /**
  * ActiveUploadsWidget component
- * @param {array} items - Array of unified items with nested activeUploads
+ * @param {array} items - Array of unified items with nested peers
  * @param {number} maxItems - Maximum number of items to display
  * @param {boolean} compact - Use compact height for mobile (default: false)
  * @param {boolean} loading - Show loading placeholder (default: false)
@@ -24,11 +24,11 @@ const ActiveUploadsWidget = ({ items = [], maxItems = 10, compact = false, loadi
   const { dataCategories: categories } = useStaticData();
   const { filterByEnabledClients } = useClientFilter();
 
-  // Filter by client type, then group by file name from unified items' nested activeUploads
+  // Filter by client type, then group by file name from unified items' nested peers
   const groupedUploads = useMemo(() => {
     const groups = {};
     filterByEnabledClients(items || []).forEach(item => {
-      const active = (item.activeUploads || []).filter(p => p.uploadRate > 0);
+      const active = (item.peers || []).filter(p => p.uploadRate > 0);
       if (active.length === 0) return;
       groups[item.name] = {
         fileName: item.name,

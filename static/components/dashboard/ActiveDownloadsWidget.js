@@ -75,7 +75,7 @@ const ActiveDownloadsWidget = ({ downloads = [], maxItems = 10, compact = false,
             // BitTorrent: count peers with active download rate
             // aMule: use sources.connected (sourceCountXfer)
             const activePeerCount = isBittorrentClient(download)
-              ? (download.peersDetailed || []).filter(p => p.downloadRate > 0).length
+              ? (download.peers || []).filter(p => p.downloadRate > 0).length
               : (download.sources?.connected || 0);
 
             // Compact mode: simplified view (filename + speed only, like ActiveUploadsWidget)

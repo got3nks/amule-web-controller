@@ -83,7 +83,7 @@ const log = logger.log.bind(logger);
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ server, perMessageDeflate: true });
 
 // Security headers
 app.use(helmet({
@@ -264,6 +264,13 @@ rtorrentAPI.registerRoutes(app);    // rtorrent API (files, etc.)
 delugeAPI.registerRoutes(app);     // Deluge API (files, etc.)
 transmissionAPI.registerRoutes(app); // Transmission API (files, etc.)
 filesystemAPI.registerRoutes(app);  // Filesystem browsing API
+
+// Item detail API — serves raw/trackersDetailed stripped from broadcasts (Phase 0)
+app.get('/api/item/detail/:hash', (req, res) => {
+  const detail = dataFetchService.getItemDetail(req.params.hash, req.query.instanceId);
+  if (!detail) return res.status(404).json({ error: 'Item not found' });
+  res.json(detail);
+});
 notificationsAPI.registerRoutes(app); // Notifications API
 userAPI.registerRoutes(app);           // User management API (admin only)
 versionAPI.registerProtectedRoutes(app); // Version seen tracking (protected)

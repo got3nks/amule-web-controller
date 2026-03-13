@@ -143,6 +143,11 @@ function applyDownloadData(item, download) {
     item.reqStatus = download.reqStatus || item.reqStatus;
     item.lastSeenComplete = download.lastSeenComplete || item.lastSeenComplete;
 
+    // Shared flag — download is also being shared (seeding while downloading)
+    if (download.isShared) {
+      item.shared = true;
+    }
+
     // Links
     item.ed2kLink = download.ed2kLink || item.ed2kLink;
   } else if (clientMeta.isBittorrent(download.clientType)) {

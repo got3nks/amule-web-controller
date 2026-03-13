@@ -347,6 +347,7 @@ class DownloadHistory {
     logger.log(`📥 History: Added ${clientType} download - ${filename} [${instanceId}]`);
 
     // Emit downloadAdded event
+    const effectiveUsername = (username && username !== 'external') ? username : '';
     eventScriptingManager.emit('downloadAdded', {
       hash: hash.toLowerCase(),
       filename,
@@ -354,7 +355,9 @@ class DownloadHistory {
       username,
       clientType,
       instanceId,
-      category: category || null
+      category: category || null,
+      owner: effectiveUsername,
+      triggeredBy: effectiveUsername
     });
   }
 

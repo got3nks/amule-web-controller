@@ -11,6 +11,7 @@ const BaseModule = require('../lib/BaseModule');
 const { getDiskSpace } = require('../lib/diskSpace');
 const { getCpuUsage } = require('../lib/cpuUsage');
 const dataFetchService = require('../lib/DataFetchService');
+const DeltaEngine = require('../lib/DeltaEngine');
 const registry = require('../lib/ClientRegistry');
 const clientMeta = require('../lib/clientMeta');
 const { itemKey } = require('../lib/itemKey');
@@ -25,6 +26,7 @@ class AutoRefreshManager extends BaseModule {
     this.cleanupTimeout = null;
     this._cachedBatchUpdate = null;
     this._lastHistoryUpdate = 0; // Timestamp of last history update
+    this._deltaEngine = new DeltaEngine();
   }
 
   /**
@@ -157,51 +159,50 @@ class AutoRefreshManager extends BaseModule {
         }
         batchUpdate.stats = combinedStats;
 
-        // Always include unified items so frontend can mark them as loaded
-        // (empty array = "no data" vs missing key = "not yet fetched")
-        batchUpdate.items = batchData.items;
+        // Strip heavy modal-only fields (raw ~55%, trackersDetailed ~5% of payload)
+        // These are fetched on-demand via API when FileInfoModal opens
+        const strippedItems = batchData.items.map(({ raw, trackersDetailed, ...rest }) => rest);
 
-        // Include unified categories (managed by CategoryManager)
-        if (batchData.categories && batchData.categories.length > 0) {
-          batchUpdate.categories = batchData.categories;
-        }
+        // Compute delta for items
+        const delta = this._deltaEngine.computeDelta(strippedItems);
+        const useDelta = !this._deltaEngine.shouldFallback(delta, strippedItems.length);
 
-        // Include client default paths for Default category display
-        if (batchData.clientDefaultPaths) {
-          batchUpdate.clientDefaultPaths = batchData.clientDefaultPaths;
-        }
+        // Compute metadata delta (categories, paths, warnings) — only send when changed
+        const metaDelta = this._deltaEngine.computeMetaDelta({
+          categories: batchData.categories || [],
+          clientDefaultPaths: batchData.clientDefaultPaths || {},
+          hasPathWarnings: batchData.hasPathWarnings
+        });
 
-        // Include category path warnings flag
-        if (batchData.hasPathWarnings !== undefined) {
-          batchUpdate.hasPathWarnings = batchData.hasPathWarnings;
-        }
+        // Build the broadcast message
+        if (useDelta) {
+          // Delta update — only changed data
+          const deltaData = { stats: combinedStats, delta };
+          if (metaDelta) Object.assign(deltaData, metaDelta);
+          const deltaMsg = { type: 'batch-update', data: deltaData };
 
-        // Cache and send batch update (only if we have data)
-        if (Object.keys(batchUpdate).length > 0) {
-          this._cachedBatchUpdate = batchUpdate;
-          this.broadcast({ type: 'batch-update', data: batchUpdate }, {
-            transform: (msg, user) => {
-              const items = msg.data.items || [];
-              if (!user || user.isAdmin || user.capabilities?.includes('view_all_downloads')) {
-                // Annotate items with ownership flag for frontend mutation gating
-                if (!user?.userId || !this.userManager || user?.isAdmin) {
-                  // Auth disabled / admin / no userId — owns everything
-                  return { ...msg, data: { ...msg.data, items: items.map(i => ({ ...i, ownedByMe: true })) } };
-                }
-                const ownedKeys = this.userManager.getOwnedKeys(user.userId);
-                return { ...msg, data: { ...msg.data, items: items.map(i => ({ ...i, ownedByMe: ownedKeys.has(itemKey(i.instanceId, i.hash)) })) } };
-              }
-              // Ownership-filtered — all surviving items are owned
-              if (!user.userId || !this.userManager) return msg;
-              const ownedKeys = this.userManager.getOwnedKeys(user.userId);
-              return {
-                ...msg,
-                data: {
-                  ...msg.data,
-                  items: items.filter(item => ownedKeys.has(itemKey(item.instanceId, item.hash))).map(i => ({ ...i, ownedByMe: true }))
-                }
-              };
-            }
+          // Cache full snapshot for new clients (with items array + seq for delta continuity)
+          const fullData = { stats: combinedStats, items: strippedItems, seq: delta.seq };
+          if (batchData.categories?.length > 0) fullData.categories = batchData.categories;
+          if (batchData.clientDefaultPaths) fullData.clientDefaultPaths = batchData.clientDefaultPaths;
+          if (batchData.hasPathWarnings !== undefined) fullData.hasPathWarnings = batchData.hasPathWarnings;
+          this._cachedBatchUpdate = { type: 'batch-update', data: fullData };
+
+          this.broadcast(deltaMsg, {
+            transform: (msg, user) => this._transformDeltaForUser(msg, user)
+          });
+        } else {
+          // Full snapshot — too many changes for delta to be efficient
+          const fullData = { stats: combinedStats, items: strippedItems, seq: delta.seq };
+          if (batchData.categories?.length > 0) fullData.categories = batchData.categories;
+          if (batchData.clientDefaultPaths) fullData.clientDefaultPaths = batchData.clientDefaultPaths;
+          if (batchData.hasPathWarnings !== undefined) fullData.hasPathWarnings = batchData.hasPathWarnings;
+          const fullMsg = { type: 'batch-update', data: fullData };
+
+          this._cachedBatchUpdate = fullMsg;
+
+          this.broadcast(fullMsg, {
+            transform: (msg, user) => this._transformSnapshotForUser(msg, user)
           });
         }
       }
@@ -212,6 +213,108 @@ class AutoRefreshManager extends BaseModule {
     } finally {
       this.refreshInterval = setTimeout(() => this.autoRefreshLoop(), config.AUTO_REFRESH_INTERVAL);
     }
+  }
+
+  /**
+   * Strip gapStatus/reqStatus from an item if client is not subscribed to segmentData
+   */
+  _stripSegmentFields(item) {
+    const { gapStatus, reqStatus, ...rest } = item;
+    return rest;
+  }
+
+  /**
+   * Transform a full snapshot message for a specific user (ownership + subscription filtering)
+   */
+  _transformSnapshotForUser(msg, user) {
+    const items = msg.data.items || [];
+    const stripSegments = !user?.subscriptions?.has('segmentData');
+    const mapItem = (i, owned) => {
+      const item = { ...i, ownedByMe: owned };
+      return stripSegments ? this._stripSegmentFields(item) : item;
+    };
+
+    if (!user || user.isAdmin || user.capabilities?.includes('view_all_downloads')) {
+      if (!user?.userId || !this.userManager || user?.isAdmin) {
+        return { ...msg, data: { ...msg.data, items: items.map(i => mapItem(i, true)) } };
+      }
+      const ownedKeys = this.userManager.getOwnedKeys(user.userId);
+      return { ...msg, data: { ...msg.data, items: items.map(i => mapItem(i, ownedKeys.has(itemKey(i.instanceId, i.hash)))) } };
+    }
+    if (!user.userId || !this.userManager) return msg;
+    const ownedKeys = this.userManager.getOwnedKeys(user.userId);
+    return {
+      ...msg,
+      data: {
+        ...msg.data,
+        items: items.filter(item => ownedKeys.has(itemKey(item.instanceId, item.hash))).map(i => mapItem(i, true))
+      }
+    };
+  }
+
+  /**
+   * Transform a delta message for a specific user (ownership + subscription filtering)
+   */
+  _transformDeltaForUser(msg, user) {
+    const delta = msg.data.delta;
+    if (!delta) return msg;
+
+    const stripSegments = !user?.subscriptions?.has('segmentData');
+    const mapItem = (i, owned) => {
+      const item = { ...i, ownedByMe: owned };
+      return stripSegments ? this._stripSegmentFields(item) : item;
+    };
+
+    if (!user || user.isAdmin || user.capabilities?.includes('view_all_downloads')) {
+      // Admin/view-all: annotate ownedByMe on added + changed items
+      if (!user?.userId || !this.userManager || user?.isAdmin) {
+        return {
+          ...msg,
+          data: {
+            ...msg.data,
+            delta: {
+              ...delta,
+              added: delta.added.map(i => mapItem(i, true)),
+              changed: delta.changed.map(i => mapItem(i, true))
+            }
+          }
+        };
+      }
+      const ownedKeys = this.userManager.getOwnedKeys(user.userId);
+      return {
+        ...msg,
+        data: {
+          ...msg.data,
+          delta: {
+            ...delta,
+            added: delta.added.map(i => mapItem(i, ownedKeys.has(itemKey(i.instanceId, i.hash)))),
+            changed: delta.changed.map(i => mapItem(i, ownedKeys.has(itemKey(i.instanceId, i.hash))))
+          }
+        }
+      };
+    }
+
+    // Non-admin without view_all: filter to owned items only
+    if (!user.userId || !this.userManager) return msg;
+    const ownedKeys = this.userManager.getOwnedKeys(user.userId);
+    const isOwned = (item) => ownedKeys.has(itemKey(item.instanceId, item.hash));
+
+    return {
+      ...msg,
+      data: {
+        ...msg.data,
+        delta: {
+          ...delta,
+          added: delta.added.filter(isOwned).map(i => mapItem(i, true)),
+          removed: delta.removed.filter(key => {
+            // Only send removal if the item was previously visible to this user
+            // We can't know for sure here, but the frontend handles unknown removals gracefully
+            return true;
+          }),
+          changed: delta.changed.filter(isOwned).map(i => mapItem(i, true))
+        }
+      }
+    };
   }
 
   // Start auto-refresh and scheduled cleanup
@@ -230,6 +333,7 @@ class AutoRefreshManager extends BaseModule {
       clearTimeout(this.cleanupTimeout);
       this.cleanupTimeout = null;
     }
+    this._deltaEngine.reset();
   }
 
   /**

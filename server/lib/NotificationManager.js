@@ -546,26 +546,56 @@ class NotificationManager extends BaseModule {
    */
   _buildNotificationBody(eventType, eventData) {
     const filename = eventData.filename || eventData.name || 'Unknown file';
-    const category = eventData.category || null;
-    const catLine = category ? `\n🏷️ ${category}` : '';
+    const userCatLine = this._buildUserCategoryLine(eventData);
+    const userCatSuffix = userCatLine ? `\n${userCatLine}` : '';
 
     switch (eventType) {
       case 'downloadAdded':
-        return `${filename}${catLine}`;
+        return `${filename}${userCatSuffix}`;
       case 'downloadFinished':
-        return `${filename}${catLine}`;
+        return `${filename}${userCatSuffix}`;
       case 'categoryChanged':
         const oldCat = eventData.oldCategory || 'None';
         const newCat = eventData.newCategory || eventData.category || 'None';
-        return `${filename}\n🏷️ ${oldCat} → ${newCat}`;
+        const catUserLine = this._buildUserCategoryLine({ ...eventData, category: '' });
+        return `${filename}\n🏷️ ${oldCat} → ${newCat}${catUserLine ? `\n${catUserLine}` : ''}`;
       case 'fileMoved':
         const dest = eventData.destPath || 'Unknown';
-        return `${filename}\n📂 ${dest}${catLine}`;
+        return `${filename}\n📂 ${dest}${userCatSuffix}`;
       case 'fileDeleted':
-        return `${filename}${catLine}`;
+        return `${filename}${userCatSuffix}`;
       default:
         return filename;
     }
+  }
+
+  /**
+   * Build the combined user + category line for notification body
+   * @param {Object} eventData - Event data with owner, triggeredBy, category
+   * @returns {string} Combined line or empty string
+   */
+  _buildUserCategoryLine(eventData) {
+    const owner = eventData.owner || '';
+    const triggeredBy = eventData.triggeredBy || '';
+    const category = eventData.category || '';
+
+    const parts = [];
+
+    // Build user part: "👤 owner" or "👤 owner (by triggerer)"
+    if (owner) {
+      let userPart = `👤 ${owner}`;
+      if (triggeredBy && triggeredBy !== owner) {
+        userPart += ` (by ${triggeredBy})`;
+      }
+      parts.push(userPart);
+    }
+
+    // Build category part
+    if (category) {
+      parts.push(`🏷️ ${category}`);
+    }
+
+    return parts.join(' · ');
   }
 
   /**

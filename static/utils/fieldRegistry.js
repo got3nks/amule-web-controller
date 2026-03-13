@@ -174,6 +174,7 @@ export const FIELD_LABELS = {
   'EC_TAG_PARTFILE_SPEED': 'Current Speed',
   'EC_TAG_PARTFILE_PRIO': 'Download Priority',
   'EC_TAG_PARTFILE_CAT': 'Category',
+  'EC_TAG_PARTFILE_SHARED': 'Shared',
   'EC_TAG_PARTFILE_LAST_SEEN_COMP': 'Last Complete Source Seen',
   'EC_TAG_PARTFILE_LAST_RECV': 'Last Data Received',
   'EC_TAG_PARTFILE_DOWNLOAD_ACTIVE': 'Active Download Time',
@@ -263,6 +264,7 @@ export const FIELD_TYPES = {
   'reannounce': 'duration_infinity',
   'active_time': 'duration',
   // boolean
+  'EC_TAG_PARTFILE_SHARED': 'boolean',
   'isActive': 'boolean',
   'isComplete': 'boolean',
   'isOpen': 'boolean',
@@ -357,6 +359,7 @@ export const FIELD_CATEGORIES = {
     'EC_TAG_PARTFILE_COMMENTS': 'File Identification',
     // State & Progress
     'EC_TAG_PARTFILE_STATUS': 'State & Progress',
+    'EC_TAG_PARTFILE_SHARED': 'State & Progress',
     // Download Statistics
     'EC_TAG_PARTFILE_SIZE_XFER': 'Download Statistics',
     'EC_TAG_PARTFILE_SIZE_DONE': 'Download Statistics',

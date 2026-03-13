@@ -9,6 +9,7 @@
 import React from 'https://esm.sh/react@18.2.0';
 import { useTheme } from '../../contexts/ThemeContext.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
+import { useWebSocketConnection } from '../../contexts/WebSocketContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { SegmentsBar, Icon, Portal, Button, AlertBox } from '../common/index.js';
 import { formatBytes, getProgressColor, getExportLink, getExportLinkLabel, calculateRatio } from '../../utils/index.js';
@@ -119,6 +120,14 @@ const FileInfoModal = ({ hash, instanceId, onClose }) => {
 
   const variant = liveItem ? getVariant(liveItem) : null;
 
+  // Subscribe to segment data when showing ed2k-download (for SegmentsBar)
+  const { subscribe, unsubscribe } = useWebSocketConnection();
+  useEffect(() => {
+    if (variant !== 'ed2k-download') return;
+    subscribe('segmentData');
+    return () => unsubscribe('segmentData');
+  }, [variant, subscribe, unsubscribe]);
+
   // Expanded sections state — resets when hash or variant changes
   const [expandedSections, setExpandedSections] = useState(() =>
     getDefaultExpanded(variant || 'bittorrent')
@@ -130,10 +139,13 @@ const FileInfoModal = ({ hash, instanceId, onClose }) => {
     }
   }, [hash, variant]);
 
-  // Files state (rtorrent multi-file only)
+  // Files state (torrent multi-file only)
   const [files, setFiles] = useState(null);
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesError, setFilesError] = useState(null);
+
+  // Item detail state (raw + trackersDetailed, stripped from broadcasts)
+  const [itemDetail, setItemDetail] = useState(null);
 
   // Fetch files when modal opens for multi-file torrent items, refresh periodically
   useEffect(() => {
@@ -187,16 +199,43 @@ const FileInfoModal = ({ hash, instanceId, onClose }) => {
     };
   }, [hash, liveItem?.hash, variant]);
 
+  // Fetch item detail (raw + trackersDetailed) from generic endpoint
+  useEffect(() => {
+    if (!hash || !liveItem) {
+      setItemDetail(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchDetail = async () => {
+      try {
+        const instanceParam = liveItem.instanceId ? `?instanceId=${encodeURIComponent(liveItem.instanceId)}` : '';
+        const response = await fetch(`/api/item/detail/${liveItem.hash}${instanceParam}`);
+        if (cancelled || !response.ok) return;
+        const data = await response.json();
+        if (!cancelled) setItemDetail(data);
+      } catch {
+        // Non-critical — fields section will be empty
+      }
+    };
+
+    fetchDetail();
+    const interval = setInterval(fetchDetail, 5000);
+
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [hash, liveItem?.hash, variant]);
+
   // Item disappeared while modal open — auto-close
   if (!liveItem) return null;
 
   // Raw data for categorized fields:
   // - rtorrent/qbittorrent: raw contains camelCase fields (hash, name, size, etc.)
-  // - aMule: EC_TAG_ fields may be at liveItem.raw (if set from download.raw)
-  //   or nested at liveItem.raw.raw (if raw was overwritten by shared file data).
+  // - aMule: EC_TAG_ fields may be at raw top level or nested at raw.raw.
   //   Resolve to whichever level has EC_TAG_ keys.
+  // Note: raw is fetched on-demand via API (stripped from broadcasts for performance)
   const isTorrent = variant === 'bittorrent';
-  const rawFull = liveItem.raw || {};
+  const rawFull = itemDetail?.raw || {};
   const ecTagSource = !isTorrent && rawFull.raw && typeof rawFull.raw === 'object'
     ? rawFull.raw
     : rawFull;
@@ -226,7 +265,7 @@ const FileInfoModal = ({ hash, instanceId, onClose }) => {
   // torrent clients (rtorrent/qbittorrent)
   const isComplete = isTorrent && liveItem.progress >= 100;
   const torrentMessage = isTorrent ? (liveItem.message || '') : '';
-  const trackersDetailed = isTorrent ? (liveItem.trackersDetailed || []) : [];
+  const trackersDetailed = isTorrent ? (itemDetail?.trackersDetailed || []) : [];
   const allPeers = liveItem.peers || [];
 
   // BitTorrent: all peers shown together (bidirectional)

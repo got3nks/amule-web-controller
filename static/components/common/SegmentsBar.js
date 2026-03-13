@@ -159,16 +159,22 @@ const parseGapStatus = (gapStatus) => {
     return [];
   }
 
-  // Pre-decoded format from AmuleClient: array of {start, end} objects
+  // Flat array format: [start1, end1, start2, end2, ...] — compact transport format
+  if (Array.isArray(gapStatus) && (gapStatus.length === 0 || typeof gapStatus[0] === 'number')) {
+    const gaps = [];
+    for (let i = 0; i < gapStatus.length; i += 2) {
+      gaps.push({ start: gapStatus[i], end: gapStatus[i + 1] });
+    }
+    if (DEBUG) {
+      console.log('[SegmentsBar] Flat array gaps:', gaps.length);
+    }
+    return gaps;
+  }
+
+  // Pre-decoded format: array of {start, end} objects (legacy/detail API)
   if (Array.isArray(gapStatus)) {
     if (DEBUG) {
       console.log('[SegmentsBar] Pre-decoded gaps:', gapStatus.length);
-      if (gapStatus.length > 0) {
-        console.log('[SegmentsBar] First 5 gaps:', gapStatus.slice(0, 5).map(g => `${g.start}-${g.end} (${((g.end-g.start)/1024/1024).toFixed(1)}MB)`));
-      console.log('[SegmentsBar] Last 3 gaps:', gapStatus.slice(-3).map(g => `${g.start}-${g.end} (${((g.end-g.start)/1024/1024).toFixed(1)}MB)`));
-      const totalGapBytes = gapStatus.reduce((s, g) => s + (g.end - g.start), 0);
-      console.log('[SegmentsBar] Total gap bytes:', totalGapBytes, `(${(totalGapBytes/1024/1024/1024).toFixed(2)} GB)`);
-      }
     }
     return gapStatus;
   }
@@ -213,7 +219,19 @@ const parseReqStatus = (reqStatus) => {
     return [];
   }
 
-  // Pre-decoded format from AmuleClient: array of {start, end} objects
+  // Flat array format: [start1, end1, start2, end2, ...]
+  if (Array.isArray(reqStatus) && (reqStatus.length === 0 || typeof reqStatus[0] === 'number')) {
+    const requests = [];
+    for (let i = 0; i < reqStatus.length; i += 2) {
+      requests.push({ start: reqStatus[i], end: reqStatus[i + 1] });
+    }
+    if (DEBUG) {
+      console.log('[SegmentsBar] Flat array requests:', requests.length);
+    }
+    return requests;
+  }
+
+  // Pre-decoded format: array of {start, end} objects (legacy/detail API)
   if (Array.isArray(reqStatus)) {
     if (DEBUG) {
       console.log('[SegmentsBar] Pre-decoded requests:', reqStatus.length);

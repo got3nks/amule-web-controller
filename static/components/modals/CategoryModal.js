@@ -250,6 +250,10 @@ const CategoryModal = ({
             val = category.pathMappings[entry.type];
             if (val) usedTypeFallbacks.add(entry.type);
           }
+          // Reverse fallback: single-instance display uses type key, but stored keys are instanceIds
+          if (!val && !entry.isMulti) {
+            val = category.pathMappings[entry.instanceId];
+          }
           initial[entry.key] = val || '';
         }
         setPathMappings(initial);
@@ -345,7 +349,9 @@ const CategoryModal = ({
       for (const entry of nonNativeMoveEntries) {
         const val = pathMappings[entry.key]?.trim();
         if (val) {
-          mappings[entry.key] = val;
+          // Always save with instanceId key to preserve per-instance mappings
+          // when a second instance of the same type is added later
+          mappings[entry.instanceId] = val;
         }
       }
       if (Object.keys(mappings).length > 0) {

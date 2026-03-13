@@ -17,9 +17,10 @@ import { useActions } from '../../contexts/ActionsContext.js';
 import { useTheme } from '../../contexts/ThemeContext.js';
 import { useStickyToolbar } from '../../contexts/StickyHeaderContext.js';
 import { useCapabilities } from '../../hooks/useCapabilities.js';
+import { useWebSocketConnection } from '../../contexts/WebSocketContext.js';
 import AddDownloadModal from '../modals/AddDownloadModal.js';
 
-const { createElement: h, useMemo, useCallback } = React;
+const { createElement: h, useMemo, useCallback, useEffect } = React;
 
 /**
  * Downloads view component - now uses contexts directly
@@ -33,7 +34,14 @@ const DownloadsView = () => {
   const actions = useActions();
   const { theme } = useTheme();
   const { hasCap } = useCapabilities();
+  const { subscribe, unsubscribe } = useWebSocketConnection();
   const hasAnyMutationCap = hasCap('pause_resume') || hasCap('remove_downloads') || hasCap('assign_categories');
+
+  // Subscribe to segment data (gapStatus/reqStatus) for SegmentsBar in ProgressBar
+  useEffect(() => {
+    subscribe('segmentData');
+    return () => unsubscribe('segmentData');
+  }, [subscribe, unsubscribe]);
 
   // Ownership check: user can mutate item if they have edit_all_downloads or own it
   const canMutateItem = useCallback((item) => hasCap('edit_all_downloads') || item.ownedByMe !== false, [hasCap]);

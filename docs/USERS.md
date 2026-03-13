@@ -262,6 +262,17 @@ When authentication is active, aMuTorrent tracks which user added each download.
 - `view_all_downloads` controls whether a user sees all downloads or only their own
 - `edit_all_downloads` controls whether a user can modify/delete all downloads or only their own
 
+### Notifications & Scripts
+
+When authentication is active, [notifications](./NOTIFICATIONS.md) and [custom event scripts](../scripts/README.md) include ownership information:
+
+- **Owner** — the username who owns the download (from the ownership table)
+- **Triggered by** — the username who initiated the action (empty for system-detected events like download completion or file move)
+
+For example, if an admin deletes another user's file, the notification shows "👤 john (by admin)".
+
+Custom scripts receive these as `EVENT_OWNER` and `EVENT_TRIGGERED_BY` environment variables, and as `owner`/`triggeredBy` fields in the JSON payload.
+
 ### Broadcast Filtering
 
 WebSocket real-time updates respect ownership — users only receive updates for downloads they're allowed to see.

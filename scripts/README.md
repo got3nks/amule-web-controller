@@ -66,7 +66,11 @@ When an event occurs, your script receives:
 | `EVENT_TYPE` | Event type (same as `$1`) |
 | `EVENT_HASH` | Download hash/ID |
 | `EVENT_FILENAME` | File name |
-| `EVENT_CLIENT_TYPE` | Client type (amule, qbittorrent, rtorrent) |
+| `EVENT_CLIENT_TYPE` | Client type (amule, qbittorrent, rtorrent, deluge) |
+| `EVENT_INSTANCE_ID` | Client instance identifier |
+| `EVENT_INSTANCE_NAME` | Display name of the client instance |
+| `EVENT_OWNER` | Username of the file owner (empty if untracked or no multi-user) |
+| `EVENT_TRIGGERED_BY` | Username who triggered the action (empty for system events) |
 
 ### Event Types
 
@@ -78,7 +82,11 @@ When an event occurs, your script receives:
 | `fileMoved` | File moved | category, sourcePath, destPath |
 | `fileDeleted` | File deleted | deletedFromDisk, category, path, multiFile |
 
-**Common fields** (present in all events): `hash`, `filename`, `clientType`
+**Common fields** (present in all events): `hash`, `filename`, `clientType`, `instanceId`, `instanceName`, `owner`, `triggeredBy`
+
+**User fields** (`owner` and `triggeredBy`) are populated when multi-user authentication is enabled:
+- `owner` — the username who owns the download (looked up from the ownership table)
+- `triggeredBy` — the username who initiated the action; empty for system-detected events like `downloadFinished` and `fileMoved`
 
 The `category` field contains the item's category name (e.g., `"Movies"`, `"TV Shows"`), or `null` if uncategorized/Default.
 
@@ -95,7 +103,11 @@ The `path` field contains the full path to the file (or the content directory fo
   "size": 6114770944,
   "username": "admin",
   "clientType": "qbittorrent",
-  "category": "Linux ISOs"
+  "instanceId": "qbittorrent-localhost-8080",
+  "instanceName": "qBittorrent",
+  "category": "Linux ISOs",
+  "owner": "admin",
+  "triggeredBy": "admin"
 }
 ```
 
@@ -107,13 +119,17 @@ The `path` field contains the full path to the file (or the content directory fo
   "filename": "ubuntu-24.04-desktop-amd64.iso",
   "size": 6114770944,
   "clientType": "qbittorrent",
+  "instanceId": "qbittorrent-localhost-8080",
+  "instanceName": "qBittorrent",
   "downloaded": 6114770944,
   "uploaded": 1528692736,
   "ratio": 0.25,
   "trackerDomain": "torrent.ubuntu.com",
   "category": "Linux ISOs",
   "path": "/downloads/ubuntu-24.04-desktop-amd64.iso",
-  "multiFile": false
+  "multiFile": false,
+  "owner": "admin",
+  "triggeredBy": ""
 }
 ```
 
@@ -125,13 +141,17 @@ Multi-file torrent example (path points to the content directory):
   "filename": "My.Series.S01.Complete",
   "size": 15032385536,
   "clientType": "rtorrent",
+  "instanceId": "rtorrent-localhost-8000",
+  "instanceName": "rTorrent",
   "downloaded": 15032385536,
   "uploaded": 7516192768,
   "ratio": 0.5,
   "trackerDomain": "tracker.example.com",
   "category": "TV Shows",
   "path": "/downloads/My.Series.S01.Complete",
-  "multiFile": true
+  "multiFile": true,
+  "owner": "john",
+  "triggeredBy": ""
 }
 ```
 
@@ -142,10 +162,14 @@ Multi-file torrent example (path points to the content directory):
   "hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
   "filename": "ubuntu-24.04-desktop-amd64.iso",
   "clientType": "rtorrent",
+  "instanceId": "rtorrent-localhost-8000",
+  "instanceName": "rTorrent",
   "oldCategory": "Default",
   "newCategory": "Linux ISOs",
   "path": "/downloads/ubuntu-24.04-desktop-amd64.iso",
-  "multiFile": false
+  "multiFile": false,
+  "owner": "john",
+  "triggeredBy": "admin"
 }
 ```
 
@@ -156,10 +180,14 @@ Multi-file torrent example (path points to the content directory):
   "hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
   "filename": "old-file.zip",
   "clientType": "qbittorrent",
+  "instanceId": "qbittorrent-localhost-8080",
+  "instanceName": "qBittorrent",
   "deletedFromDisk": true,
   "category": "Movies",
   "path": "/downloads/old-file.zip",
-  "multiFile": false
+  "multiFile": false,
+  "owner": "john",
+  "triggeredBy": "admin"
 }
 ```
 
@@ -170,9 +198,13 @@ Multi-file torrent example (path points to the content directory):
   "hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
   "filename": "movie.mkv",
   "clientType": "rtorrent",
+  "instanceId": "rtorrent-localhost-8000",
+  "instanceName": "rTorrent",
   "category": "Movies",
   "sourcePath": "/downloads/movie.mkv",
-  "destPath": "/media/movies/movie.mkv"
+  "destPath": "/media/movies/movie.mkv",
+  "owner": "john",
+  "triggeredBy": ""
 }
 ```
 
@@ -233,8 +265,8 @@ echo "$(date -Iseconds) [$1] $EVENT_FILENAME" >> /var/log/downloads.log
 ### Test Script Manually
 
 ```bash
-echo '{"hash":"abc123","filename":"test.mkv","clientType":"qbittorrent","path":"/downloads/test.mkv","multiFile":false}' | \
-    ./scripts/custom.sh downloadFinished
+echo '{"hash":"abc123","filename":"test.mkv","clientType":"qbittorrent","instanceId":"qbittorrent-localhost-8080","instanceName":"qBittorrent","path":"/downloads/test.mkv","multiFile":false,"owner":"admin","triggeredBy":""}' | \
+    EVENT_OWNER=admin EVENT_TRIGGERED_BY="" ./scripts/custom.sh downloadFinished
 ```
 
 ### Test from Settings

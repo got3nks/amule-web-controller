@@ -30,15 +30,21 @@ EVENT_TYPE="$1"
 # -----------------------------------------------------------------------------
 # METHOD 2: Read common fields from environment variables
 # -----------------------------------------------------------------------------
-# EVENT_TYPE        - Same as $1
-# EVENT_HASH        - Download hash/ID
-# EVENT_FILENAME    - File name
-# EVENT_CLIENT_TYPE - Client type (amule, qbittorrent, rtorrent)
+# EVENT_TYPE         - Same as $1
+# EVENT_HASH         - Download hash/ID
+# EVENT_FILENAME     - File name
+# EVENT_CLIENT_TYPE  - Client type (amule, qbittorrent, rtorrent, deluge)
+# EVENT_INSTANCE_ID  - Client instance identifier
+# EVENT_INSTANCE_NAME- Display name of the client instance
+# EVENT_OWNER        - Username of the file owner (empty if untracked/no multi-user)
+# EVENT_TRIGGERED_BY - Username who triggered the action (empty for system events)
 
 echo "Event: $EVENT_TYPE"
 echo "Hash: $EVENT_HASH"
 echo "Filename: $EVENT_FILENAME"
 echo "Client: $EVENT_CLIENT_TYPE"
+echo "Owner: $EVENT_OWNER"
+echo "Triggered by: $EVENT_TRIGGERED_BY"
 
 # -----------------------------------------------------------------------------
 # METHOD 3: Read full JSON from stdin (requires jq)
@@ -54,6 +60,8 @@ if command -v jq &> /dev/null; then
     FILENAME=$(echo "$EVENT_JSON" | jq -r '.filename // empty')
     CLIENT_TYPE=$(echo "$EVENT_JSON" | jq -r '.clientType // empty')
     SIZE=$(echo "$EVENT_JSON" | jq -r '.size // empty')
+    OWNER=$(echo "$EVENT_JSON" | jq -r '.owner // empty')
+    TRIGGERED_BY=$(echo "$EVENT_JSON" | jq -r '.triggeredBy // empty')
 
     # Event-specific fields
     case "$EVENT_TYPE" in

@@ -156,6 +156,7 @@ class WebSocketHandlers extends BaseModule {
   // Create context object with all client-specific utilities
   createContext(ws, username, nickname, clientIp) {
     return {
+      ws,
       log: this.createClientLog(ws, username, nickname, clientIp),
       send: (data) => ws.send(JSON.stringify(data)),
       clientInfo: { username, nickname, clientIp },
@@ -240,7 +241,8 @@ class WebSocketHandlers extends BaseModule {
       userId: sessionUser?.userId || null,
       username: sessionUser?.username || username,
       isAdmin: authEnabled ? (sessionUser?.isAdmin || false) : true,
-      capabilities: sessionUser?.capabilities || []
+      capabilities: sessionUser?.capabilities || [],
+      subscriptions: new Set()
     };
 
     context.log(`New WebSocket connection from ${clientIp}${locationInfo}`);
@@ -248,9 +250,11 @@ class WebSocketHandlers extends BaseModule {
     context.send({ type: 'search-lock', locked: registry.getByType('amule').some(m => m.isSearchInProgress()) });
 
     // Send cached batch update to newly connected client (if available), filtered by ownership
+    // Always sends full snapshot (items array), never delta, for new connections
     const cachedBatchUpdate = autoRefreshManager.getCachedBatchUpdate();
     if (cachedBatchUpdate) {
-      const filtered = this._filterBatchUpdateForUser(cachedBatchUpdate, context.clientInfo);
+      const batchData = cachedBatchUpdate.data || cachedBatchUpdate;
+      const filtered = this._filterBatchUpdateForUser(batchData, context.clientInfo, ws.user);
       context.send({ type: 'batch-update', data: filtered });
       context.log('Sent cached batch update to new client');
     }
@@ -327,6 +331,9 @@ class WebSocketHandlers extends BaseModule {
         case 'renameFile': await this.handleRenameFile(data, context); break;
         case 'checkDeletePermissions': await this.handleCheckDeletePermissions(data, context); break;
         case 'checkMovePermissions': await this.handleCheckMovePermissions(data, context); break;
+        case 'requestFullSnapshot': this.handleRequestFullSnapshot(context); break;
+        case 'subscribe': this.handleSubscribe(data, context); break;
+        case 'unsubscribe': this.handleUnsubscribe(data, context); break;
         default:
           context.send({ type: 'error', message: `Unknown action: ${data.action}` });
       }
@@ -1034,6 +1041,68 @@ class WebSocketHandlers extends BaseModule {
     }
   }
 
+  /**
+   * Subscribe to a data channel (e.g. 'segmentData' for gapStatus/reqStatus)
+   */
+  handleSubscribe(data, context) {
+    const channel = data.channel;
+    if (channel && context.ws?.user?.subscriptions) {
+      context.ws.user.subscriptions.add(channel);
+      // Send segment data for existing items as a targeted delta
+      if (channel === 'segmentData') {
+        this._sendSegmentData(context);
+      }
+    }
+  }
+
+  /**
+   * Send gapStatus/reqStatus for all items that have them, as a minimal delta
+   */
+  _sendSegmentData(context) {
+    const cached = autoRefreshManager.getCachedBatchUpdate();
+    if (!cached) return;
+    const batchData = cached.data || cached;
+    const items = batchData.items || [];
+    const patches = [];
+    for (const item of items) {
+      if (item.gapStatus || item.reqStatus) {
+        const patch = { hash: item.hash, instanceId: item.instanceId };
+        if (item.gapStatus) patch.gapStatus = item.gapStatus;
+        if (item.reqStatus) patch.reqStatus = item.reqStatus;
+        patches.push(patch);
+      }
+    }
+    if (patches.length > 0) {
+      // No seq — this is a supplemental delta, not part of the regular sequence
+      context.send({
+        type: 'batch-update',
+        data: { delta: { added: [], removed: [], changed: patches } }
+      });
+    }
+  }
+
+  /**
+   * Unsubscribe from a data channel
+   */
+  handleUnsubscribe(data, context) {
+    const channel = data.channel;
+    if (channel && context.ws?.user?.subscriptions) {
+      context.ws.user.subscriptions.delete(channel);
+    }
+  }
+
+  /**
+   * Send full snapshot to a single client (e.g. after seq gap)
+   */
+  handleRequestFullSnapshot(context) {
+    const cached = autoRefreshManager.getCachedBatchUpdate();
+    if (!cached) return;
+    const batchData = cached.data || cached;
+    const filtered = this._filterBatchUpdateForUser(batchData, context.clientInfo, context.ws?.user);
+    context.send({ type: 'batch-update', data: filtered });
+    context.log('Sent full snapshot (client requested)');
+  }
+
   // ============================================================================
   // AUTHORIZATION HELPERS
   // ============================================================================
@@ -1064,22 +1133,29 @@ class WebSocketHandlers extends BaseModule {
   /**
    * Filter a batch-update message for a specific user's ownership
    */
-  _filterBatchUpdateForUser(batchData, clientInfo) {
+  _filterBatchUpdateForUser(batchData, clientInfo, wsUser) {
     const items = batchData.items || [];
+    const stripSegments = !wsUser?.subscriptions?.has('segmentData');
+    const mapItem = (i, owned) => {
+      const item = { ...i, ownedByMe: owned };
+      if (stripSegments) { delete item.gapStatus; delete item.reqStatus; }
+      return item;
+    };
+
     if (!clientInfo || clientInfo.isAdmin || clientInfo.capabilities?.includes('view_all_downloads')) {
       // Annotate items with ownership flag for frontend mutation gating
       if (!clientInfo?.userId || !this.userManager || clientInfo?.isAdmin) {
-        return { ...batchData, items: items.map(i => ({ ...i, ownedByMe: true })) };
+        return { ...batchData, items: items.map(i => mapItem(i, true)) };
       }
       const ownedKeys = this.userManager.getOwnedKeys(clientInfo.userId);
-      return { ...batchData, items: items.map(i => ({ ...i, ownedByMe: ownedKeys.has(itemKey(i.instanceId, i.hash)) })) };
+      return { ...batchData, items: items.map(i => mapItem(i, ownedKeys.has(itemKey(i.instanceId, i.hash)))) };
     }
     // Ownership-filtered — all surviving items are owned
     if (!clientInfo.userId || !this.userManager) return batchData;
     const ownedKeys = this.userManager.getOwnedKeys(clientInfo.userId);
     return {
       ...batchData,
-      items: items.filter(item => ownedKeys.has(itemKey(item.instanceId, item.hash))).map(i => ({ ...i, ownedByMe: true }))
+      items: items.filter(item => ownedKeys.has(itemKey(item.instanceId, item.hash))).map(i => mapItem(i, true))
     };
   }
 
@@ -1095,25 +1171,31 @@ class WebSocketHandlers extends BaseModule {
   async broadcastItemsUpdate(context) {
     try {
       const batchData = await dataFetchService.getBatchData();
-      context.broadcast({ type: 'batch-update', data: { items: batchData.items } }, {
+      // Strip heavy modal-only fields from broadcast
+      const strippedItems = batchData.items.map(({ raw, trackersDetailed, ...rest }) => rest);
+      context.broadcast({ type: 'batch-update', data: { items: strippedItems } }, {
         transform: (msg, user) => {
           const items = msg.data.items || [];
+          const stripSegments = !user?.subscriptions?.has('segmentData');
+          const mapItem = (i, owned) => {
+            const item = { ...i, ownedByMe: owned };
+            if (stripSegments) { delete item.gapStatus; delete item.reqStatus; }
+            return item;
+          };
           if (!user || user.isAdmin || user.capabilities?.includes('view_all_downloads')) {
-            // Annotate items with ownership flag for frontend mutation gating
             if (!user?.userId || !this.userManager || user?.isAdmin) {
-              return { ...msg, data: { ...msg.data, items: items.map(i => ({ ...i, ownedByMe: true })) } };
+              return { ...msg, data: { ...msg.data, items: items.map(i => mapItem(i, true)) } };
             }
             const ownedKeys = this.userManager.getOwnedKeys(user.userId);
-            return { ...msg, data: { ...msg.data, items: items.map(i => ({ ...i, ownedByMe: ownedKeys.has(itemKey(i.instanceId, i.hash)) })) } };
+            return { ...msg, data: { ...msg.data, items: items.map(i => mapItem(i, ownedKeys.has(itemKey(i.instanceId, i.hash)))) } };
           }
-          // Ownership-filtered — all surviving items are owned
           if (!user.userId || !this.userManager) return msg;
           const ownedKeys = this.userManager.getOwnedKeys(user.userId);
           return {
             ...msg,
             data: {
               ...msg.data,
-              items: items.filter(item => ownedKeys.has(itemKey(item.instanceId, item.hash))).map(i => ({ ...i, ownedByMe: true }))
+              items: items.filter(item => ownedKeys.has(itemKey(item.instanceId, item.hash))).map(i => mapItem(i, true))
             }
           };
         }
@@ -1394,7 +1476,8 @@ class WebSocketHandlers extends BaseModule {
             deletedFromDisk: deleteFiles === true || (caps?.cancelDeletesFiles && !isShared),
             category: ci?.category || null,
             path: fullPath,
-            multiFile: ci?.multiFile || false
+            multiFile: ci?.multiFile || false,
+            triggeredBy: context.clientInfo.username !== 'unknown' ? context.clientInfo.username : ''
           });
         }
       }
@@ -1558,7 +1641,8 @@ class WebSocketHandlers extends BaseModule {
               oldCategory,
               newCategory: targetCategory.name,
               path: fullPath,
-              multiFile: item?.multiFile || false
+              multiFile: item?.multiFile || false,
+              triggeredBy: context.clientInfo.username !== 'unknown' ? context.clientInfo.username : ''
             });
           }
         }

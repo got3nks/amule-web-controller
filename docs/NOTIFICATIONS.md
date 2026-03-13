@@ -46,6 +46,26 @@ For the full list of 80+ supported services, see the [Apprise Wiki](https://gith
 | File Moved | A file is moved to a new location |
 | File Deleted | A file is deleted from the client |
 
+## Multi-User Support
+
+When authentication is enabled, notifications include user information:
+
+- **Owner** — the username who owns the download
+- **Triggered by** — the username who initiated the action (shown when different from the owner)
+
+Example notification bodies:
+
+| Scenario | Body (second line) |
+|----------|--------------------|
+| Owner + category | `👤 john · 🏷️ Linux` |
+| Owner + different triggerer + category | `👤 john (by admin) · 🏷️ Linux` |
+| Owner, no category | `👤 john` |
+| No owner, has category | `🏷️ Linux` |
+
+System-detected events (`downloadFinished`, `fileMoved`) never show a "triggered by" user since they are detected automatically.
+
+Without authentication enabled, no user information is shown — both fields are empty since there are no ownership records and no authenticated usernames.
+
 ## Adding Services
 
 ### Discord

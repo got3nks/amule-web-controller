@@ -10,6 +10,22 @@ const { getClientSoftwareName, CLIENT_SOFTWARE_LABELS } = require('./networkUtil
 // ============================================================================
 
 /**
+ * Flatten [{start, end}, ...] range pairs to [s1, e1, s2, e2, ...] flat array.
+ * Reduces JSON payload ~56% for gapStatus/reqStatus fields.
+ * @param {Array<{start: number, end: number}>|null} ranges
+ * @returns {number[]|null}
+ */
+function flattenRangePairs(ranges) {
+  if (!ranges || !Array.isArray(ranges) || ranges.length === 0) return null;
+  const flat = new Array(ranges.length * 2);
+  for (let i = 0; i < ranges.length; i++) {
+    flat[i * 2] = ranges[i].start;
+    flat[i * 2 + 1] = ranges[i].end;
+  }
+  return flat;
+}
+
+/**
  * Derive category from file path by matching against category paths
  * @param {string} filePath - Full file path
  * @param {Array} categories - Array of category objects with id, path, and title
@@ -111,8 +127,8 @@ function normalizeAmuleDownload(download, resolveCategoryName = () => 'Default')
     sourceCountA4AF: download.sourceCountA4AF || 0,
     sourceCountNotCurrent: download.sourceCountNotCurrent || 0,
     partStatus: download.partStatus || null,
-    gapStatus: download.gapStatus || null,
-    reqStatus: download.reqStatus || null,
+    gapStatus: flattenRangePairs(download.gapStatus),
+    reqStatus: flattenRangePairs(download.reqStatus),
     lastSeenComplete: download.lastSeenComplete || 0,
   };
 }

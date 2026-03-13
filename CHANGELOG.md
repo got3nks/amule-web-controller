@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - WebSocket Optimization, Username in Events & Notifications
+
+### ✨ Added
+
+- **WebSocket delta updates** — new DeltaEngine sends only changed fields per item instead of full snapshots, with seq-based synchronization and automatic snapshot recovery on gaps. Includes peer-level diffing (by peer ID, only changed fields transmitted — ~26KB → ~2KB per cycle) and flat array format for segment data (~56% smaller)
+- **Subscription-based segment data** — `gapStatus`/`reqStatus` only sent to clients subscribed to the `segmentData` channel (DownloadsView, FileInfoModal), with reference-counted subscribe/unsubscribe and automatic re-subscribe on reconnect. Saves ~27KB per update for all other views
+- **Username in notifications** — Apprise notifications now show the file owner and, when different, who triggered the action (e.g. `👤 john (by admin) · 🏷️ Linux`)
+- **Username in event scripts** — new `EVENT_OWNER` and `EVENT_TRIGGERED_BY` environment variables and JSON fields for custom event scripts
+- **EC_TAG_PARTFILE_SHARED support** — aMule downloads that are also being shared now appear in SharedView, matching BitTorrent behavior where all items have `shared = true`
+- **FileInfoModal auto-refresh** — detail API call refreshes every 5 seconds while the modal is open
+
+### 🐛 Fixed
+
+- **SegmentsBar colors** — fixed gap/requested segment colors in the progress bar visualization
+- **FileInfoModal tree auto-expand** — file tree nodes now auto-expand correctly on open
+- **Category path mapping not shown in edit modal** — when only one instance of a client type is connected, stored instanceId-based path mappings were not loaded into the edit form (showed placeholder instead of actual path)
+
+---
+
 ## [3.3.0] - Unified Peers, Incremental Updates, File Rename
 
 ### ✨ Added

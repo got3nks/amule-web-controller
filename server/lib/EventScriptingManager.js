@@ -6,7 +6,7 @@
  * Script invocation:
  * - Event type as first argument
  * - Environment variables: EVENT_TYPE, EVENT_HASH, EVENT_FILENAME, EVENT_CLIENT_TYPE,
- *   EVENT_INSTANCE_ID, EVENT_INSTANCE_NAME
+ *   EVENT_INSTANCE_ID, EVENT_INSTANCE_NAME, EVENT_OWNER, EVENT_TRIGGERED_BY
  * - Full JSON event data via stdin
  *
  * Execution is fire-and-forget (non-blocking), errors are logged only.
@@ -19,6 +19,7 @@ const BaseModule = require('./BaseModule');
 const config = require('../modules/config');
 const notificationManager = require('./NotificationManager');
 const registry = require('./ClientRegistry');
+const { itemKey } = require('./itemKey');
 
 class EventScriptingManager extends BaseModule {
   constructor() {
@@ -57,6 +58,9 @@ class EventScriptingManager extends BaseModule {
       eventData.instanceName = manager?.displayName || eventData.instanceId;
     }
 
+    // Enrich with owner/triggeredBy from userManager
+    this._enrichWithUserInfo(eventData);
+
     // Send Apprise notification (if enabled for this event)
     notificationManager.notify(eventType, eventData).catch(err => {
       this.log(`[Notification] Error sending notification for ${eventType}: ${err.message}`);
@@ -79,6 +83,41 @@ class EventScriptingManager extends BaseModule {
     this._executeScript(scriptPath, eventType, eventData, timeout).catch(err => {
       this.log(`[EventScript] Error executing script for ${eventType}: ${err.message}`);
     });
+  }
+
+  /**
+   * Enrich event data with owner and triggeredBy usernames
+   * @param {Object} eventData - Event data to enrich (mutated in place)
+   */
+  _enrichWithUserInfo(eventData) {
+    if (!this.userManager) {
+      eventData.owner = eventData.owner || '';
+      eventData.triggeredBy = eventData.triggeredBy || '';
+      return;
+    }
+
+    // Look up owner from download_ownership table
+    if (!eventData.owner && eventData.hash && eventData.instanceId) {
+      try {
+        const key = itemKey(eventData.instanceId, eventData.hash);
+        const ownerId = this.userManager.getOwner(key);
+        if (ownerId) {
+          const ownerUser = this.userManager.getUser(ownerId);
+          eventData.owner = ownerUser?.username || '';
+        } else {
+          eventData.owner = '';
+        }
+      } catch {
+        eventData.owner = '';
+      }
+    } else if (!eventData.owner) {
+      eventData.owner = '';
+    }
+
+    // triggeredBy should already be set by the caller, default to empty
+    if (!eventData.triggeredBy) {
+      eventData.triggeredBy = '';
+    }
   }
 
   /**
@@ -119,7 +158,9 @@ class EventScriptingManager extends BaseModule {
       EVENT_FILENAME: eventData.filename || '',
       EVENT_CLIENT_TYPE: eventData.clientType || '',
       EVENT_INSTANCE_ID: eventData.instanceId || '',
-      EVENT_INSTANCE_NAME: eventData.instanceName || eventData.clientType || ''
+      EVENT_INSTANCE_NAME: eventData.instanceName || eventData.clientType || '',
+      EVENT_OWNER: eventData.owner || '',
+      EVENT_TRIGGERED_BY: eventData.triggeredBy || ''
     };
 
     return new Promise((resolve) => {

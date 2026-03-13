@@ -153,6 +153,28 @@ class DataFetchService extends BaseModule {
   // ============================================================================
 
   /**
+   * Look up a single item's detail fields (raw, trackersDetailed) from cache
+   * Used by API endpoints to serve modal-only data stripped from broadcasts
+   * @param {string} hash - Item hash
+   * @param {string} instanceId - Instance ID
+   * @returns {{ raw: Object, trackersDetailed: Array }|null}
+   */
+  getItemDetail(hash, instanceId) {
+    const cached = this.getCachedBatchData();
+    if (!cached?.items) return null;
+    const h = hash.toLowerCase();
+    const item = cached.items.find(i =>
+      i.hash?.toLowerCase() === h &&
+      (!instanceId || i.instanceId === instanceId)
+    );
+    if (!item) return null;
+    return {
+      raw: item.raw || {},
+      trackersDetailed: item.trackersDetailed || []
+    };
+  }
+
+  /**
    * Get all data for batch update (downloads, shared, uploads, categories)
    * Fetches from all connected clients via their unified fetchData() interface
    * @returns {Promise<Object>} Batch data object

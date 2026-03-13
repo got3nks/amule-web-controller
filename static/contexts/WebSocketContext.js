@@ -50,8 +50,13 @@ export const WebSocketProvider = ({ children }) => {
   const {
     setDataStats,
     setDataItems,
+    setDataItemsFull,
+    applyDelta,
     markDataLoaded: markLiveDataLoaded
   } = useLiveData();
+
+  // Delta sequence tracking for gap detection
+  const lastSeqRef = useRef(0);
 
   // Get setters from StaticDataContext (less frequently changing)
   const {
@@ -86,6 +91,9 @@ export const WebSocketProvider = ({ children }) => {
     setSearchInstanceId
   } = useSearch();
 
+  // Reference-counted subscriptions: multiple components can subscribe to the same channel
+  const subscriptionCountsRef = useRef(new Map());
+
   // Send message through WebSocket
   const sendMessage = useCallback((message) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -94,6 +102,30 @@ export const WebSocketProvider = ({ children }) => {
       console.warn('WebSocket is not connected. Message not sent:', message);
     }
   }, []);
+
+  // Subscribe to a data channel (e.g. 'segmentData')
+  const subscribe = useCallback((channel) => {
+    const counts = subscriptionCountsRef.current;
+    const prev = counts.get(channel) || 0;
+    counts.set(channel, prev + 1);
+    if (prev === 0) {
+      // First subscriber — tell server
+      sendMessage({ action: 'subscribe', channel });
+    }
+  }, [sendMessage]);
+
+  // Unsubscribe from a data channel
+  const unsubscribe = useCallback((channel) => {
+    const counts = subscriptionCountsRef.current;
+    const prev = counts.get(channel) || 0;
+    if (prev <= 1) {
+      counts.delete(channel);
+      // Last subscriber gone — tell server
+      sendMessage({ action: 'unsubscribe', channel });
+    } else {
+      counts.set(channel, prev - 1);
+    }
+  }, [sendMessage]);
 
   // Handle incoming WebSocket messages
   const handleMessage = useCallback((data) => {
@@ -140,6 +172,9 @@ export const WebSocketProvider = ({ children }) => {
 
     const messageHandlers = {
       // Batch update - single message with multiple data types (reduces re-renders)
+      // Supports two formats:
+      //   Full snapshot: data.items (array) — initial load or fallback
+      //   Delta:         data.delta (object with seq, added, removed, changed)
       'batch-update': () => {
         const batch = data.data;
         if (!batch) return;
@@ -185,55 +220,71 @@ export const WebSocketProvider = ({ children }) => {
         }
         if (batch.categories !== undefined) {
           // Only update if categories actually changed (prevents unnecessary re-renders)
-          // Categories are now unified (aMule + rtorrent), pushed every 5s but rarely change
           setDataCategories(prev => {
             const newCats = batch.categories || [];
-            // Quick check: same length and same names = no change
             if (prev.length === newCats.length &&
                 prev.every((cat, i) => cat.name === newCats[i]?.name && cat.title === newCats[i]?.title)) {
-              return prev; // Keep same reference
+              return prev;
             }
             return newCats;
           });
           markStaticDataLoaded('categories');
         }
         if (batch.clientDefaultPaths !== undefined) {
-          // Only update if paths actually changed (generic shallow equality for per-instance keys)
           setClientDefaultPaths(prev => {
             const newPaths = batch.clientDefaultPaths || {};
             const prevKeys = Object.keys(prev);
             const nextKeys = Object.keys(newPaths);
             if (prevKeys.length === nextKeys.length && prevKeys.every(k => prev[k] === newPaths[k])) {
-              return prev; // Keep same reference
+              return prev;
             }
             return newPaths;
           });
         }
         if (batch.hasPathWarnings !== undefined) {
-          // Only update if value actually changed
           setHasCategoryPathWarnings(prev => {
             if (prev === batch.hasPathWarnings) return prev;
             return batch.hasPathWarnings;
           });
         }
+
+        // Handle items: full snapshot vs delta
         if (batch.items !== undefined) {
-          setDataItems(batch.items || []);
+          // Full snapshot — replace all items
+          setDataItemsFull(batch.items || []);
+          markLiveDataLoaded('items');
+          lastSeqRef.current = batch.seq || 0; // Pick up seq for delta continuity
+        } else if (batch.delta) {
+          const delta = batch.delta;
+
+          // Seq gap detection — request full snapshot if we missed updates
+          // Skip for supplemental deltas (no seq) like segment data pushes
+          if (delta.seq != null) {
+            if (lastSeqRef.current > 0 && delta.seq !== lastSeqRef.current + 1) {
+              console.warn(`Delta seq gap: expected ${lastSeqRef.current + 1}, got ${delta.seq}. Requesting full snapshot.`);
+              sendMessage({ action: 'requestFullSnapshot' });
+              lastSeqRef.current = delta.seq;
+              return;
+            }
+            lastSeqRef.current = delta.seq;
+          }
+
+          applyDelta(delta);
           markLiveDataLoaded('items');
         }
 
-        // Extract unique trackers from unified items
+        // Extract unique trackers from items (full snapshot or delta added/changed)
         const trackerSet = new Set();
-        if (batch.items) {
-          batch.items.forEach(item => { if (item.tracker) trackerSet.add(item.tracker); });
-        }
+        const scanItems = batch.items || [
+          ...(batch.delta?.added || []),
+          ...(batch.delta?.changed || [])
+        ];
+        scanItems.forEach(item => { if (item.tracker) trackerSet.add(item.tracker); });
 
         if (trackerSet.size > 0) {
           setKnownTrackers(prev => {
-            const newTrackers = Array.from(trackerSet).sort();
-            // Merge with existing trackers (trackers may come from different batches)
-            const merged = new Set([...prev, ...newTrackers]);
+            const merged = new Set([...prev, ...Array.from(trackerSet)]);
             const mergedArray = Array.from(merged).sort();
-            // Only update if changed (prevents unnecessary re-renders)
             if (mergedArray.length === prev.length &&
                 mergedArray.every((t, i) => t === prev[i])) {
               return prev;
@@ -405,7 +456,7 @@ export const WebSocketProvider = ({ children }) => {
     authEnabled, isAuthenticated, sendMessage,
     setAppCurrentView, setAppPage, addAppError, addAppSuccess,
     // Live data setters
-    setDataStats, setDataItems,
+    setDataStats, setDataItems, setDataItemsFull, applyDelta,
     markLiveDataLoaded,
     // Static data setters
     setDataServers, setDataCategories, setClientDefaultPaths, setProwlarrEnabled,
@@ -433,6 +484,10 @@ export const WebSocketProvider = ({ children }) => {
       wsRef.current.onopen = () => {
         console.log('WebSocket connected');
         setWsConnected(true);
+        // Re-subscribe to active channels after reconnect
+        for (const channel of subscriptionCountsRef.current.keys()) {
+          wsRef.current.send(JSON.stringify({ action: 'subscribe', channel }));
+        }
       };
 
       wsRef.current.onclose = (event) => {
@@ -518,9 +573,11 @@ export const WebSocketProvider = ({ children }) => {
   const value = useMemo(() => ({
     wsConnected,
     sendMessage,
+    subscribe,
+    unsubscribe,
     addMessageHandler,
     removeMessageHandler
-  }), [wsConnected, sendMessage, addMessageHandler, removeMessageHandler]);
+  }), [wsConnected, sendMessage, subscribe, unsubscribe, addMessageHandler, removeMessageHandler]);
 
   return h(WebSocketContext.Provider, { value }, children);
 };

@@ -11,7 +11,7 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { Icon, FlagIcon, Tooltip, IconButton } from '../common/index.js';
+import { Icon, FlagIcon, Tooltip, IconButton, LoadingSpinner } from '../common/index.js';
 import { formatBytes } from '../../utils/index.js';
 import { formatFieldName, formatFieldValue } from '../../utils/fieldFormatters.js';
 import { TRACKER_CONFIGS } from '../../utils/fieldRegistry.js';
@@ -731,7 +731,7 @@ export const FilesTreeSection = ({ files, loading, error }) => {
 
   if (loading) {
     return h('div', { className: 'flex items-center justify-center py-8' },
-      h('div', { className: 'loader' })
+      h(LoadingSpinner, { size: 'sm' })
     );
   }
 

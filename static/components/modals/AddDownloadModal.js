@@ -13,7 +13,7 @@ import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useBitTorrentClientSelector } from '../../hooks/useBitTorrentClientSelector.js';
 import { useAmuleInstanceSelector } from '../../hooks/useAmuleInstanceSelector.js';
 
-const { createElement: h, useState, useRef, useCallback } = React;
+const { createElement: h, useState, useRef, useCallback, useEffect } = React;
 
 /**
  * Add download modal
@@ -22,13 +22,15 @@ const { createElement: h, useState, useRef, useCallback } = React;
  * @param {function} onAddMagnetLinks - Handler for magnet links (links, label, clientId)
  * @param {function} onAddTorrentFile - Handler for .torrent file (file, label, clientId)
  * @param {function} onClose - Close handler
+ * @param {File[]} initialTorrentFiles - Pre-loaded .torrent files (e.g. from global drag-and-drop)
  */
 const AddDownloadModal = ({
   show,
   onAddEd2kLinks,
   onAddMagnetLinks,
   onAddTorrentFile,
-  onClose
+  onClose,
+  initialTorrentFiles = []
 }) => {
   // Get aMule connection status from context
   const { ed2kConnected: amuleConnected } = useClientFilter();
@@ -70,6 +72,13 @@ const AddDownloadModal = ({
   const [isDragging, setIsDragging] = useState(false);
   const [showOptions, setShowOptions] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Seed torrent files from global drag-and-drop
+  useEffect(() => {
+    if (initialTorrentFiles.length > 0) {
+      setTorrentFiles(initialTorrentFiles);
+    }
+  }, [initialTorrentFiles]);
 
   // Parse links to determine types
   const parseLinks = useCallback((text) => {

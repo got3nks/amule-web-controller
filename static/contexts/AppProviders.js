@@ -23,6 +23,7 @@ import { ActionsProvider } from './ActionsContext.js';
 import { VersionProvider } from './VersionContext.js';
 import { ClientFilterProvider } from './ClientFilterContext.js';
 import { StickyHeaderProvider } from './StickyHeaderContext.js';
+import { AddDownloadProvider } from './AddDownloadContext.js';
 
 const { createElement: h } = React;
 
@@ -56,6 +57,7 @@ const composeProviders = (...providers) => ({ children }) =>
  * 11. DataFetchProvider - data fetching functions (uses LiveData + StaticData)
  * 12. ActionsProvider - action handlers (uses WebSocket)
  * 13. StickyHeaderProvider - scroll-based header management (UI only)
+ * 14. AddDownloadProvider - global add-download modal state (UI only)
  */
 export const AppProviders = composeProviders(
   AuthProvider,
@@ -70,5 +72,6 @@ export const AppProviders = composeProviders(
   WebSocketProvider,
   DataFetchProvider,
   ActionsProvider,
-  StickyHeaderProvider
+  StickyHeaderProvider,
+  AddDownloadProvider
 );

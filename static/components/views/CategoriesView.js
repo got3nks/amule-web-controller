@@ -8,7 +8,7 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { Table, MobileSortButton, Button, IconButton, Icon, ClientIcon, AlertBox, Tooltip } from '../common/index.js';
+import { Table, MobileSortButton, Button, IconButton, Icon, ClientIcon, AlertBox, Tooltip, LoadingSpinner } from '../common/index.js';
 import { DEFAULT_SORT_CONFIG, VIEW_TITLE_STYLES } from '../../utils/index.js';
 import { useModal, useTableState, useCapabilities } from '../../hooks/index.js';
 import { useStickyToolbar } from '../../contexts/StickyHeaderContext.js';
@@ -491,7 +491,7 @@ const CategoriesView = () => {
 
     categories.length === 0
       ? h('div', { className: 'text-center py-8 text-gray-500 dark:text-gray-400' },
-          !dataLoaded.categories ? 'Loading categories...' : 'No categories found. Create one to get started!'
+          !dataLoaded.categories ? h(LoadingSpinner, { size: 'sm', text: 'Loading categories...' }) : 'No categories found. Create one to get started!'
         )
       // Hybrid scrollable mode: desktop shows all items in scrollable table,
       // mobile uses load-more pagination for natural page scrolling

@@ -5,7 +5,7 @@
  * Uses contexts for state management
  */
 
-import React, { useCallback, useEffect } from 'https://esm.sh/react@18.2.0';
+import React, { useCallback, useEffect, useState } from 'https://esm.sh/react@18.2.0';
 import { VIEW_COMPONENTS } from '../utils/viewHelpers.js';
 
 // Context hooks
@@ -21,9 +21,11 @@ import { useCapabilities, VIEW_CAPABILITIES } from '../hooks/useCapabilities.js'
 // Components
 import { Header, Sidebar, Footer, MobileNavFooter, StickyViewHeader } from './layout/index.js';
 import { SetupWizardView, LoginView } from './views/index.js';
-import { Portal } from './common/index.js';
-import { AboutModal, WelcomeModal } from './modals/index.js';
+import { Portal, Icon } from './common/index.js';
+import { AboutModal, WelcomeModal, AddDownloadModal } from './modals/index.js';
 import { useVersion } from '../contexts/index.js';
+import { useAddDownload } from '../contexts/AddDownloadContext.js';
+import { useActions } from '../contexts/ActionsContext.js';
 
 const { createElement: h } = React;
 
@@ -110,6 +112,65 @@ const AppContentInner = () => {
     observer.observe(document.getElementById('app'), { childList: true, subtree: true });
     return () => observer.disconnect();
   }, []);
+
+  // ============================================================================
+  // ADD DOWNLOAD MODAL (global, supports drag-and-drop from any view)
+  // ============================================================================
+
+  const { show: showAddDownload, initialFiles, openAddDownloadModal, closeAddDownloadModal } = useAddDownload();
+  const actions = useActions();
+
+  // Global drag-and-drop: track drag depth to handle nested elements
+  const [globalDragOver, setGlobalDragOver] = useState(false);
+  const dragDepthRef = React.useRef(0);
+
+  useEffect(() => {
+    const handleDragEnter = (e) => {
+      // Only react to files being dragged (not text selections, etc.)
+      if (!e.dataTransfer?.types?.includes('Files')) return;
+      e.preventDefault();
+      dragDepthRef.current++;
+      if (dragDepthRef.current === 1) setGlobalDragOver(true);
+    };
+
+    const handleDragLeave = (e) => {
+      e.preventDefault();
+      dragDepthRef.current--;
+      if (dragDepthRef.current === 0) setGlobalDragOver(false);
+    };
+
+    const handleDragOver = (e) => {
+      if (!e.dataTransfer?.types?.includes('Files')) return;
+      e.preventDefault();
+    };
+
+    const handleDrop = (e) => {
+      e.preventDefault();
+      dragDepthRef.current = 0;
+      setGlobalDragOver(false);
+
+      // Don't intercept if the modal is already open (let modal's own drop handler work)
+      if (showAddDownload) return;
+
+      const files = Array.from(e.dataTransfer.files || []);
+      const torrentFiles = files.filter(f => f.name.endsWith('.torrent'));
+      if (torrentFiles.length > 0 && hasCap('add_downloads')) {
+        openAddDownloadModal(torrentFiles);
+      }
+    };
+
+    document.addEventListener('dragenter', handleDragEnter);
+    document.addEventListener('dragleave', handleDragLeave);
+    document.addEventListener('dragover', handleDragOver);
+    document.addEventListener('drop', handleDrop);
+
+    return () => {
+      document.removeEventListener('dragenter', handleDragEnter);
+      document.removeEventListener('dragleave', handleDragLeave);
+      document.removeEventListener('dragover', handleDragOver);
+      document.removeEventListener('drop', handleDrop);
+    };
+  }, [showAddDownload, hasCap, openAddDownloadModal]);
 
   // ============================================================================
   // CALLBACKS
@@ -273,7 +334,30 @@ const AppContentInner = () => {
         version,
         changelog: whatsNewChangelog,
         loading: markingAsSeen
-      })
+      }),
+
+      // Add Download Modal (global — opened by button in DownloadsView or global drag-and-drop)
+      hasCap('add_downloads') && h(AddDownloadModal, {
+        show: showAddDownload,
+        onAddEd2kLinks: (links, categoryName) => actions.search.addEd2kLinks(links.join('\n'), categoryName, false),
+        onAddMagnetLinks: actions.search.addMagnetLinks,
+        onAddTorrentFile: actions.search.addTorrentFile,
+        onClose: closeAddDownloadModal,
+        initialTorrentFiles: initialFiles
+      }),
+
+      // Global drag-and-drop overlay
+      globalDragOver && !showAddDownload && hasCap('add_downloads') && h(Portal, null,
+        h('div', {
+          className: 'fixed inset-0 z-[70] bg-blue-500/20 border-4 border-dashed border-blue-500 flex items-center justify-center pointer-events-none',
+          style: { backdropFilter: 'blur(2px)' }
+        },
+          h('div', { className: 'bg-white dark:bg-gray-800 rounded-xl px-8 py-6 shadow-2xl text-center' },
+            h(Icon, { name: 'download', size: 32, className: 'text-blue-500 mx-auto mb-2' }),
+            h('p', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100' }, 'Drop .torrent files to add')
+          )
+        )
+      )
   );
 };
 

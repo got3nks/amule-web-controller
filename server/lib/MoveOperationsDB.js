@@ -244,9 +244,7 @@ class MoveOperationsDB {
     `);
     stmt.run(status, errorMessage, new Date().toISOString(), hash.toLowerCase(), instanceId);
 
-    if (status === 'failed') {
-      logger.warn(`📦 Move operation failed: ${hash} - ${errorMessage}`);
-    } else if (status === 'completed') {
+    if (status === 'completed') {
       logger.log(`📦 Move operation completed: ${hash}`);
     }
   }

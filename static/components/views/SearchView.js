@@ -6,7 +6,7 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { SearchResultsSection, Icon, AlertBox } from '../common/index.js';
+import { SearchResultsSection, Icon, AlertBox, LoadingSpinner } from '../common/index.js';
 import QuickSearchWidget from '../dashboard/QuickSearchWidget.js';
 import { useSearch } from '../../contexts/SearchContext.js';
 import { useActions } from '../../contexts/ActionsContext.js';
@@ -85,7 +85,7 @@ const SearchView = () => {
       : h('div', { className: 'text-center py-12' },
           searchLocked || !searchPreviousResultsLoaded
             ? h('div', null,
-                h('div', { className: 'loader mx-auto mb-4', style: { width: '32px', height: '32px' } }),
+                h('div', { className: 'flex justify-center mb-4' }, h(LoadingSpinner, { size: 'md' })),
                 h('p', { className: 'text-gray-500 dark:text-gray-400' }, searchLocked ? 'Searching...' : 'Loading cached results...')
               )
             : h('div', null,

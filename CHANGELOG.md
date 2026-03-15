@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.1] - Global Drag-and-Drop, Loading States & Bug Fixes
+
+### ✨ Added
+
+- **Global .torrent drag-and-drop** — drop `.torrent` files anywhere in the app to open the Add Download modal with files pre-loaded, not just from the Downloads view. Visual overlay guides the drop
+- **FileInfoModal loading spinner** — shows a spinner while fetching item detail data (raw fields, trackers) instead of blank sections
+- **EmptyState loading spinner** — all table views (Downloads, Uploads, History, Shared) now show a spinner alongside loading messages instead of plain text
+
+### 🐛 Fixed
+
+- **Setup wizard auth blocking** — fixed a bug where enabling authentication during first-run setup would fail with "Cannot enable authentication without an admin account", because the admin-account guard ran before the admin user was created by the migration step
+
+### ♻️ Improved
+
+- **Move operation timeouts** — timeout now scales with file size (assumes ~25 MB/s for 5200 RPM HDD under concurrent I/O, with 50% margin + 30s overhead, rounded to 30s intervals) instead of a fixed 2-minute limit
+- **Move operation logging** — deduplicated failure logs from 3 redundant messages down to 1 with full context (file name, error cause, timeout duration)
+- **Unified native move naming** — renamed `executeQBittorrentNativeMove` to `executeNativeMove` and made all log messages use the actual client type (qBittorrent, Deluge, or Transmission) dynamically
+- **Unified LoadingSpinner** — replaced all 17 instances of the CSS `.loader` class with the `LoadingSpinner` React component and removed the custom CSS rule/keyframes
+
+---
+
 ## [3.4.0] - WebSocket Optimization, Username in Events & Notifications
 
 ### ✨ Added

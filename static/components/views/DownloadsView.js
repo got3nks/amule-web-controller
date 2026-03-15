@@ -10,7 +10,7 @@ import React from 'https://esm.sh/react@18.2.0';
 import { Table, ContextMenu, MoreButton, Button, Select, IconButton, SelectionModeSection, EmptyState, DownloadMobileCard, MobileStatusTabs, MobileFilterPills, MobileFilterSheet, MobileFilterButton, MobileSortButton, ExpandableSearch, FilterInput, SelectionCheckbox, Tooltip, Icon } from '../common/index.js';
 import { getRowHighlightClass, DEFAULT_SORT_CONFIG, DEFAULT_SECONDARY_SORT_CONFIG, formatTitleCount, buildSpeedColumn, buildSizeColumn, buildFileNameColumn, buildStatusColumn, buildCategoryColumn, buildProgressColumn, buildSourcesColumn, buildAddedAtColumn, buildETAColumn, VIEW_TITLE_STYLES, createCategoryLabelFilter, createTrackerFilter } from '../../utils/index.js';
 import { itemKey } from '../../utils/itemKey.js';
-import { useModal, useViewDeleteModal, useBatchExport, useViewFilters, usePageSelection, useItemActions, useCategoryFilterOptions, useItemContextMenu, useColumnConfig, getSecondarySortConfig, useFileInfoModal, useFileCategoryModal, useFileRenameModal } from '../../hooks/index.js';
+import { useViewDeleteModal, useBatchExport, useViewFilters, usePageSelection, useItemActions, useCategoryFilterOptions, useItemContextMenu, useColumnConfig, getSecondarySortConfig, useFileInfoModal, useFileCategoryModal, useFileRenameModal } from '../../hooks/index.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useActions } from '../../contexts/ActionsContext.js';
@@ -18,7 +18,7 @@ import { useTheme } from '../../contexts/ThemeContext.js';
 import { useStickyToolbar } from '../../contexts/StickyHeaderContext.js';
 import { useCapabilities } from '../../hooks/useCapabilities.js';
 import { useWebSocketConnection } from '../../contexts/WebSocketContext.js';
-import AddDownloadModal from '../modals/AddDownloadModal.js';
+import { useAddDownload } from '../../contexts/AddDownloadContext.js';
 
 const { createElement: h, useMemo, useCallback, useEffect } = React;
 
@@ -149,12 +149,8 @@ const DownloadsView = () => {
   // Rename modal
   const { openRenameModal, FileRenameElement } = useFileRenameModal();
 
-  // Add download modal
-  const {
-    modal: addDownloadModal,
-    open: openAddDownloadModal,
-    close: closeAddDownloadModal
-  } = useModal({});
+  // Add download modal (global — rendered in AppContent)
+  const { openAddDownloadModal } = useAddDownload();
 
   // Delete modal with batch support and permission checking
   const {
@@ -493,14 +489,6 @@ const DownloadsView = () => {
     FileRenameElement,
 
     DeleteModalElement,
-
-    hasCap('add_downloads') && h(AddDownloadModal, {
-      show: addDownloadModal.show,
-      onAddEd2kLinks: (links, categoryName) => actions.search.addEd2kLinks(links.join('\n'), categoryName, false),
-      onAddMagnetLinks: actions.search.addMagnetLinks,
-      onAddTorrentFile: actions.search.addTorrentFile,
-      onClose: closeAddDownloadModal
-    }),
 
     // Mobile filter sheet
     h(MobileFilterSheet, {

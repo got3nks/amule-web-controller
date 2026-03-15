@@ -6,7 +6,7 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { Button, ClientIcon, SegmentedControl } from '../common/index.js';
+import { Button, ClientIcon, SegmentedControl, LoadingSpinner } from '../common/index.js';
 import { VIEW_TITLE_STYLES } from '../../utils/index.js';
 import { useAppState } from '../../contexts/AppStateContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
@@ -146,7 +146,7 @@ const StatisticsView = () => {
 
   // Suspense fallback with spinner (for lazy JS loading — outer overlay not shown in this state)
   const chartLoader = h('div', { className: 'h-full flex items-center justify-center' },
-    h('div', { className: 'loader' })
+    h(LoadingSpinner, { size: 'sm' })
   );
 
   // Helper to render chart content with loading state - only creates chart element when data exists
@@ -237,7 +237,7 @@ const StatisticsView = () => {
     h('div', { className: 'relative' },
       // Loading overlay (shows on top of content)
       loadingHistory && h('div', { className: 'absolute inset-0 bg-white/70 dark:bg-gray-900/70 z-10 flex flex-col items-center justify-center rounded-lg' },
-        h('div', { className: 'loader' }),
+        h(LoadingSpinner, { size: 'sm' }),
         h('p', { className: 'text-sm text-gray-500 dark:text-gray-400 mt-2' }, 'Loading historical data...')
       ),
 

@@ -14,6 +14,7 @@ import { useTheme } from '../../contexts/ThemeContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useClientFilter } from '../../contexts/ClientFilterContext.js';
 import ClientIcon from '../common/ClientIcon.js';
+import LoadingSpinner from '../common/LoadingSpinner.js';
 
 const { createElement: h, useMemo } = React;
 
@@ -55,7 +56,7 @@ const ActiveDownloadsWidget = ({ downloads = [], maxItems = 10, compact = false,
     },
       loading
         ? h('div', { className: 'flex items-center justify-center h-full' },
-            h('div', { className: 'loader' })
+            h(LoadingSpinner, { size: 'sm' })
           )
         : activeDownloads.length === 0
         ? h('p', {

@@ -6,7 +6,7 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { Table, DeleteModal, MobileSortButton, Button, Input, IconButton, AmuleInstanceSelector } from '../common/index.js';
+import { Table, DeleteModal, MobileSortButton, Button, Input, IconButton, AmuleInstanceSelector, LoadingSpinner } from '../common/index.js';
 import { DEFAULT_SORT_CONFIG, VIEW_TITLE_STYLES } from '../../utils/index.js';
 import { useModal, useTableState, useAmuleInstanceSelector } from '../../hooks/index.js';
 import { useStickyToolbar } from '../../contexts/StickyHeaderContext.js';
@@ -289,7 +289,7 @@ const ServersView = () => {
       onClick: onRefresh,
       disabled: !dataLoaded.servers,
       icon: dataLoaded.servers ? 'refresh' : null
-    }, dataLoaded.servers ? 'Refresh' : h('span', { className: 'flex items-center gap-2' }, h('div', { className: 'loader' }), 'Loading...')),
+    }, dataLoaded.servers ? 'Refresh' : h('span', { className: 'flex items-center gap-2' }, h(LoadingSpinner, { size: 'sm' }), 'Loading...')),
   [onRefresh, dataLoaded.servers]);
 
   const instanceSelector = useMemo(() =>
@@ -327,7 +327,7 @@ const ServersView = () => {
     ),
 
     servers.length === 0 ? h('div', { className: 'text-center py-6 text-xs sm:text-sm text-gray-500 dark:text-gray-400' },
-      !dataLoaded.servers ? 'Loading servers...' : 'No servers available'
+      !dataLoaded.servers ? h(LoadingSpinner, { size: 'sm', text: 'Loading servers...' }) : 'No servers available'
     // Hybrid scrollable mode: desktop shows all items in scrollable table,
     // mobile uses load-more pagination for natural page scrolling
     ) : h(Table, {

@@ -6,7 +6,7 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { Icon, Table, ContextMenu, MoreButton, Button, IconButton, Select, SelectionModeSection, MobileCardHeader, EmptyState, ClientIcon, ItemMobileCard, MobileStatusTabs, MobileFilterPills, MobileFilterSheet, MobileFilterButton, MobileSortButton, ExpandableSearch, FilterInput, SelectionCheckbox, TrackerLabel } from '../common/index.js';
+import { Icon, Table, ContextMenu, MoreButton, Button, IconButton, Select, SelectionModeSection, MobileCardHeader, EmptyState, ClientIcon, ItemMobileCard, MobileStatusTabs, MobileFilterPills, MobileFilterSheet, MobileFilterButton, MobileSortButton, ExpandableSearch, FilterInput, SelectionCheckbox, TrackerLabel, LoadingSpinner } from '../common/index.js';
 import { formatBytes, formatSpeed, getRowHighlightClass, getItemStatusInfo, calculateRatio, DEFAULT_SORT_CONFIG, DEFAULT_SECONDARY_SORT_CONFIG, formatTitleCount, buildSizeColumn, buildFileNameColumn, buildStatusColumn, buildCategoryColumn, buildRatioColumn, buildUploadSpeedColumn, buildUploadTotalColumn, buildAddedAtColumn, VIEW_TITLE_STYLES, createCategoryLabelFilter, createTrackerFilter } from '../../utils/index.js';
 import { itemKey } from '../../utils/itemKey.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
@@ -357,7 +357,7 @@ const SharedView = () => {
           title: 'Reload Shared Files'
         },
           dataLoaded.items && h(ClientIcon, { client: 'amule', size: 16, title: '' }),
-          dataLoaded.items ? 'Reload Files' : h('span', { className: 'flex items-center gap-2' }, h('div', { className: 'loader' }), 'Loading...')
+          dataLoaded.items ? 'Reload Files' : h('span', { className: 'flex items-center gap-2' }, h(LoadingSpinner, { size: 'sm' }), 'Loading...')
         ),
         hasAnyMutationCap && h(Button, {
           key: 'select',

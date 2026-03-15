@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect } from 'https://esm.sh/react@18.2.0';
-import { Icon, Button, Input, AmuleInstanceSelector } from '../common/index.js';
+import { Icon, Button, Input, AmuleInstanceSelector, LoadingSpinner } from '../common/index.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 
 const { createElement: h } = React;
@@ -132,7 +132,7 @@ const QuickSearchWidget = ({
           className: 'whitespace-nowrap'
         },
           searchLocked
-            ? h('div', { className: 'loader' })
+            ? h(LoadingSpinner, { size: 'sm' })
             : h(Icon, { name: 'search', size: 16 }),
           h('span', {}, searchLocked ? 'Searching...' : 'Search')
         )

@@ -7,7 +7,7 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { SearchResultsList, SEARCH_RESULTS_COLUMNS, PROWLARR_RESULTS_COLUMNS, FilterInput, MobileSortButton, ExpandableSearch, Select, Button, Icon, SelectionModeSection, ClientIcon, MobileFilterSheet, MobileFilterPills, MobileFilterButton } from './index.js';
+import { SearchResultsList, SEARCH_RESULTS_COLUMNS, PROWLARR_RESULTS_COLUMNS, FilterInput, MobileSortButton, ExpandableSearch, Select, Button, Icon, SelectionModeSection, ClientIcon, MobileFilterSheet, MobileFilterPills, MobileFilterButton, LoadingSpinner } from './index.js';
 import { DEFAULT_SORT_CONFIG, sortFiles, calculateLoadMore, VIEW_TITLE_STYLES, makeFilterHeaderRender, createIndexerFilter } from '../../utils/index.js';
 import { useAppState } from '../../contexts/AppStateContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
@@ -428,7 +428,7 @@ const SearchResultsSection = ({
       },
         downloading
           ? h('span', { className: 'flex items-center gap-2' },
-              h('div', { className: 'loader', style: { width: '14px', height: '14px' } }),
+              h(LoadingSpinner, { size: 14 }),
               'Downloading...'
             )
           : `Download ${downloadableCount} file${downloadableCount !== 1 ? 's' : ''}`

@@ -14,7 +14,7 @@ import {
   MobileSpeedWidget,
   StatsWidget
 } from '../dashboard/index.js';
-import { ClientIcon } from '../common/index.js';
+import { ClientIcon, LoadingSpinner } from '../common/index.js';
 import { STATISTICS_REFRESH_INTERVAL } from '../../utils/index.js';
 import { useAppState } from '../../contexts/AppStateContext.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
@@ -184,7 +184,7 @@ const HomeView = () => {
         canViewStats && h('div', { className: 'sm:col-span-6 relative' },
           // Loading overlay (shown on top of content during instance filter reload)
           loadingDashboard && !clientConfigLoading && h('div', { className: 'absolute inset-0 bg-white/70 dark:bg-gray-900/70 z-10 flex items-center justify-center rounded-lg' },
-            h('div', { className: 'loader' })
+            h(LoadingSpinner, { size: 'sm' })
           ),
 
           h('div', { className: `grid grid-cols-6 gap-4${loadingDashboard && !clientConfigLoading ? ' opacity-50 pointer-events-none' : ''}` },
@@ -220,7 +220,7 @@ const HomeView = () => {
                       fallback: h('div', {
                         className: 'h-full flex items-center justify-center'
                       },
-                        h('div', { className: 'loader' })
+                        h(LoadingSpinner, { size: 'sm' })
                       )
                     },
                       h(ClientSpeedChart, {
@@ -248,7 +248,7 @@ const HomeView = () => {
                       fallback: h('div', {
                         className: 'h-full flex items-center justify-center'
                       },
-                        h('div', { className: 'loader' })
+                        h(LoadingSpinner, { size: 'sm' })
                       )
                     },
                       h(ClientSpeedChart, {
@@ -276,7 +276,7 @@ const HomeView = () => {
                       fallback: h('div', {
                         className: 'h-full flex items-center justify-center'
                       },
-                        h('div', { className: 'loader' })
+                        h(LoadingSpinner, { size: 'sm' })
                       )
                     },
                       h(ClientSpeedChart, {
@@ -304,7 +304,7 @@ const HomeView = () => {
                       fallback: h('div', {
                         className: 'h-full flex items-center justify-center'
                       },
-                        h('div', { className: 'loader' })
+                        h(LoadingSpinner, { size: 'sm' })
                       )
                     },
                       h(ClientTransferChart, {
@@ -365,7 +365,7 @@ const HomeView = () => {
         // Speed chart + Stats (with loading overlay on instance filter change)
         canViewStats && h('div', { className: 'relative' },
           loadingDashboard && h('div', { className: 'absolute inset-0 bg-white/70 dark:bg-gray-900/70 z-10 flex items-center justify-center rounded-lg' },
-            h('div', { className: 'loader' })
+            h(LoadingSpinner, { size: 'sm' })
           ),
           h('div', { className: `flex flex-col gap-3${loadingDashboard ? ' opacity-50 pointer-events-none' : ''}` },
             // Speed chart with network status (always shows all instances — fetch skips filter on mobile)

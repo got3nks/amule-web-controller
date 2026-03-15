@@ -20,3 +20,4 @@ export { WebSocketProvider, useWebSocketConnection } from './WebSocketContext.js
 export { VersionProvider, useVersion } from './VersionContext.js';
 export { ClientFilterProvider, useClientFilter } from './ClientFilterContext.js';
 export { StickyHeaderProvider, useStickyHeader, useStickyToolbar } from './StickyHeaderContext.js';
+export { AddDownloadProvider, useAddDownload } from './AddDownloadContext.js';

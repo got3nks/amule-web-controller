@@ -466,18 +466,19 @@ class ConfigAPI extends BaseModule {
         return response.badRequest(res, 'Invalid configuration: ' + validation.errors.join(', '));
       }
 
+      // Check if this was first run BEFORE marking as completed
+      const wasFirstRun = await config.isFirstRun();
+
       // Prevent enabling auth without at least one admin account
+      // Skip during first-run: the admin user is created by migrateFromConfig() after save
       const enablingAuth = newConfig.server?.auth?.enabled === true;
-      if (enablingAuth && this.userManager) {
+      if (enablingAuth && !wasFirstRun && this.userManager) {
         const admins = this.userManager.listUsers().filter(u => u.isAdmin && !u.disabled);
         if (admins.length === 0) {
           this.log('❌ Cannot enable authentication: no admin accounts exist');
           return response.badRequest(res, 'Cannot enable authentication without an admin account. Create at least one admin user in the User Management section first.');
         }
       }
-
-      // Check if this was first run BEFORE marking as completed
-      const wasFirstRun = await config.isFirstRun();
 
       // Mark as completed (important for first-run)
       newConfig.firstRunCompleted = true;

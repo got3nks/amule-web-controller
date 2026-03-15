@@ -11,7 +11,7 @@ import { useTheme } from '../../contexts/ThemeContext.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
 import { useWebSocketConnection } from '../../contexts/WebSocketContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
-import { SegmentsBar, Icon, Portal, Button, AlertBox } from '../common/index.js';
+import { SegmentsBar, Icon, Portal, Button, AlertBox, LoadingSpinner } from '../common/index.js';
 import { formatBytes, getProgressColor, getExportLink, getExportLinkLabel, calculateRatio } from '../../utils/index.js';
 import { formatPriority, categorizeDownloadFields, categorizeSharedFields } from '../../utils/fieldFormatters.js';
 import { useCopyToClipboard } from '../../hooks/index.js';
@@ -146,6 +146,7 @@ const FileInfoModal = ({ hash, instanceId, onClose }) => {
 
   // Item detail state (raw + trackersDetailed, stripped from broadcasts)
   const [itemDetail, setItemDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   // Fetch files when modal opens for multi-file torrent items, refresh periodically
   useEffect(() => {
@@ -208,7 +209,8 @@ const FileInfoModal = ({ hash, instanceId, onClose }) => {
 
     let cancelled = false;
 
-    const fetchDetail = async () => {
+    const fetchDetail = async (isInitial) => {
+      if (isInitial) setDetailLoading(true);
       try {
         const instanceParam = liveItem.instanceId ? `?instanceId=${encodeURIComponent(liveItem.instanceId)}` : '';
         const response = await fetch(`/api/item/detail/${liveItem.hash}${instanceParam}`);
@@ -217,11 +219,13 @@ const FileInfoModal = ({ hash, instanceId, onClose }) => {
         if (!cancelled) setItemDetail(data);
       } catch {
         // Non-critical — fields section will be empty
+      } finally {
+        if (!cancelled && isInitial) setDetailLoading(false);
       }
     };
 
-    fetchDetail();
-    const interval = setInterval(fetchDetail, 5000);
+    fetchDetail(true);
+    const interval = setInterval(() => fetchDetail(false), 5000);
 
     return () => { cancelled = true; clearInterval(interval); };
   }, [hash, liveItem?.hash, variant]);
@@ -469,15 +473,19 @@ const FileInfoModal = ({ hash, instanceId, onClose }) => {
         }, h(PeersTable, { peers: peersDetailedAmule, variant: 'amule-upload' })),
 
         // --- All variants: Categorized fields ---
-        Object.entries(categorizedFields).map(([category, fields]) =>
-          h(CategoryFieldsSection, {
-            key: category,
-            category,
-            fields,
-            expanded: expandedSections[category],
-            onToggle: () => toggleSection(category)
-          })
-        )
+        detailLoading
+          ? h('div', { className: 'flex items-center justify-center py-8' },
+              h(LoadingSpinner, { size: 'sm' })
+            )
+          : Object.entries(categorizedFields).map(([category, fields]) =>
+              h(CategoryFieldsSection, {
+                key: category,
+                category,
+                fields,
+                expanded: expandedSections[category],
+                onToggle: () => toggleSection(category)
+              })
+            )
       ),
 
       // Footer

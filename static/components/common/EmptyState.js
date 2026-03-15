@@ -7,6 +7,7 @@
 
 import React from 'https://esm.sh/react@18.2.0';
 import Icon from './Icon.js';
+import LoadingSpinner from './LoadingSpinner.js';
 
 const { createElement: h } = React;
 
@@ -32,7 +33,7 @@ const EmptyState = ({
 }) => {
   if (loading) {
     return h('div', { className: 'text-center py-6 text-xs sm:text-sm text-gray-500 dark:text-gray-400' },
-      loadingMessage
+      h(LoadingSpinner, { size: 'sm', text: loadingMessage })
     );
   }
 

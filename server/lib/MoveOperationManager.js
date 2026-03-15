@@ -140,8 +140,8 @@ class MoveOperationManager extends BaseModule {
 
     try {
       await this.executeMove(operation);
-    } catch (err) {
-      this.log(`❌ Move operation failed for ${operation.name}: ${err.message}`);
+    } catch {
+      // Error already logged in executeMove() with full context
     } finally {
       this.isProcessing = false;
 
@@ -170,9 +170,9 @@ class MoveOperationManager extends BaseModule {
       this.db.updateStatus(hash, instanceId, 'moving');
       this.updateActiveOperation(hash, instanceId);
 
-      // Clients with native move API (e.g. qBittorrent) handle pause/move/resume internally
+      // Clients with native move API (qBittorrent, Deluge, Transmission) handle pause/move/resume internally
       if (clientMeta.hasCapability(clientType, 'nativeMove')) {
-        await this.executeQBittorrentNativeMove(operation);
+        await this.executeNativeMove(operation);
       } else {
         // rtorrent/aMule: Manual file move
         await this.executeManualMove(operation);
@@ -235,28 +235,29 @@ class MoveOperationManager extends BaseModule {
   }
 
   /**
-   * Execute move using qBittorrent's native setLocation API
-   * qBittorrent handles pause/move/resume internally
+   * Execute move using the client's native move API
+   * Used by clients with nativeMove capability (qBittorrent, Deluge, Transmission)
    * @param {Object} operation - Operation record
    */
-  async executeQBittorrentNativeMove(operation) {
-    const { hash, instanceId, name, remoteDestPath, destPath, isMultiFile } = operation;
+  async executeNativeMove(operation) {
+    const { hash, instanceId, name, clientType, remoteDestPath, destPath } = operation;
     const clientDestPath = remoteDestPath || destPath;
 
     const manager = this._getManagerForOp(operation);
 
-    this.log(`📦 Using qBittorrent native move for: ${name}`);
+    this.log(`📦 Using ${clientType} native move for: ${name}`);
 
-    // For multi-file torrents, destination is the parent folder
-    // For single-file torrents, destination is also the parent folder
-    // qBittorrent's setLocation expects the parent directory, not the file/folder path
+    // Client's native API expects the parent directory, not the file/folder path
     await manager.updateDirectory(hash, clientDestPath);
 
-    // Wait for qBittorrent to complete the move
-    // Poll the torrent's state until it's no longer moving
-    let attempts = 0;
-    const maxAttempts = 120; // 2 minutes max wait
+    // Wait for client to complete the move
+    // Timeout scales with file size assuming ~25 MB/s (5200 RPM HDD under concurrent I/O)
+    // with 50% margin + 30s overhead for client internal processing
+    const totalSize = operation.totalSize || 0;
+    const estimatedSeconds = Math.ceil(totalSize / (25 * 1024 * 1024));
+    const maxAttempts = Math.max(60, Math.ceil((estimatedSeconds * 1.5 + 30) / 30) * 30);
     const pollInterval = 1000;
+    let attempts = 0;
 
     while (attempts < maxAttempts) {
       await this.sleep(pollInterval);
@@ -275,11 +276,11 @@ class MoveOperationManager extends BaseModule {
           // Verify the new path matches
           const newPath = torrent.save_path || torrent.content_path;
           if (newPath && newPath.includes(clientDestPath.split('/').pop())) {
-            this.log(`📦 qBittorrent move completed: ${name} -> ${newPath}`);
+            this.log(`📦 Native move completed: ${name} -> ${newPath}`);
             return;
           }
           // Path updated, move complete
-          this.log(`📦 qBittorrent move completed: ${name}`);
+          this.log(`📦 Native move completed: ${name}`);
           return;
         }
 
@@ -291,7 +292,7 @@ class MoveOperationManager extends BaseModule {
       }
     }
 
-    throw new Error('Move timed out waiting for qBittorrent');
+    throw new Error(`Move timed out after ${maxAttempts}s waiting for ${clientType}`);
   }
 
   /**

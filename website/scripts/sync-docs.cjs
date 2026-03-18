@@ -48,7 +48,7 @@ const DESC_MAP = {
   'INTEGRATIONS': 'Sonarr, Radarr, and other *arr integrations',
   'NOTIFICATIONS': 'Push notifications via Apprise',
   'PROWLARR': 'Search torrents via Prowlarr indexers',
-  'RTORRENT': 'Connect aMuTorrent to rTorrent via XML-RPC',
+  'RTORRENT': 'Connect aMuTorrent to rTorrent via XML-RPC / SCGI',
   'QBITTORRENT': 'Connect aMuTorrent to qBittorrent via WebUI API',
   'DELUGE': 'Connect aMuTorrent to Deluge via WebUI JSON-RPC',
   'TRANSMISSION': 'Connect aMuTorrent to Transmission via RPC',

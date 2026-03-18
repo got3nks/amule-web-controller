@@ -2,7 +2,7 @@
 
 aMuTorrent can be installed using Docker (recommended) or natively.
 
-**Prerequisites:** At least one of: aMule with External Connections enabled, rTorrent with XML-RPC over HTTP, qBittorrent with WebUI enabled, Deluge with WebUI enabled, or Transmission with RPC enabled.
+**Prerequisites:** At least one of: aMule with External Connections enabled, rTorrent with XML-RPC/SCGI enabled, qBittorrent with WebUI enabled, Deluge with WebUI enabled, or Transmission with RPC enabled.
 
 ## Docker Installation (Recommended)
 

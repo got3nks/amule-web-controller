@@ -35,7 +35,12 @@ class RtorrentManager extends BaseClientManager {
       return false;
     }
 
-    if (!this._clientConfig.host) {
+    if (this._clientConfig.mode === 'scgi-socket') {
+      if (!this._clientConfig.socketPath) {
+        this.log('⚠️  rtorrent socket path not configured');
+        return false;
+      }
+    } else if (!this._clientConfig.host) {
       this.log('⚠️  rtorrent host not configured');
       return false;
     }
@@ -50,12 +55,20 @@ class RtorrentManager extends BaseClientManager {
         this.client = null;
       }
 
-      this.log(`🔌 Creating new rtorrent client (${this._clientConfig.host}:${this._clientConfig.port}${this._clientConfig.path})...`);
+      const mode = this._clientConfig.mode || 'http';
+      const modeLabel = mode === 'scgi-socket'
+        ? `SCGI socket ${this._clientConfig.socketPath}`
+        : mode === 'scgi'
+          ? `SCGI ${this._clientConfig.host}:${this._clientConfig.port}`
+          : `${this._clientConfig.host}:${this._clientConfig.port}${this._clientConfig.path || '/RPC2'}`;
+      this.log(`🔌 Creating new rtorrent client (${modeLabel})...`);
 
       const newClient = new RtorrentHandler({
         host: this._clientConfig.host,
         port: this._clientConfig.port || 8000,
         path: this._clientConfig.path || '/RPC2',
+        mode,
+        socketPath: this._clientConfig.socketPath || null,
         username: this._clientConfig.username || null,
         password: this._clientConfig.password || null,
         useSsl: this._clientConfig.useSsl || false

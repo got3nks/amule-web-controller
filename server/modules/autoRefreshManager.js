@@ -94,7 +94,12 @@ class AutoRefreshManager extends BaseModule {
         return;
       }
 
+      const batchStart = Date.now();
       const batchData = await dataFetchService.getBatchData();
+      const batchMs = Date.now() - batchStart;
+      if (batchMs > 15000) {
+        this.log(`⚠️  getBatchData() took ${(batchMs / 1000).toFixed(1)}s — data fetch cycle is slow`);
+      }
 
       // Update history status from live data (throttled to reduce SQLite writes)
       if (historyDue) {

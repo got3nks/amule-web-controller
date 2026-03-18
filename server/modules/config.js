@@ -97,9 +97,11 @@ const CLIENT_ENV_FIELDS = {
   },
   rtorrent: {
     ENABLED: { field: 'enabled', type: 'boolean' },
+    MODE: { field: 'mode', type: 'string' },
     HOST: { field: 'host', type: 'string' },
     PORT: { field: 'port', type: 'int' },
     PATH: { field: 'path', type: 'string' },
+    SOCKET_PATH: { field: 'socketPath', type: 'string' },
     USERNAME: { field: 'username', type: 'string' },
     PASSWORD: { field: 'password', type: 'string', sensitive: true },
     USE_SSL: { field: 'useSsl', type: 'boolean' },

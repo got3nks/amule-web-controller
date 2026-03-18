@@ -277,7 +277,11 @@ class AmuleManager extends BaseClientManager {
     try {
       updateData = await this.client.getUpdate();
     } catch (err) {
-      this.log('Error fetching update:', err.message);
+      this.log('❌ Error fetching update:', err.message);
+    }
+
+    if (!updateData) {
+      this.log('⚠️  getUpdate() returned no data — aMule may be unresponsive');
     }
 
     const rawDownloads = updateData?.downloads || [];

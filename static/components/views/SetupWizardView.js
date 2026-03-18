@@ -81,6 +81,7 @@ const SetupWizardView = ({ onComplete }) => {
           enabled: meta?.fromEnv?.amuleEnabled ? defaults.amule.enabled : false
         },
         rtorrent: {
+          mode: 'http',
           ...defaults.rtorrent,
           // Disabled by default unless explicitly enabled via env var
           enabled: meta?.fromEnv?.rtorrentEnabled ? defaults.rtorrent.enabled : false
@@ -207,8 +208,12 @@ const SetupWizardView = ({ onComplete }) => {
 
         // Validate rTorrent if enabled
         if (formData.rtorrent.enabled) {
-          if (!formData.rtorrent.host && !meta?.fromEnv.rtorrentHost) errors.push('rTorrent host is required');
-          if (!formData.rtorrent.port && !meta?.fromEnv.rtorrentPort) errors.push('rTorrent port is required');
+          if (formData.rtorrent.mode === 'scgi-socket') {
+            if (!formData.rtorrent.socketPath && !meta?.fromEnv.rtorrentSocketPath) errors.push('rTorrent socket path is required');
+          } else {
+            if (!formData.rtorrent.host && !meta?.fromEnv.rtorrentHost) errors.push('rTorrent host is required');
+            if (!formData.rtorrent.port && !meta?.fromEnv.rtorrentPort) errors.push('rTorrent port is required');
+          }
         }
 
         // Validate qBittorrent if enabled
@@ -828,19 +833,37 @@ const SetupWizardView = ({ onComplete }) => {
 
       // rTorrent Section
       h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mb-6' },
-        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4' }, 'rTorrent (XML-RPC)'),
+        h('h3', { className: 'text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4' }, 'rTorrent (XML-RPC / SCGI)'),
 
         h(EnableToggle, {
           label: 'Enable rTorrent',
-          description: 'Connect to rTorrent for managing BitTorrent downloads via XML-RPC',
+          description: 'Connect to rTorrent for managing BitTorrent downloads via XML-RPC or SCGI',
           enabled: formData.rtorrent.enabled,
           onChange: (enabled) => updateField('rtorrent', 'enabled', enabled)
         }),
 
         formData.rtorrent.enabled && h('div', { className: 'mt-4 space-y-4' },
+          // Connection mode selector
           h(ConfigField, {
+            label: 'Connection Mode',
+            description: 'HTTP: via XML-RPC proxy (nginx/ruTorrent). SCGI: direct TCP connection. SCGI Socket: Unix socket.'
+          },
+            h('select', {
+              value: formData.rtorrent.mode || 'http',
+              onChange: (e) => updateField('rtorrent', 'mode', e.target.value),
+              disabled: meta?.fromEnv.rtorrentMode,
+              className: 'w-full px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50'
+            },
+              h('option', { value: 'http' }, 'HTTP (XML-RPC proxy)'),
+              h('option', { value: 'scgi' }, 'SCGI (direct TCP)'),
+              h('option', { value: 'scgi-socket' }, 'SCGI (Unix socket)')
+            )
+          ),
+
+          // Host (hidden for scgi-socket)
+          formData.rtorrent.mode !== 'scgi-socket' && h(ConfigField, {
             label: 'Host',
-            description: 'rTorrent XML-RPC host address',
+            description: 'rTorrent host address',
             value: formData.rtorrent.host,
             onChange: (value) => updateField('rtorrent', 'host', value),
             placeholder: '127.0.0.1',
@@ -848,9 +871,10 @@ const SetupWizardView = ({ onComplete }) => {
             fromEnv: meta?.fromEnv.rtorrentHost
           }),
 
-          h(ConfigField, {
+          // Port (hidden for scgi-socket)
+          formData.rtorrent.mode !== 'scgi-socket' && h(ConfigField, {
             label: 'Port',
-            description: 'rTorrent XML-RPC port (default: 8000)',
+            description: 'rTorrent port (default: 8000)',
             value: formData.rtorrent.port,
             onChange: (value) => updateField('rtorrent', 'port', parseInt(value, 10) || 8000),
             type: 'number',
@@ -859,7 +883,19 @@ const SetupWizardView = ({ onComplete }) => {
             fromEnv: meta?.fromEnv.rtorrentPort
           }),
 
-          h(ConfigField, {
+          // Socket path (only for scgi-socket)
+          formData.rtorrent.mode === 'scgi-socket' && h(ConfigField, {
+            label: 'Socket Path',
+            description: 'Path to rTorrent SCGI Unix socket',
+            value: formData.rtorrent.socketPath || '',
+            onChange: (value) => updateField('rtorrent', 'socketPath', value),
+            placeholder: '/path/to/rtorrent.sock',
+            required: formData.rtorrent.enabled,
+            fromEnv: meta?.fromEnv.rtorrentSocketPath
+          }),
+
+          // XML-RPC path (only for http mode)
+          formData.rtorrent.mode === 'http' && h(ConfigField, {
             label: 'XML-RPC Path',
             description: 'Path for XML-RPC endpoint (default: /RPC2)',
             value: formData.rtorrent.path,
@@ -868,7 +904,8 @@ const SetupWizardView = ({ onComplete }) => {
             fromEnv: meta?.fromEnv.rtorrentPath
           }),
 
-          h(ConfigField, {
+          // Username (only for http mode)
+          formData.rtorrent.mode === 'http' && h(ConfigField, {
             label: 'Username (Optional)',
             description: 'Username for HTTP basic authentication (if required)',
             value: formData.rtorrent.username,
@@ -877,7 +914,8 @@ const SetupWizardView = ({ onComplete }) => {
             fromEnv: meta?.fromEnv.rtorrentUsername
           }),
 
-          !meta?.fromEnv.rtorrentPassword && h(ConfigField, {
+          // Password (only for http mode)
+          formData.rtorrent.mode === 'http' && !meta?.fromEnv.rtorrentPassword && h(ConfigField, {
             label: 'Password (Optional)',
             description: 'Password for HTTP basic authentication (if required)',
             fromEnv: meta?.fromEnv.rtorrentPassword
@@ -890,11 +928,12 @@ const SetupWizardView = ({ onComplete }) => {
             })
           ),
 
-          meta?.fromEnv.rtorrentPassword && h(AlertBox, { type: 'warning' },
+          formData.rtorrent.mode === 'http' && meta?.fromEnv.rtorrentPassword && h(AlertBox, { type: 'warning' },
             h('p', {}, 'rTorrent password is set via RTORRENT_PASSWORD environment variable.')
           ),
 
-          h(EnableToggle, {
+          // SSL (only for http mode)
+          formData.rtorrent.mode === 'http' && h(EnableToggle, {
             label: 'Use SSL (HTTPS)',
             description: 'Connect to rTorrent using HTTPS',
             enabled: formData.rtorrent?.useSsl || false,
@@ -1132,7 +1171,7 @@ const SetupWizardView = ({ onComplete }) => {
         h(TestButton, {
           onClick: handleTestCurrentStep,
           loading: isTesting,
-          disabled: (formData.rtorrent.enabled && (!formData.rtorrent.host || !formData.rtorrent.port)) ||
+          disabled: (formData.rtorrent.enabled && (formData.rtorrent.mode === 'scgi-socket' ? !formData.rtorrent.socketPath : (!formData.rtorrent.host || !formData.rtorrent.port))) ||
                     (formData.qbittorrent?.enabled && (!formData.qbittorrent.host || !formData.qbittorrent.port)) ||
                     (formData.deluge?.enabled && (!formData.deluge.host || !formData.deluge.port)) ||
                     (formData.transmission?.enabled && (!formData.transmission.host || !formData.transmission.port))
@@ -1440,11 +1479,16 @@ const SetupWizardView = ({ onComplete }) => {
       // rtorrent
       formData.rtorrent.enabled && h('div', { className: 'bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700' },
         h('h3', { className: 'font-semibold text-gray-900 dark:text-gray-100 mb-2' }, 'rTorrent Connection'),
-        h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Host: ${formData.rtorrent.host}`),
-        h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Port: ${formData.rtorrent.port}`),
-        h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Path: ${formData.rtorrent.path || '/RPC2'}`),
-        formData.rtorrent.username && h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Username: ${formData.rtorrent.username}`),
-        formData.rtorrent.useSsl && h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, 'SSL: Enabled')
+        h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Mode: ${formData.rtorrent.mode === 'scgi-socket' ? 'SCGI (Unix socket)' : formData.rtorrent.mode === 'scgi' ? 'SCGI (direct TCP)' : 'HTTP (XML-RPC proxy)'}`),
+        formData.rtorrent.mode === 'scgi-socket'
+          ? h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Socket: ${formData.rtorrent.socketPath}`)
+          : [
+              h('p', { key: 'host', className: 'text-sm text-gray-600 dark:text-gray-400' }, `Host: ${formData.rtorrent.host}`),
+              h('p', { key: 'port', className: 'text-sm text-gray-600 dark:text-gray-400' }, `Port: ${formData.rtorrent.port}`)
+            ],
+        formData.rtorrent.mode === 'http' && formData.rtorrent.path && h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Path: ${formData.rtorrent.path}`),
+        formData.rtorrent.mode === 'http' && formData.rtorrent.username && h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, `Username: ${formData.rtorrent.username}`),
+        formData.rtorrent.mode === 'http' && formData.rtorrent.useSsl && h('p', { className: 'text-sm text-gray-600 dark:text-gray-400' }, 'SSL: Enabled')
       ),
 
       // qBittorrent

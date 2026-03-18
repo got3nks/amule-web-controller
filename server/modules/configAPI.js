@@ -55,9 +55,11 @@ class ConfigAPI extends BaseModule {
       amulePassword: config.isFromEnv('amule.password'),
       amuleSharedFilesReloadInterval: config.isFromEnv('amule.sharedFilesReloadIntervalHours'),
       rtorrentEnabled: config.isFromEnv('rtorrent.enabled'),
+      rtorrentMode: config.isFromEnv('rtorrent.mode'),
       rtorrentHost: config.isFromEnv('rtorrent.host'),
       rtorrentPort: config.isFromEnv('rtorrent.port'),
       rtorrentPath: config.isFromEnv('rtorrent.path'),
+      rtorrentSocketPath: config.isFromEnv('rtorrent.socketPath'),
       rtorrentUsername: config.isFromEnv('rtorrent.username'),
       rtorrentPassword: config.isFromEnv('rtorrent.password'),
       rtorrentUseSsl: config.isFromEnv('rtorrent.useSsl'),
@@ -138,7 +140,8 @@ class ConfigAPI extends BaseModule {
   logTestResult(name, result) {
     const success = result.success || result.available;
     const emoji = success ? '✅' : '❌';
-    this.log(`${name} test: ${emoji}${result.warning ? ' ⚠️  ' + result.warning : ''}`);
+    const detail = result.warning ? ' ⚠️  ' + result.warning : (!success && result.error ? ' — ' + result.error : '');
+    this.log(`${name} test: ${emoji}${detail}`);
   }
 
   // ==========================================================================
@@ -292,14 +295,22 @@ class ConfigAPI extends BaseModule {
       // Test rtorrent connection if provided and enabled
       if (rtorrent && rtorrent.enabled) {
         const password = rtorrent.password || (rtorrent.instanceId ? config.getClientConfig(rtorrent.instanceId)?.password : null);
-        this.log(`🧪 Testing rtorrent connection to ${rtorrent.host}:${rtorrent.port}${rtorrent.path || '/RPC2'}...`);
+        const rtMode = rtorrent.mode || 'http';
+        const rtLogTarget = rtMode === 'scgi-socket'
+          ? `SCGI socket ${rtorrent.socketPath}`
+          : rtMode === 'scgi'
+            ? `SCGI ${rtorrent.host}:${rtorrent.port}`
+            : `${rtorrent.host}:${rtorrent.port}${rtorrent.path || '/RPC2'}`;
+        this.log(`🧪 Testing rtorrent connection to ${rtLogTarget}...`);
         results.rtorrent = await configTester.testRtorrentConnection(
           rtorrent.host,
           rtorrent.port,
           rtorrent.path,
           rtorrent.username,
           password,
-          rtorrent.useSsl
+          rtorrent.useSsl,
+          rtorrent.mode,
+          rtorrent.socketPath
         );
         this.logTestResult('rtorrent connection', results.rtorrent);
       }

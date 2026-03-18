@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.2] - Direct SCGI Connection for rTorrent & Diagnostic Logging
+
+### ✨ Added
+
+- **rTorrent SCGI connection modes** — connect directly to rTorrent via SCGI TCP or Unix socket, bypassing the need for an HTTP proxy (nginx/ruTorrent). Three modes available: HTTP (default, existing behavior), SCGI (direct TCP), and SCGI Socket (Unix domain socket)
+- **Connection mode selector** — new dropdown in both Settings and Setup Wizard for rTorrent instances, with conditional field visibility based on the selected mode (host/port for TCP modes, socket path for Unix socket, XML-RPC path/auth/SSL for HTTP only)
+- **SCGI environment variables** — `RTORRENT_MODE` and `RTORRENT_SOCKET_PATH` for Docker/env-based configuration
+- **Data fetch diagnostics** — warnings logged when a connected client suddenly returns empty data, when an individual client fetch takes >10s, or when the full batch cycle exceeds 15s
+- **aMule fetch diagnostics** — warning logged when `getUpdate()` returns no data, indicating potential connection issues
+- **Config test error logging** — failed connection tests now log the error message (previously only showed pass/fail emoji)
+
+---
+
 ## [3.4.1] - Global Drag-and-Drop, Loading States & Bug Fixes
 
 ### ✨ Added

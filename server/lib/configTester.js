@@ -163,16 +163,18 @@ async function testAmuleConnection(host, port, password) {
 }
 
 /**
- * Test rtorrent connection via XML-RPC
+ * Test rtorrent connection via XML-RPC (HTTP, SCGI TCP, or SCGI Unix socket)
  * @param {string} host - rtorrent XML-RPC host
  * @param {number} port - rtorrent XML-RPC port
  * @param {string} rpcPath - XML-RPC path (e.g., /RPC2)
  * @param {string} username - Optional username for basic auth
  * @param {string} password - Optional password for basic auth
  * @param {boolean} useSsl - Whether to use HTTPS
+ * @param {string} mode - Connection mode: 'http' | 'scgi' | 'scgi-socket'
+ * @param {string} socketPath - Unix socket path (for scgi-socket mode)
  * @returns {Promise<{success: boolean, connected: boolean, version: string|null, error: string|null}>}
  */
-async function testRtorrentConnection(host, port, rpcPath, username, password, useSsl) {
+async function testRtorrentConnection(host, port, rpcPath, username, password, useSsl, mode, socketPath) {
   const result = {
     success: false,
     connected: false,
@@ -180,7 +182,12 @@ async function testRtorrentConnection(host, port, rpcPath, username, password, u
     error: null
   };
 
-  if (!host) {
+  if (mode === 'scgi-socket') {
+    if (!socketPath) {
+      result.error = 'Socket path is required for SCGI socket mode';
+      return result;
+    }
+  } else if (!host) {
     result.error = 'Host is required';
     return result;
   }
@@ -193,6 +200,8 @@ async function testRtorrentConnection(host, port, rpcPath, username, password, u
       host,
       port: port || 8000,
       path: rpcPath || '/RPC2',
+      mode: mode || 'http',
+      socketPath: socketPath || null,
       username: username || null,
       password: password || null,
       useSsl: useSsl || false

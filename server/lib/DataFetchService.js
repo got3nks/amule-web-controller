@@ -222,11 +222,30 @@ class DataFetchService extends BaseModule {
     // Fetch data from all connected clients via unified fetchData() interface
     for (const manager of registry.getConnected()) {
       try {
+        const fetchStart = Date.now();
         const data = await manager.fetchData(categoriesForNormalizer);
+        const fetchMs = Date.now() - fetchStart;
+
+        // Warn if fetch took unusually long (>10s — EC timeout is 30s)
+        if (fetchMs > 10000) {
+          this.log(`⚠️  ${manager.instanceId} fetchData() took ${(fetchMs / 1000).toFixed(1)}s`);
+        }
+
+        const dlCount = data.downloads?.length || 0;
+        const sharedCount = data.sharedFiles?.length || 0;
+
+        // Detect sudden data drop: previously had items, now returning empty
+        const prevDl = manager._lastFetchCounts?.downloads || 0;
+        const prevShared = manager._lastFetchCounts?.shared || 0;
+        if ((prevDl > 0 && dlCount === 0) || (prevShared > 0 && sharedCount === 0)) {
+          this.log(`⚠️  ${manager.instanceId} returned empty data (downloads: ${prevDl}→${dlCount}, shared: ${prevShared}→${sharedCount}) — client may have lost connection`);
+        }
+        manager._lastFetchCounts = { downloads: dlCount, shared: sharedCount };
+
         allDownloads = allDownloads.concat(data.downloads);
         allShared = allShared.concat(data.sharedFiles);
       } catch (err) {
-        this.log(`Error fetching ${manager.instanceId} data:`, err.message);
+        this.log(`❌ Error fetching ${manager.instanceId} data:`, err.message);
       }
     }
 

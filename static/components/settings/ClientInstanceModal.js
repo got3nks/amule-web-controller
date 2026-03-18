@@ -28,12 +28,14 @@ const CLIENT_FIELDS = {
     { field: 'sharedFilesReloadIntervalHours', label: 'Shared Files Auto-Reload Interval (hours)', description: 'Hours between automatic shared files reload (0 = disabled, default: 3). This makes aMule rescan shared directories periodically.', placeholder: '3', type: 'number', parseValue: v => parseInt(v) || 0, defaultValue: 3 }
   ],
   rtorrent: [
-    { field: 'host', label: 'Host', description: 'rTorrent XML-RPC host address', placeholder: '127.0.0.1', required: true },
-    { field: 'port', label: 'Port', description: 'rTorrent XML-RPC port (default: 8000)', placeholder: '8000', type: 'number', required: true, parseValue: v => parseInt(v, 10) || 8000 },
-    { field: 'path', label: 'XML-RPC Path', description: 'Path for XML-RPC endpoint (default: /RPC2)', placeholder: '/RPC2', defaultValue: '/RPC2' },
-    { field: 'username', label: 'Username (Optional)', description: 'Username for HTTP basic authentication (if required)', placeholder: 'Leave empty if not required' },
-    { field: 'password', label: 'Password (Optional)', description: 'Password for HTTP basic authentication (if required)', placeholder: 'Leave empty if not required', sensitive: true },
-    { field: 'useSsl', label: 'Use SSL (HTTPS)', description: 'Connect to rTorrent using HTTPS', toggle: true }
+    { field: 'mode', label: 'Connection Mode', description: 'HTTP: Connect via XML-RPC HTTP proxy (nginx/ruTorrent). SCGI: Connect directly to rTorrent via SCGI TCP. SCGI Socket: Connect via Unix domain socket.', select: true, options: [{ value: 'http', label: 'HTTP (XML-RPC proxy)' }, { value: 'scgi', label: 'SCGI (direct TCP)' }, { value: 'scgi-socket', label: 'SCGI (Unix socket)' }], defaultValue: 'http' },
+    { field: 'host', label: 'Host', description: 'rTorrent host address', placeholder: '127.0.0.1', required: true, hideWhen: form => (form.mode || 'http') === 'scgi-socket' },
+    { field: 'port', label: 'Port', description: 'rTorrent port (default: 8000)', placeholder: '8000', type: 'number', required: true, parseValue: v => parseInt(v, 10) || 8000, hideWhen: form => (form.mode || 'http') === 'scgi-socket' },
+    { field: 'socketPath', label: 'Socket Path', description: 'Path to rTorrent SCGI Unix socket', placeholder: '/path/to/rtorrent.sock', required: true, hideWhen: form => (form.mode || 'http') !== 'scgi-socket' },
+    { field: 'path', label: 'XML-RPC Path', description: 'Path for XML-RPC endpoint (default: /RPC2)', placeholder: '/RPC2', defaultValue: '/RPC2', hideWhen: form => (form.mode || 'http') !== 'http' },
+    { field: 'username', label: 'Username (Optional)', description: 'Username for HTTP basic authentication (if required)', placeholder: 'Leave empty if not required', hideWhen: form => (form.mode || 'http') !== 'http' },
+    { field: 'password', label: 'Password (Optional)', description: 'Password for HTTP basic authentication (if required)', placeholder: 'Leave empty if not required', sensitive: true, hideWhen: form => (form.mode || 'http') !== 'http' },
+    { field: 'useSsl', label: 'Use SSL (HTTPS)', description: 'Connect to rTorrent using HTTPS', toggle: true, hideWhen: form => (form.mode || 'http') !== 'http' }
   ],
   qbittorrent: [
     { field: 'host', label: 'Host', description: 'qBittorrent WebUI host address', placeholder: '127.0.0.1', required: true },
@@ -69,7 +71,7 @@ const TYPE_LABELS = {
 
 const TYPE_DEFAULTS = {
   amule: { host: '127.0.0.1', port: 4712, password: '', sharedFilesReloadIntervalHours: 3 },
-  rtorrent: { host: '127.0.0.1', port: 8000, path: '/RPC2', username: '', password: '', useSsl: false },
+  rtorrent: { mode: 'http', host: '127.0.0.1', port: 8000, path: '/RPC2', socketPath: '', username: '', password: '', useSsl: false },
   qbittorrent: { host: '127.0.0.1', port: 8080, username: 'admin', password: '', useSsl: false },
   deluge: { host: '127.0.0.1', port: 8112, password: '', useSsl: false },
   transmission: { host: '127.0.0.1', port: 9091, path: '/transmission/rpc', username: '', password: '', useSsl: false }
@@ -79,7 +81,7 @@ const INSTANCE_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#9b59b6', '#e67e22', 
 
 const TYPE_DESCRIPTIONS = {
   amule: 'ED2K / Kademlia downloads',
-  rtorrent: 'BitTorrent via XML-RPC',
+  rtorrent: 'BitTorrent via XML-RPC / SCGI',
   qbittorrent: 'BitTorrent via WebUI API',
   deluge: 'BitTorrent via WebUI JSON-RPC',
   transmission: 'BitTorrent via HTTP RPC'
@@ -147,6 +149,9 @@ const ClientInstanceModal = ({ isOpen, onClose, onSave, onTest, editClient = nul
   };
 
   const canTest = isEnabled && (() => {
+    if (formState.type === 'rtorrent' && formState.mode === 'scgi-socket') {
+      return !!formState.socketPath;
+    }
     if (!formState.host || !formState.port) return false;
     if (formState.type === 'amule' && !formState.password && !isFieldFromEnv('password')) return false;
     return true;
@@ -309,7 +314,30 @@ const ClientInstanceModal = ({ isOpen, onClose, onSave, onTest, editClient = nul
           ),
 
           // Type-specific fields
-          ...fields.map(fieldDef => {
+          ...fields
+            .filter(fieldDef => !fieldDef.hideWhen || !fieldDef.hideWhen(formState))
+            .map(fieldDef => {
+            // Select dropdown fields
+            if (fieldDef.select) {
+              const value = formState[fieldDef.field] ?? fieldDef.defaultValue ?? '';
+              return h(ConfigField, {
+                key: fieldDef.field,
+                label: fieldDef.label,
+                description: fieldDef.description
+              },
+                h('select', {
+                  value,
+                  onChange: (e) => handleFieldChange(fieldDef.field, e.target.value),
+                  disabled: testing || isFieldFromEnv(fieldDef.field),
+                  className: 'w-full px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50'
+                },
+                  fieldDef.options.map(opt =>
+                    h('option', { key: opt.value, value: opt.value }, opt.label)
+                  )
+                )
+              );
+            }
+
             if (fieldDef.toggle) {
               return h(EnableToggle, {
                 key: fieldDef.field,

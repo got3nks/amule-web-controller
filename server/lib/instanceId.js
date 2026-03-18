@@ -30,9 +30,15 @@ const VALID_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
  * @param {string} type - Client type key (e.g. 'qbittorrent')
  * @param {string} host - Configured host/IP
  * @param {number|string} port - Configured port
+ * @param {string} [socketPath] - Unix socket path (for SCGI socket mode)
  * @returns {string} Deterministic instance ID
  */
-function generateId(type, host, port) {
+function generateId(type, host, port, socketPath) {
+  if (socketPath) {
+    // Sanitize socket path: replace slashes and colons with underscores
+    const safePath = String(socketPath).replace(/[/:]/g, '_').replace(/^_+/, '');
+    return `${type}-socket-${safePath}`;
+  }
   const safeHost = String(host).replace(/:/g, '_');
   return `${type}-${safeHost}-${port}`;
 }
@@ -46,7 +52,7 @@ function generateId(type, host, port) {
  * @returns {string} Resolved instance ID
  */
 function resolveId(entry) {
-  return entry.id || generateId(entry.type, entry.host, entry.port);
+  return entry.id || generateId(entry.type, entry.host, entry.port, entry.socketPath);
 }
 
 /**

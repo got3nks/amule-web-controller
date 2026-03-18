@@ -162,12 +162,14 @@ services:
 
       # rTorrent Connection (optional)
       - RTORRENT_ENABLED=true
-      - RTORRENT_HOST=rtorrent
-      - RTORRENT_PORT=8000
-      - RTORRENT_PATH=/RPC2
-      - RTORRENT_USERNAME=user
-      - RTORRENT_PASSWORD=pass  # Locks UI editing
-      - RTORRENT_USE_SSL=false
+      - RTORRENT_MODE=http         # http, scgi, or scgi-socket
+      - RTORRENT_HOST=rtorrent     # For http/scgi modes
+      - RTORRENT_PORT=8000         # For http/scgi modes
+      - RTORRENT_PATH=/RPC2        # For http mode only
+      - RTORRENT_SOCKET_PATH=      # For scgi-socket mode only
+      - RTORRENT_USERNAME=user     # For http mode only
+      - RTORRENT_PASSWORD=pass     # For http mode only (locks UI editing)
+      - RTORRENT_USE_SSL=false     # For http mode only
 
       # qBittorrent Connection (optional)
       - QBITTORRENT_ENABLED=true
@@ -254,12 +256,14 @@ services:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RTORRENT_ENABLED` | `false` | Enable rTorrent integration |
-| `RTORRENT_HOST` | `localhost` | rTorrent XML-RPC hostname |
-| `RTORRENT_PORT` | `8000` | rTorrent XML-RPC port |
-| `RTORRENT_PATH` | `/RPC2` | XML-RPC endpoint path |
-| `RTORRENT_USERNAME` | - | HTTP auth username (if required) |
-| `RTORRENT_PASSWORD` | - | HTTP auth password (locks UI editing) |
-| `RTORRENT_USE_SSL` | `false` | Use HTTPS for XML-RPC connection |
+| `RTORRENT_MODE` | `http` | Connection mode: `http` (XML-RPC proxy), `scgi` (direct TCP), `scgi-socket` (Unix socket) |
+| `RTORRENT_HOST` | `localhost` | rTorrent hostname (http/scgi modes) |
+| `RTORRENT_PORT` | `8000` | rTorrent port (http/scgi modes) |
+| `RTORRENT_PATH` | `/RPC2` | XML-RPC endpoint path (http mode only) |
+| `RTORRENT_SOCKET_PATH` | - | Unix socket path (scgi-socket mode only) |
+| `RTORRENT_USERNAME` | - | HTTP auth username (http mode only) |
+| `RTORRENT_PASSWORD` | - | HTTP auth password (http mode only, locks UI editing) |
+| `RTORRENT_USE_SSL` | `false` | Use HTTPS (http mode only) |
 
 #### qBittorrent Connection
 

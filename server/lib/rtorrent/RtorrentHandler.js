@@ -7,12 +7,15 @@
 const xmlrpc = require('xmlrpc');
 const peerid = require('bittorrent-peerid');
 const logger = require('../logger');
+const ScgiTransport = require('./ScgiTransport');
 
 class RtorrentHandler {
   constructor(options = {}) {
     this.host = options.host || 'localhost';
     this.port = options.port || 8000;
     this.path = options.path || '/RPC2';
+    this.mode = options.mode || 'http';           // 'http' | 'scgi' | 'scgi-socket'
+    this.socketPath = options.socketPath || null;  // for scgi-socket mode
     this.username = options.username || null;
     this.password = options.password || null;
     this.useSsl = options.useSsl || false;
@@ -22,31 +25,43 @@ class RtorrentHandler {
   }
 
   /**
-   * Initialize the XML-RPC client
+   * Initialize the XML-RPC client (HTTP, SCGI TCP, or SCGI Unix socket)
    */
   connect() {
-    const clientOptions = {
-      host: this.host,
-      port: this.port,
-      path: this.path
-    };
-
-    // Add basic auth if credentials provided
-    if (this.username && this.password) {
-      clientOptions.basic_auth = {
-        user: this.username,
-        pass: this.password
+    if (this.mode === 'scgi') {
+      this.client = new ScgiTransport({
+        host: this.host,
+        port: this.port
+      });
+    } else if (this.mode === 'scgi-socket') {
+      this.client = new ScgiTransport({
+        socketPath: this.socketPath
+      });
+    } else {
+      // HTTP XML-RPC (existing behavior)
+      const clientOptions = {
+        host: this.host,
+        port: this.port,
+        path: this.path
       };
-    }
 
-    // Allow self-signed certificates when using SSL
-    if (this.useSsl) {
-      clientOptions.rejectUnauthorized = false;
-    }
+      // Add basic auth if credentials provided
+      if (this.username && this.password) {
+        clientOptions.basic_auth = {
+          user: this.username,
+          pass: this.password
+        };
+      }
 
-    this.client = this.useSsl
-      ? xmlrpc.createSecureClient(clientOptions)
-      : xmlrpc.createClient(clientOptions);
+      // Allow self-signed certificates when using SSL
+      if (this.useSsl) {
+        clientOptions.rejectUnauthorized = false;
+      }
+
+      this.client = this.useSsl
+        ? xmlrpc.createSecureClient(clientOptions)
+        : xmlrpc.createClient(clientOptions);
+    }
     return this;
   }
 

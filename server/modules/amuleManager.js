@@ -364,7 +364,8 @@ class AmuleManager extends BaseClientManager {
       return {};
     }
     try {
-      return await this.client.getStats();
+      const stats = await this.client.getStats();
+      return stats || {};
     } catch (err) {
       this.log('❌ Error fetching aMule stats:', logger.errorDetail(err));
       return {};

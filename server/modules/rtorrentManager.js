@@ -151,13 +151,9 @@ class RtorrentManager extends BaseClientManager {
       return downloads;
     } catch (err) {
       this.log('❌ Error fetching rtorrent downloads:', logger.errorDetail(err));
-      // Connection might be lost, mark as disconnected
-      const errDetail = logger.errorDetail(err);
-      if (errDetail.includes('ECONNREFUSED') || errDetail.includes('socket hang up')) {
-        this._setConnectionError(err);
-        this.client = null;
-        this.scheduleReconnect(30000);
-      }
+      this._setConnectionError(err);
+      this.client = null;
+      this.scheduleReconnect(30000);
       return this.lastDownloads; // Return cached data on error
     }
   }

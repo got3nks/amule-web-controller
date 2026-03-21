@@ -6,7 +6,7 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { Table, Icon, MobileCardHeader } from './index.js';
+import { Table, Icon, MobileCardHeader, Tooltip } from './index.js';
 import { formatBytes, formatDateTime, getMobileCardRowClass } from '../../utils/index.js';
 
 const { createElement: h, useCallback, useMemo } = React;
@@ -119,7 +119,8 @@ export const PROWLARR_RESULTS_COLUMNS = [
  * @param {Array} loadedData - Sliced results for mobile load-more
  * @param {object} sortConfig - Current sort configuration
  * @param {function} onSortChange - Sort change handler
- * @param {Set} downloadedFiles - Set of downloaded file hashes
+ * @param {Map} downloadedFiles - Map of hash → Set<instanceId> for downloaded files
+ * @param {string} activeInstanceId - Currently selected client instance ID
  * @param {Set} selectedFiles - Set of selected file hashes
  * @param {function} onToggleSelection - Toggle selection handler (receives fileHash)
  * @param {number} loadedCount - Number of items currently loaded (for mobile)
@@ -141,6 +142,8 @@ const SearchResultsList = ({
   sortConfig,
   onSortChange,
   downloadedFiles,
+  activeInstanceId,
+  connectedClientIds = [],
   selectedFiles,
   onToggleSelection,
   loadedCount,
@@ -159,25 +162,35 @@ const SearchResultsList = ({
   // Select columns based on result type (use custom columns if provided)
   const baseColumns = customColumns || (isProwlarr ? PROWLARR_RESULTS_COLUMNS : SEARCH_RESULTS_COLUMNS);
 
+  // Helper: check download status for an item
+  const getDownloadStatus = useCallback((fileHash) => {
+    const instances = downloadedFiles.get(fileHash);
+    if (!instances || instances.size === 0) return { downloaded: false, onActiveInstance: false, onAllInstances: false };
+    const onActive = activeInstanceId ? instances.has(activeInstanceId) : instances.size > 0;
+    const onAll = connectedClientIds.length > 0 && connectedClientIds.every(id => instances.has(id));
+    return { downloaded: true, onActiveInstance: onActive, onAllInstances: onAll };
+  }, [downloadedFiles, activeInstanceId, connectedClientIds]);
+
   // Desktop columns with selection-aware fileName render
   const columnsWithSelection = useMemo(() =>
     baseColumns.map(col =>
       col.key === 'fileName'
-        ? { ...col, render: (item) =>
-            h('div', {
-              className: 'font-medium text-xs break-words whitespace-normal cursor-pointer hover:underline decoration-dotted',
+        ? { ...col, render: (item) => {
+            const { onAllInstances } = getDownloadStatus(item.fileHash);
+            return h('div', {
+              className: `font-medium text-xs break-words whitespace-normal ${onAllInstances ? '' : 'cursor-pointer hover:underline decoration-dotted'}`,
               style: { wordBreak: 'break-all', overflowWrap: 'anywhere' },
-              onClick: () => onToggleSelection(item.fileHash)
-            }, item.fileName)
-          }
+              onClick: onAllInstances ? undefined : () => onToggleSelection(item.fileHash)
+            }, item.fileName);
+          }}
         : col
     ),
-    [baseColumns, onToggleSelection]
+    [baseColumns, onToggleSelection, getDownloadStatus]
   );
 
   // Mobile card renderer using MobileCardHeader
   const renderMobileCard = useCallback((item, idx) => {
-    const isDownloaded = downloadedFiles.has(item.fileHash);
+    const { downloaded, onActiveInstance, onAllInstances } = getDownloadStatus(item.fileHash);
     const isSelected = selectedFiles.has(item.fileHash);
     return h('div', {
       className: `${getMobileCardRowClass(idx)}${isSelected ? ' !bg-purple-100 dark:!bg-purple-900/40' : ''}`
@@ -185,17 +198,27 @@ const SearchResultsList = ({
       h(MobileCardHeader, {
         showBadge: false,
         fileName: item.fileName,
-        onNameClick: () => onToggleSelection(item.fileHash),
-        actions: isDownloaded
-          ? h('div', { className: 'flex items-center justify-center w-8 h-8' },
-              h(Icon, { name: 'check', size: 18, className: 'text-green-500' })
+        onNameClick: onAllInstances ? undefined : () => onToggleSelection(item.fileHash),
+        actions: onActiveInstance
+          ? h(Tooltip, { content: onAllInstances ? 'Downloaded on all clients' : 'Already downloaded — tap to select for another client' },
+              h('div', {
+                className: `flex items-center justify-center w-8 h-8 ${onAllInstances ? '' : 'cursor-pointer'}`,
+                onClick: onAllInstances ? undefined : () => onToggleSelection(item.fileHash)
+              },
+                h(Icon, { name: 'check', size: 18, className: onAllInstances ? 'text-green-400 opacity-60' : 'text-green-500' })
+              )
             )
-          : h('input', {
-              type: 'checkbox',
-              checked: isSelected,
-              onChange: () => onToggleSelection(item.fileHash),
-              className: 'w-5 h-5 text-purple-600 border-gray-300 rounded cursor-pointer'
-            })
+          : h('div', { className: 'relative' },
+              h('input', {
+                type: 'checkbox',
+                checked: isSelected,
+                onChange: () => onToggleSelection(item.fileHash),
+                className: 'w-5 h-5 text-purple-600 border-gray-300 rounded cursor-pointer'
+              }),
+              downloaded && h(Tooltip, { content: 'Downloaded on another client' },
+                h('div', { className: 'absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full border border-white dark:border-gray-800' })
+              )
+            )
       },
         // Detail row: Size and Sources/Seeders
         h('div', { className: 'flex items-center gap-1 text-xs text-gray-700 dark:text-gray-300 flex-wrap' },
@@ -224,25 +247,34 @@ const SearchResultsList = ({
         )
       )
     );
-  }, [downloadedFiles, selectedFiles, onToggleSelection, isProwlarr]);
+  }, [getDownloadStatus, selectedFiles, onToggleSelection, isProwlarr]);
 
   // Desktop actions renderer — checkbox or green check icon
   const renderActions = useCallback((item) => {
-    const isDownloaded = downloadedFiles.has(item.fileHash);
-    if (isDownloaded) {
-      return h('div', { className: 'flex items-center justify-center' },
-        h(Icon, { name: 'check', size: 16, className: 'text-green-500' })
+    const { downloaded, onActiveInstance, onAllInstances } = getDownloadStatus(item.fileHash);
+    if (onActiveInstance) {
+      const tooltipMsg = onAllInstances ? 'Downloaded on all clients' : 'Already downloaded — click to select for another client';
+      return h(Tooltip, { content: tooltipMsg, position: 'left' },
+        h('div', {
+          className: `flex items-center justify-center ${onAllInstances ? '' : 'cursor-pointer'}`,
+          onClick: onAllInstances ? undefined : () => onToggleSelection(item.fileHash)
+        },
+          h(Icon, { name: 'check', size: 16, className: onAllInstances ? 'text-green-400 opacity-60' : 'text-green-500' })
+        )
       );
     }
-    return h('div', { className: 'flex items-center justify-center' },
+    return h('div', { className: 'flex items-center justify-center relative' },
       h('input', {
         type: 'checkbox',
         checked: selectedFiles.has(item.fileHash),
         onChange: () => onToggleSelection(item.fileHash),
         className: 'w-4 h-4 text-purple-600 border-gray-300 rounded cursor-pointer'
-      })
+      }),
+      downloaded && h(Tooltip, { content: 'Downloaded on another client', position: 'left' },
+        h('div', { className: 'absolute -top-1 -right-1 w-2.5 h-2.5 bg-green-500 rounded-full border border-white dark:border-gray-800' })
+      )
     );
-  }, [downloadedFiles, selectedFiles, onToggleSelection]);
+  }, [getDownloadStatus, selectedFiles, onToggleSelection]);
 
   // Row highlight for selected items
   const getRowClassName = useCallback((item) => {

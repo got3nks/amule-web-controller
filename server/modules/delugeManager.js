@@ -170,14 +170,11 @@ class DelugeManager extends BaseClientManager {
       return torrentArray;
     } catch (err) {
       this.log('Error fetching Deluge torrents:', logger.errorDetail(err));
-      const errDetail = logger.errorDetail(err);
-      if (errDetail.includes('ECONNREFUSED') || errDetail.includes('timeout') || errDetail.includes('403')) {
-        this._setConnectionError(err);
-        if (this.client) {
-          this.client.connected = false;
-        }
-        this.scheduleReconnect(30000);
+      this._setConnectionError(err);
+      if (this.client) {
+        this.client.connected = false;
       }
+      this.scheduleReconnect(30000);
       return this.lastTorrents; // Return cached data on error
     }
   }

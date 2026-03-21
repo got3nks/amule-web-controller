@@ -167,10 +167,15 @@ const useWebSocketActions = () => {
   const handleBatchDownload = (fileHashes, categoryName = null) => {
     const downloadCategory = categoryName !== null ? categoryName : searchDownloadCategory;
     // Send category name to backend - it will look up the aMule ID if needed
+    const targetInstance = searchInstanceId || 'amule';
     sendMessage({ action: 'batchDownloadSearchResults', fileHashes, categoryName: downloadCategory, ...(searchInstanceId && { instanceId: searchInstanceId }) });
     setDataDownloadedFiles(prev => {
-      const next = new Set(prev);
-      fileHashes.forEach(h => next.add(h));
+      const next = new Map(prev);
+      fileHashes.forEach(h => {
+        const instances = next.get(h) || new Set();
+        instances.add(targetInstance);
+        next.set(h, instances);
+      });
       return next;
     });
   };

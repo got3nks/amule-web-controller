@@ -7,7 +7,7 @@
  */
 
 import React from 'https://esm.sh/react@18.2.0';
-import { SearchResultsList, SEARCH_RESULTS_COLUMNS, PROWLARR_RESULTS_COLUMNS, FilterInput, MobileSortButton, ExpandableSearch, Select, Button, Icon, SelectionModeSection, ClientIcon, MobileFilterSheet, MobileFilterPills, MobileFilterButton, LoadingSpinner } from './index.js';
+import { SearchResultsList, SEARCH_RESULTS_COLUMNS, PROWLARR_RESULTS_COLUMNS, FilterInput, MobileSortButton, ExpandableSearch, Select, Button, Icon, SelectionModeSection, ClientIcon, MobileFilterSheet, MobileFilterPills, MobileFilterButton, LoadingSpinner, Tooltip } from './index.js';
 import { DEFAULT_SORT_CONFIG, sortFiles, calculateLoadMore, VIEW_TITLE_STYLES, makeFilterHeaderRender, createIndexerFilter } from '../../utils/index.js';
 import { useAppState } from '../../contexts/AppStateContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
@@ -46,7 +46,7 @@ const SearchResultsSection = ({
   // Get data from contexts
   const { appPage, appPageSize, appSortConfig, setAppPage, setAppPageSize, setAppSortConfig, addAppSuccess } = useAppState();
   const { dataDownloadedFiles, setDataDownloadedFiles, downloadedAliasRef, dataCategories } = useStaticData();
-  const { searchDownloadCategory, setSearchDownloadCategory } = useSearch();
+  const { searchDownloadCategory, setSearchDownloadCategory, searchInstanceId } = useSearch();
   const actions = useActions();
   const { hasCap } = useCapabilities();
   const canAddDownloads = hasCap('add_downloads');
@@ -228,15 +228,22 @@ const SearchResultsSection = ({
     });
   }, [isProwlarr, indexerFilter, indexerOptions, resetLoaded]);
 
-  // Count of downloadable (not already downloaded) selected items
+  // Count of downloadable (not already downloaded on the selected client) selected items
+  const activeInstanceId = isProwlarr ? selectedClientId : (searchInstanceId || 'amule');
   const downloadableCount = useMemo(() =>
-    Array.from(selectedFiles).filter(hash => !dataDownloadedFiles.has(hash)).length,
-    [selectedFiles, dataDownloadedFiles]
+    Array.from(selectedFiles).filter(hash => {
+      const instances = dataDownloadedFiles.get(hash);
+      return !instances || !activeInstanceId || !instances.has(activeInstanceId);
+    }).length,
+    [selectedFiles, dataDownloadedFiles, activeInstanceId]
   );
 
   // Batch download handler — handles both aMule and Prowlarr results
   const handleBatchDownload = useCallback(async () => {
-    const toDownload = Array.from(selectedFiles).filter(hash => !dataDownloadedFiles.has(hash));
+    const toDownload = Array.from(selectedFiles).filter(hash => {
+      const instances = dataDownloadedFiles.get(hash);
+      return !instances || !activeInstanceId || !instances.has(activeInstanceId);
+    });
     if (toDownload.length === 0) {
       clearAllSelections();
       return;
@@ -273,8 +280,12 @@ const SearchResultsSection = ({
 
       if (prowlarrSuccessCount > 0) {
         setDataDownloadedFiles(prev => {
-          const next = new Set(prev);
-          prowlarrGuids.forEach(h => next.add(h));
+          const next = new Map(prev);
+          prowlarrGuids.forEach(h => {
+            const instances = next.get(h) || new Set();
+            instances.add(selectedClientId || 'unknown');
+            next.set(h, instances);
+          });
           return next;
         });
         addAppSuccess(`Downloading ${prowlarrSuccessCount} torrent${prowlarrSuccessCount > 1 ? 's' : ''}`);
@@ -373,6 +384,8 @@ const SearchResultsSection = ({
       sortConfig,
       onSortChange: handleSortChange,
       downloadedFiles: dataDownloadedFiles,
+      activeInstanceId,
+      connectedClientIds: isProwlarr ? connectedClients.map(c => c.id) : [activeInstanceId],
       selectedFiles,
       onToggleSelection: toggleFileSelection,
       // Load-more props for mobile in hybrid scrollable mode
@@ -419,20 +432,27 @@ const SearchResultsSection = ({
         options: dataCategories.map(cat => ({ value: cat.name, label: cat.title || cat.name })),
         title: 'Select category for downloads'
       }),
-      canAddDownloads && h(Button, {
-        variant: 'success',
-        icon: downloading ? null : 'download',
-        iconSize: 14,
-        onClick: handleBatchDownload,
-        disabled: downloadableCount === 0 || downloading || (isProwlarr && !hasBitTorrentClient)
-      },
-        downloading
-          ? h('span', { className: 'flex items-center gap-2' },
-              h(LoadingSpinner, { size: 14 }),
-              'Downloading...'
-            )
-          : `Download ${downloadableCount} file${downloadableCount !== 1 ? 's' : ''}`
-      )
+      canAddDownloads && (() => {
+        const isDisabled = downloadableCount === 0 || downloading || (isProwlarr && !hasBitTorrentClient);
+        const disabledReason = !downloading && isDisabled
+          ? (isProwlarr && !hasBitTorrentClient ? 'No BitTorrent client connected' : downloadableCount === 0 && selectedFiles.size > 0 ? 'Already downloaded on the selected client' : null)
+          : null;
+        const btn = h(Button, {
+          variant: 'success',
+          icon: downloading ? null : 'download',
+          iconSize: 14,
+          onClick: handleBatchDownload,
+          disabled: isDisabled
+        },
+          downloading
+            ? h('span', { className: 'flex items-center gap-2' },
+                h(LoadingSpinner, { size: 14 }),
+                'Downloading...'
+              )
+            : `Download ${downloadableCount} file${downloadableCount !== 1 ? 's' : ''}`
+        );
+        return disabledReason ? h(Tooltip, { content: disabledReason, position: 'top' }, btn) : btn;
+      })()
     ),
 
     // Mobile filter sheet for indexer selection (Prowlarr only)

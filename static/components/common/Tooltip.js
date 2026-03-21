@@ -28,7 +28,7 @@ const Tooltip = ({ children, content, position = 'top', showOnMobile = true }) =
   const tooltipRef = useRef(null);
 
   // Arrow color based on theme (matches tooltip bg: gray-900 light, gray-700 dark)
-  const arrowColor = theme === 'dark' ? 'rgb(55 65 81)' : 'rgb(17 24 39)';
+  const arrowColor = theme === 'dark' ? 'rgb(75 85 99)' : 'rgb(17 24 39)';
 
   const calculatePosition = useCallback(() => {
     if (!triggerRef.current) return;
@@ -140,7 +140,7 @@ const Tooltip = ({ children, content, position = 'top', showOnMobile = true }) =
     showTooltip && h(Portal, { containerId: 'tooltip-portal' },
       h('div', {
         ref: tooltipRef,
-        className: `fixed z-[9999] px-3 py-2 text-xs text-white bg-gray-900 dark:bg-gray-700 rounded-lg shadow-xl pointer-events-none ${showOnMobile ? '' : 'hidden sm:block'}`,
+        className: `fixed z-[9999] px-3 py-2 text-xs text-white bg-gray-900 dark:bg-gray-600 rounded-lg shadow-xl border border-gray-700 dark:border-gray-500 pointer-events-none ${showOnMobile ? '' : 'hidden sm:block'}`,
         style: {
           top: `${tooltipPosition.top}px`,
           left: `${tooltipPosition.left}px`,

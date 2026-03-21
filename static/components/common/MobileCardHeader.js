@@ -12,6 +12,7 @@ import TrackerLabel from './TrackerLabel.js';
 import { useDynamicFontSize } from '../../hooks/index.js';
 import { formatBytes } from '../../utils/index.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
+import Tooltip from './Tooltip.js';
 
 const { createElement: h, useRef } = React;
 
@@ -36,6 +37,7 @@ const MobileCardHeader = ({
   fileName,
   fileSize,
   trackerDomain,
+  nameResolving = false,
   selectionMode = false,
   isSelected = false,
   onSelectionToggle,
@@ -82,18 +84,21 @@ const MobileCardHeader = ({
         onClick: !selectionMode && onNameClick ? (e) => onNameClick(e, actionsRef.current) : undefined
       },
         // Filename with line-clamp (takes available space)
-        h('span', {
-          className: `flex-1 min-w-0 font-medium text-gray-900 dark:text-gray-100 ${!selectionMode && onNameClick ? 'underline decoration-dotted' : ''}`,
-          style: {
-            fontSize: getDynamicFontSize(fileName || 'Unknown'),
-            wordBreak: 'break-all',
-            lineHeight: '1.4',
-            display: '-webkit-box',
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical',
-            overflow: 'hidden'
-          }
-        }, fileName || 'Unknown'),
+        (() => {
+          const nameEl = h('span', {
+            className: `flex-1 min-w-0 font-medium ${nameResolving ? 'italic text-gray-500 dark:text-gray-400' : 'text-gray-900 dark:text-gray-100'} ${!selectionMode && onNameClick ? 'underline decoration-dotted' : ''}`,
+            style: {
+              fontSize: getDynamicFontSize(fileName || 'Unknown'),
+              wordBreak: 'break-all',
+              lineHeight: '1.4',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden'
+            }
+          }, fileName || 'Unknown', nameResolving && h('span', { className: 'ml-1 text-[10px] text-gray-400 dark:text-gray-500 not-italic' }, '(resolving)'));
+          return nameResolving ? h(Tooltip, { content: 'Name from history — waiting for client metadata' }, nameEl) : nameEl;
+        })(),
         // Size badge (optionally with client icon and instance name)
         showSizeBadge && h('span', {
           className: `flex-shrink-0 px-1.5 py-px rounded-full text-xs font-medium ${badgeBgClass} whitespace-nowrap flex items-center gap-1`,

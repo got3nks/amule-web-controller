@@ -144,14 +144,11 @@ class QbittorrentManager extends BaseClientManager {
     } catch (err) {
       this.log('❌ Error fetching qBittorrent torrents:', logger.errorDetail(err));
       // Connection might be lost, mark as disconnected
-      const errDetail = logger.errorDetail(err);
-      if (errDetail.includes('ECONNREFUSED') || errDetail.includes('timeout') || errDetail.includes('403')) {
-        this._setConnectionError(err);
-        if (this.client) {
-          this.client.connected = false;
-        }
-        this.scheduleReconnect(30000);
+      this._setConnectionError(err);
+      if (this.client) {
+        this.client.connected = false;
       }
+      this.scheduleReconnect(30000);
       return this.lastTorrents; // Return cached data on error
     }
   }

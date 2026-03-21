@@ -34,7 +34,8 @@ export const StaticDataProvider = ({ children }) => {
   const [dataAppLogs, setDataAppLogs] = useState('');
   const [dataQbittorrentLogs, setDataQbittorrentLogs] = useState('');
   const [dataStatsTree, setDataStatsTree] = useState(null);
-  const [dataDownloadedFiles, setDataDownloadedFiles] = useState(new Set());
+  // Map<hash, Set<instanceId>> — tracks which instances have each download
+  const [dataDownloadedFiles, setDataDownloadedFiles] = useState(new Map());
   // Alias map: realHash → displayHash (e.g. torrent info hash → Prowlarr GUID)
   // Used by delete handler to remove both keys from dataDownloadedFiles
   const downloadedAliasRef = useRef(new Map());

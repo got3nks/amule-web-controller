@@ -319,18 +319,34 @@ export const WebSocketProvider = ({ children }) => {
         handleBatchComplete('delete');
         // Remove successfully deleted hashes from downloaded files set
         // so search results can be re-downloaded
-        const deleted = (data.results || []).filter(r => r.success).map(r => r.fileHash);
+        const deleted = (data.results || []).filter(r => r.success);
         if (deleted.length > 0) {
           setDataDownloadedFiles(prev => {
-            const next = new Set(prev);
+            const next = new Map(prev);
             const aliases = downloadedAliasRef.current;
-            deleted.forEach(h => {
-              next.delete(h);
-              // Also remove aliased key (e.g. Prowlarr GUID mapped from real hash)
-              const alias = aliases.get(h);
-              if (alias) {
-                next.delete(alias);
-                aliases.delete(h);
+            deleted.forEach(({ fileHash, instanceId }) => {
+              // Try direct hash, then aliased key (Prowlarr GUID)
+              const alias = aliases.get(fileHash);
+              const keysToCheck = [fileHash, alias].filter(Boolean);
+              for (const key of keysToCheck) {
+                const instances = next.get(key);
+                if (instances) {
+                  if (instanceId) {
+                    const updated = new Set(instances);
+                    updated.delete(instanceId);
+                    if (updated.size === 0) {
+                      next.delete(key);
+                    } else {
+                      next.set(key, updated);
+                    }
+                  } else {
+                    next.delete(key);
+                  }
+                }
+              }
+              // Clean up alias if both keys removed
+              if (alias && !next.has(fileHash) && !next.has(alias)) {
+                aliases.delete(fileHash);
               }
             });
             return next;

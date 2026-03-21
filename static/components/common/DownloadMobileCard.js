@@ -59,6 +59,7 @@ const DownloadMobileCard = ({
       clientType: item.client,
       instanceId: item.instanceId,
       fileName: item.name,
+      nameResolving: item.nameResolving,
       fileSize: item.size,
       selectionMode,
       isSelected,

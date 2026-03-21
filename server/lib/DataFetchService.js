@@ -87,6 +87,9 @@ class DataFetchService extends BaseModule {
     // Enrich with addedAt timestamp from download history database
     // rtorrent items may already have addedAt from creationDate, but aMule items won't
     this._enrichWithTimestamps(items);
+
+    // Enrich unresolved magnet names (e.g., HASH.meta) with names from history
+    this._enrichWithHistoryName(items);
   }
 
   /**
@@ -110,6 +113,27 @@ class DataFetchService extends BaseModule {
       const historyEntry = this.downloadHistoryDB.getByHash(item.hash, item.instanceId);
       if (historyEntry && historyEntry.started_at) {
         item.addedAt = new Date(historyEntry.started_at);
+      }
+    }
+  }
+
+  /**
+   * Enrich items with names from history when the client reports an unresolved name.
+   * rTorrent shows the info hash with .meta suffix for magnets until metadata resolves.
+   * @param {Array} items - Array of unified items
+   */
+  _enrichWithHistoryName(items) {
+    if (!this.downloadHistoryDB) return;
+
+    for (const item of items) {
+      if (!item.name) continue;
+      // Detect unresolved magnet names: 40-char hex hash with .meta suffix
+      if (!/^[a-fA-F0-9]{40}\.meta$/.test(item.name)) continue;
+
+      const historyEntry = this.downloadHistoryDB.getByHash(item.hash, item.instanceId);
+      if (historyEntry?.filename && historyEntry.filename !== 'Unknown' && historyEntry.filename !== 'Magnet download') {
+        item.name = historyEntry.filename;
+        item.nameResolving = true;
       }
     }
   }

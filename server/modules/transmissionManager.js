@@ -192,14 +192,11 @@ class TransmissionManager extends BaseClientManager {
       return torrents;
     } catch (err) {
       this.log('Error fetching Transmission torrents:', logger.errorDetail(err));
-      const errDetail = logger.errorDetail(err);
-      if (errDetail.includes('ECONNREFUSED') || errDetail.includes('timeout') || errDetail.includes('401')) {
-        this._setConnectionError(err);
-        if (this.client) {
-          this.client.connected = false;
-        }
-        this.scheduleReconnect(30000);
+      this._setConnectionError(err);
+      if (this.client) {
+        this.client.connected = false;
       }
+      this.scheduleReconnect(30000);
       return this.lastTorrents; // Return cached data on error
     }
   }

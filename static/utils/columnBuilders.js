@@ -269,12 +269,13 @@ export const buildFileNameColumn = ({
     const name = item[itemKey] || 'Unknown';
     const isDisabled = typeof disabled === 'function' ? disabled(item) : disabled;
     const isClickable = onClick && !isDisabled;
-    return h('span', {
-      className: `font-medium text-xs${isClickable ? ' cursor-pointer hover:underline decoration-dotted' : ''}`,
+    const resolving = item.nameResolving;
+    const nameEl = h('span', {
+      className: `font-medium text-xs${isClickable ? ' cursor-pointer hover:underline decoration-dotted' : ''}${resolving ? ' italic text-gray-500 dark:text-gray-400' : ''}`,
       style: { wordBreak: 'break-all', overflowWrap: 'anywhere' },
-      onClick: isClickable ? () => onClick(item) : undefined,
-      title: isClickable ? 'Click to view details' : undefined
-    }, name);
+      onClick: isClickable ? () => onClick(item) : undefined
+    }, name, resolving && h('span', { className: 'ml-1 text-[10px] text-gray-400 dark:text-gray-500 not-italic' }, '(resolving)'));
+    return resolving ? h(Tooltip, { content: 'Name from history — waiting for client metadata', position: 'top' }, nameEl) : nameEl;
   }
 });
 

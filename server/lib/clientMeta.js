@@ -69,7 +69,7 @@ const CLIENT_TYPES = {
       'seeding':     'seeding',
       'paused':      'paused',
       'stopped':     'stopped',
-      'completed':   'seeding',
+      'completed':   'completed',
       'checking':    'checking',
       'hashing-queued': 'hashing-queued',
       'moving':      'moving',
@@ -106,7 +106,7 @@ const CLIENT_TYPES = {
       tracksPid: true,             // reports PID for restart detection
       logs: false                  // no fetchable log API
     },
-    seedingStatuses: ['seeding', 'completed'],
+    seedingStatuses: ['seeding'],
     // Maps unified category priority → rTorrent priority
     // Unified: 0=Normal, 1=High, 2=Low, 3=Auto
     // rTorrent: 0=Off, 1=Low, 2=Normal, 3=High

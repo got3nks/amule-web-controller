@@ -39,6 +39,7 @@ const ACTION_CAPABILITIES = {
   batchStop: ['pause_resume'],
   batchDelete: ['remove_downloads'],
   batchSetFileCategory: ['assign_categories'],
+  batchMoveFiles: ['edit_downloads'],
   createCategory: ['manage_categories'],
   updateCategory: ['manage_categories'],
   deleteCategory: ['manage_categories'],
@@ -328,9 +329,11 @@ class WebSocketHandlers extends BaseModule {
         case 'batchStop': await this.handleBatchStop(data, context); break;
         case 'batchDelete': await this.handleBatchDelete(data, context); break;
         case 'batchSetFileCategory': await this.handleBatchSetFileCategory(data, context); break;
+        case 'batchMoveFiles': await this.handleBatchMoveFiles(data, context); break;
         case 'renameFile': await this.handleRenameFile(data, context); break;
         case 'checkDeletePermissions': await this.handleCheckDeletePermissions(data, context); break;
         case 'checkMovePermissions': await this.handleCheckMovePermissions(data, context); break;
+        case 'checkMoveToPermissions': await this.handleCheckMoveToPermissions(data, context); break;
         case 'requestFullSnapshot': this.handleRequestFullSnapshot(context); break;
         case 'subscribe': this.handleSubscribe(data, context); break;
         case 'unsubscribe': this.handleUnsubscribe(data, context); break;
@@ -1773,8 +1776,161 @@ class WebSocketHandlers extends BaseModule {
   }
 
   /**
-   * Check move permissions for items (works with any client type)
-   * Validates source and destination paths are accessible and writable
+   * Core move permission checking logic shared by both category-move and standalone move.
+   * Resolves source/dest paths, checks filesystem permissions, returns structured results.
+   *
+   * @param {Array} reqItems - Items to check [{ fileHash, instanceId }]
+   * @param {Function} resolveDestForItem - (item, cacheKey) => { localPath, remotePath, clientType } | null
+   * @param {Object} context - WS context for logging
+   * @returns {Object} { results, canMoveAny, primaryDestPath, firstDestError }
+   */
+  async _checkMovePermissionsCore(reqItems, resolveDestForItem, context) {
+    const cachedItems = dataFetchService.getCachedBatchData()?.items || [];
+    const itemByKey = new Map(cachedItems.map(i => [itemKey(i.instanceId, i.hash), i]));
+
+    const results = [];
+    const sourcePathsByClient = new Map();
+    const destPathsByClient = new Map();
+
+    // First pass: collect sources and destinations
+    for (const reqItem of reqItems) {
+      const fileHash = reqItem.fileHash;
+      const item = itemByKey.get(itemKey(reqItem.instanceId, fileHash?.toLowerCase()));
+
+      if (!item) {
+        results.push({ fileHash, canMove: false, reason: 'not_found', message: 'Item not found in cache' });
+        continue;
+      }
+
+      const clientType = item.client || 'amule';
+      const hasNativeMove = clientMeta.hasCapability(clientType, 'nativeMove');
+      const cacheKey = item.instanceId || clientType;
+
+      // Resolve destination for this item
+      if (!destPathsByClient.has(cacheKey)) {
+        const dest = resolveDestForItem(item, cacheKey);
+        if (dest) {
+          destPathsByClient.set(cacheKey, dest);
+        }
+      }
+      const destInfo = destPathsByClient.get(cacheKey);
+      const localDestPath = destInfo?.localPath;
+      const remoteDestPath = destInfo?.remotePath;
+
+      // Check destination is configured
+      const destPath = hasNativeMove ? remoteDestPath : localDestPath;
+      if (!destPath) {
+        results.push({ fileHash, canMove: false, reason: 'no_dest_path', message: 'No destination path configured' });
+        continue;
+      }
+
+      // Resolve source path
+      const pathInfo = resolveItemPath(item);
+      if (!pathInfo) {
+        results.push({ fileHash, canMove: false, reason: 'no_path', message: 'Source path not available', clientType });
+        continue;
+      }
+
+      // Already at destination?
+      const compareDestPath = remoteDestPath || localDestPath;
+      if (pathInfo.baseDir === compareDestPath) {
+        results.push({ fileHash, canMove: true, reason: 'same_path', message: 'Already at destination path', shared: item.shared, clientType });
+        continue;
+      }
+
+      // Collect source for permission check (skip for nativeMove)
+      if (!hasNativeMove) {
+        if (!sourcePathsByClient.has(clientType)) sourcePathsByClient.set(clientType, new Map());
+        sourcePathsByClient.get(clientType).set(pathInfo.localPath, pathInfo.remotePath);
+      }
+
+      results.push({
+        fileHash, name: item.name, clientType, instanceId: item.instanceId,
+        sourcePath: pathInfo.remotePath, translatedSourcePath: pathInfo.localPath,
+        canMove: null, shared: item.shared, isMultiFile: pathInfo.isMultiFile
+      });
+    }
+
+    // Check destination accessibility
+    const destErrors = new Map();
+    const destAccessible = new Map();
+    let primaryDestPath = null;
+
+    for (const [cacheKey, { localPath, remotePath, clientType }] of destPathsByClient) {
+      if (clientMeta.hasCapability(clientType, 'nativeMove')) {
+        destAccessible.set(cacheKey, true);
+        if (!primaryDestPath) primaryDestPath = remotePath || localPath;
+        continue;
+      }
+      if (!localPath) {
+        destErrors.set(cacheKey, 'No destination path configured');
+        destAccessible.set(cacheKey, false);
+        continue;
+      }
+      if (!primaryDestPath) primaryDestPath = remotePath || localPath;
+
+      const destCheck = await checkPathPermissions(localPath, { requireRead: true, requireWrite: true, requireDirectory: true });
+      const displayPath = remotePath || localPath;
+      if (destCheck.exists && destCheck.writable) {
+        destAccessible.set(cacheKey, true);
+      } else {
+        destAccessible.set(cacheKey, false);
+        const errorMsg = destCheck.errorCode === 'not_found'
+          ? `Destination path not found: ${displayPath}`
+          : destCheck.errorCode === 'not_writable'
+            ? `No write permission for destination: ${displayPath}`
+            : `Cannot access destination: ${destCheck.error}`;
+        destErrors.set(cacheKey, errorMsg);
+        context.log(`⚠️ Move permission check failed (dest, ${cacheKey}): ${errorMsg}`);
+      }
+    }
+
+    // Check source accessibility
+    const sourceErrors = new Map();
+    for (const [clientType, pathMap] of sourcePathsByClient) {
+      if (clientMeta.hasCapability(clientType, 'nativeMove')) continue;
+      for (const [localPath, remotePath] of pathMap) {
+        const srcCheck = await checkPathPermissions(localPath, { requireRead: true, requireWrite: true });
+        if (!srcCheck.exists || !srcCheck.readable || !srcCheck.writable) {
+          const displayPath = remotePath || localPath;
+          const errorMsg = srcCheck.errorCode === 'not_found'
+            ? `Source path not found: ${displayPath} (volume may not be mounted)`
+            : `No permission to access source path: ${displayPath}`;
+          sourceErrors.set(localPath, errorMsg);
+          context.log(`⚠️ Move permission check failed (source, ${clientType}): ${errorMsg}`);
+        }
+      }
+    }
+
+    // Update results with permission outcomes
+    let canMoveAny = false;
+    for (const result of results) {
+      if (result.canMove !== null) { if (result.canMove && result.reason !== 'same_path') canMoveAny = true; continue; }
+      const lookupKey = result.instanceId || result.clientType;
+      if (!destAccessible.get(lookupKey)) {
+        result.canMove = false;
+        result.reason = 'dest_error';
+        result.message = destErrors.get(lookupKey) || 'Destination not accessible';
+      } else if (result.translatedSourcePath && sourceErrors.has(result.translatedSourcePath)) {
+        result.canMove = false;
+        result.reason = 'source_error';
+        result.message = sourceErrors.get(result.translatedSourcePath);
+      } else {
+        result.canMove = true;
+        result.reason = 'ok';
+        canMoveAny = true;
+      }
+    }
+
+    if (!canMoveAny) canMoveAny = results.some(r => r.canMove === true && r.reason !== 'same_path');
+    const anyDestAccessible = Array.from(destAccessible.values()).some(v => v);
+    const firstDestError = destErrors.size > 0 ? destErrors.values().next().value : null;
+
+    return { results, canMoveAny: canMoveAny || anyDestAccessible, primaryDestPath, firstDestError };
+  }
+
+  /**
+   * Check move permissions for category change (resolves dest from category).
    */
   async handleCheckMovePermissions(data, context) {
     try {
@@ -1785,242 +1941,167 @@ class WebSocketHandlers extends BaseModule {
         return;
       }
 
-      // Get target category
       const targetCategory = context.categoryManager?.getByName(categoryName);
       if (!targetCategory) {
-        context.send({
-          type: 'move-permissions',
-          results: [],
-          canMove: false,
-          error: `Category not found: ${categoryName}`
-        });
+        context.send({ type: 'move-permissions', results: [], canMove: false, error: `Category not found: ${categoryName}` });
         return;
       }
 
-      // Build compound-key lookup from cached unified items
-      const cachedItems = dataFetchService.getCachedBatchData()?.items || [];
-      const itemByKey = new Map(cachedItems.map(i => [itemKey(i.instanceId, i.hash), i]));
-
-      const results = [];
-      const sourcePathsByClient = new Map(); // Map<clientType, Map<translatedPath, remotePath>>
-      const destPathsByClient = new Map(); // Map<clientType, { localPath, remotePath }>
-
-      // First pass: collect all source paths and validate items
-      for (const reqItem of reqItems) {
-        const fileHash = reqItem.fileHash;
-        const item = itemByKey.get(itemKey(reqItem.instanceId, fileHash?.toLowerCase()));
-
-        if (!item) {
-          results.push({
-            fileHash,
-            canMove: false,
-            reason: 'not_found',
-            message: 'Item not found in cache'
-          });
-          continue;
-        }
-
+      // Resolve destination from category (per instance)
+      const resolveDestForItem = (item, cacheKey) => {
         const clientType = item.client || 'amule';
         const hasNativeMove = clientMeta.hasCapability(clientType, 'nativeMove');
-
-        // Get destination paths for this instance (cached per instanceId)
-        // Clients with nativeMove only need remotePath (category's path) - they handle moves internally
-        const cacheKey = item.instanceId || clientType;
-        if (!destPathsByClient.has(cacheKey)) {
-          if (hasNativeMove) {
-            // Native-move clients: only need the category's path (what the client sees)
-            const remotePath = targetCategory?.path || null;
-            destPathsByClient.set(cacheKey, { localPath: remotePath, remotePath, clientType });
-          } else {
-            destPathsByClient.set(cacheKey, { ...resolveCategoryDestPaths(targetCategory, clientType, item.instanceId), clientType });
-          }
+        if (hasNativeMove) {
+          const remotePath = targetCategory?.path || null;
+          return { localPath: remotePath, remotePath, clientType };
         }
-        const { localPath: localDestPath, remotePath: remoteDestPath } = destPathsByClient.get(cacheKey);
+        return { ...resolveCategoryDestPaths(targetCategory, clientType, item.instanceId), clientType };
+      };
 
-        // Check if destination is configured
-        // Native-move clients only need remotePath, others need localPath
-        const destPath = hasNativeMove ? remoteDestPath : localDestPath;
-        if (!destPath) {
-          results.push({
-            fileHash,
-            canMove: false,
-            reason: 'no_dest_path',
-            message: 'No destination path configured for this category'
-          });
-          continue;
-        }
+      const { results, canMoveAny, primaryDestPath, firstDestError } = await this._checkMovePermissionsCore(reqItems, resolveDestForItem, context);
 
-        // Resolve source path using shared helper
-        const pathInfo = resolveItemPath(item);
-
-        if (!pathInfo) {
-          results.push({
-            fileHash,
-            canMove: false,
-            reason: 'no_path',
-            message: 'Source path not available',
-            clientType
-          });
-          continue;
-        }
-
-        // Check if already at destination (compare directories with remote path since source is client's view)
-        const compareDestPath = remoteDestPath || localDestPath;
-        if (pathInfo.baseDir === compareDestPath) {
-          results.push({
-            fileHash,
-            canMove: true,
-            reason: 'same_path',
-            message: 'Already at destination path',
-            shared: item.shared,
-            clientType
-          });
-          continue;
-        }
-
-        // Collect source path for permission check
-        if (!sourcePathsByClient.has(clientType)) {
-          sourcePathsByClient.set(clientType, new Map()); // Map<translatedPath, remotePath>
-        }
-        sourcePathsByClient.get(clientType).set(pathInfo.localPath, pathInfo.remotePath);
-
-        results.push({
-          fileHash,
-          name: item.name,
-          clientType,
-          instanceId: item.instanceId,
-          sourcePath: pathInfo.remotePath,
-          translatedSourcePath: pathInfo.localPath,
-          canMove: null, // Will be determined after path checks
-          shared: item.shared,
-          isMultiFile: pathInfo.isMultiFile
-        });
-      }
-
-      // Check destination paths accessibility (one per instance)
-      // Skip for clients with nativeMove - they handle moves internally and validate paths themselves
-      const destErrors = new Map(); // Map<cacheKey, errorMessage>
-      const destAccessible = new Map(); // Map<cacheKey, boolean>
-      let primaryDestPath = null; // For response (use first client's dest path)
-
-      for (const [cacheKey, { localPath, remotePath, clientType }] of destPathsByClient) {
-        // Native-move clients: skip permission check, assume accessible (client validates internally)
-        if (clientMeta.hasCapability(clientType, 'nativeMove')) {
-          destAccessible.set(cacheKey, true);
-          if (!primaryDestPath) {
-            primaryDestPath = remotePath || localPath;
-          }
-          continue;
-        }
-
-        if (!localPath) {
-          destErrors.set(cacheKey, 'No destination path configured');
-          destAccessible.set(cacheKey, false);
-          continue;
-        }
-
-        if (!primaryDestPath) {
-          primaryDestPath = remotePath || localPath;
-        }
-
-        const destCheck = await checkPathPermissions(localPath, {
-          requireRead: true,
-          requireWrite: true,
-          requireDirectory: true
-        });
-
-        const displayPath = remotePath || localPath;
-        if (destCheck.exists && destCheck.writable) {
-          destAccessible.set(cacheKey, true);
-        } else {
-          destAccessible.set(cacheKey, false);
-          const errorMsg = destCheck.errorCode === 'not_found'
-            ? `Destination path not found: ${displayPath}`
-            : destCheck.errorCode === 'not_writable'
-              ? `No write permission for destination: ${displayPath}`
-              : `Cannot access destination: ${destCheck.error}`;
-          destErrors.set(cacheKey, errorMsg);
-          const pathInfo = localPath !== remotePath ? `local: ${localPath}, remote: ${remotePath}` : `path: ${localPath}`;
-          context.log(`⚠️ Move permission check failed (dest, ${cacheKey}): ${errorMsg} [${pathInfo}]`);
-        }
-      }
-
-      // Check source paths accessibility (grouped by client type)
-      // Skip for clients with nativeMove - they handle moves internally
-      const sourceErrors = new Map(); // Map<translatedPath, errorMessage>
-      for (const [clientType, pathMap] of sourcePathsByClient) {
-        // Native-move clients: skip permission check
-        if (clientMeta.hasCapability(clientType, 'nativeMove')) continue;
-
-        for (const [localPath, remotePath] of pathMap) {
-          const srcCheck = await checkPathPermissions(localPath, {
-            requireRead: true,
-            requireWrite: true
-          });
-
-          if (!srcCheck.exists || !srcCheck.readable || !srcCheck.writable) {
-            // Use remotePath in user-facing message (what they configured), localPath in logs (what app sees)
-            const displayPath = remotePath || localPath;
-            const errorMsg = srcCheck.errorCode === 'not_found'
-              ? `Source path not found: ${displayPath} (volume may not be mounted)`
-              : srcCheck.errorCode === 'not_readable' || srcCheck.errorCode === 'not_writable'
-                ? `No permission to access source path: ${displayPath}`
-                : `Cannot access source path ${displayPath}: ${srcCheck.error}`;
-            sourceErrors.set(localPath, errorMsg);
-            const pathInfo = localPath !== remotePath ? `local: ${localPath}, remote: ${remotePath}` : `path: ${localPath}`;
-            context.log(`⚠️ Move permission check failed (source, ${clientType}): ${errorMsg} [${pathInfo}]`);
-          }
-        }
-      }
-
-      // Update results with permission check outcomes
-      let canMoveAny = false;
-      for (const result of results) {
-        if (result.canMove !== null) continue; // Already determined
-
-        const lookupKey = result.instanceId || result.clientType;
-
-        if (!destAccessible.get(lookupKey)) {
-          result.canMove = false;
-          result.reason = 'dest_error';
-          result.message = destErrors.get(lookupKey) || 'Destination not accessible';
-        } else if (result.translatedSourcePath) {
-          const srcError = sourceErrors.get(result.translatedSourcePath);
-          if (srcError) {
-            result.canMove = false;
-            result.reason = 'source_error';
-            result.message = srcError;
-          } else {
-            result.canMove = true;
-            result.reason = 'ok';
-            canMoveAny = true;
-          }
-        }
-      }
-
-      // Also check if any already-ok items exist
-      if (!canMoveAny) {
-        canMoveAny = results.some(r => r.canMove === true && r.reason !== 'same_path');
-      }
-
-      // Check if any destination is accessible
-      const anyDestAccessible = Array.from(destAccessible.values()).some(v => v);
-
-      // Get first destination error for response (if any)
-      const firstDestError = destErrors.size > 0 ? destErrors.values().next().value : null;
-
-      const isDocker = require('./config').isDocker;
       context.send({
         type: 'move-permissions',
         results,
-        canMove: canMoveAny || anyDestAccessible,
+        canMove: canMoveAny,
         destPath: primaryDestPath,
         destError: firstDestError,
-        isDocker
+        isDocker: require('./config').isDocker
       });
     } catch (err) {
       context.log('Check move permissions error:', err);
       context.send({ type: 'move-permissions', results: [], canMove: false, error: err.message });
+    }
+  }
+
+  /**
+   * Check move permissions for standalone "Move to..." (raw dest path).
+   */
+  async handleCheckMoveToPermissions(data, context) {
+    try {
+      const { items: reqItems, destPath } = data;
+
+      if (!reqItems || !Array.isArray(reqItems) || reqItems.length === 0 || !destPath) {
+        context.send({ type: 'move-to-permissions', results: [], canMove: false });
+        return;
+      }
+      if (destPath.includes('..') || destPath.includes('\0')) {
+        context.send({ type: 'move-to-permissions', results: [], canMove: false, error: 'Invalid destination path' });
+        return;
+      }
+
+      // Resolve destination from raw path (translate per instance)
+      const resolveDestForItem = (item, cacheKey) => {
+        const clientType = item.client || 'amule';
+        const hasNativeMove = clientMeta.hasCapability(clientType, 'nativeMove');
+        if (hasNativeMove) {
+          return { localPath: destPath, remotePath: destPath, clientType };
+        }
+        const localPath = categoryManager.translatePath(destPath, clientType, item.instanceId);
+        return { localPath, remotePath: destPath, clientType };
+      };
+
+      const { results, canMoveAny } = await this._checkMovePermissionsCore(reqItems, resolveDestForItem, context);
+
+      context.send({
+        type: 'move-to-permissions',
+        results,
+        canMove: canMoveAny,
+        destPath,
+        isDocker: require('./config').isDocker
+      });
+    } catch (err) {
+      context.log('Check move-to permissions error:', err);
+      context.send({ type: 'move-to-permissions', results: [], canMove: false, error: err.message });
+    }
+  }
+
+  /**
+   * Move files to a destination path without changing category.
+   * Reuses MoveOperationManager for execution.
+   */
+  async handleBatchMoveFiles(data, context) {
+    try {
+      const { items: reqItems, destPath } = data;
+
+      if (!reqItems || !Array.isArray(reqItems) || reqItems.length === 0) {
+        throw new Error('No items provided');
+      }
+      if (!destPath || destPath.includes('..') || destPath.includes('\0')) {
+        throw new Error('Invalid destination path');
+      }
+      if (reqItems.length > 1000) {
+        throw new Error('Batch move exceeds maximum size of 1000 items');
+      }
+
+      const cachedItems = dataFetchService.getCachedBatchData()?.items || [];
+      const itemByKey = new Map(cachedItems.map(i => [itemKey(i.instanceId, i.hash), i]));
+
+      const results = [];
+
+      for (const reqItem of reqItems) {
+        const fileHash = reqItem.fileHash;
+        const ownershipKey = itemKey(reqItem.instanceId, fileHash);
+
+        if (!this._canMutateItem(context, ownershipKey)) {
+          results.push({ fileHash, fileName: reqItem.fileName, success: false, error: 'Permission denied' });
+          continue;
+        }
+
+        const item = itemByKey.get(itemKey(reqItem.instanceId, fileHash?.toLowerCase()));
+        if (!item) {
+          results.push({ fileHash, fileName: reqItem.fileName, success: false, error: 'Item not found' });
+          continue;
+        }
+
+        const manager = registry.get(item.instanceId);
+        if (!manager || !manager.isConnected()) {
+          results.push({ fileHash, fileName: item.name, success: false, error: 'Client not connected' });
+          continue;
+        }
+
+        try {
+          const sourcePath = item.directory || item.filePath;
+          if (!sourcePath || sourcePath === destPath) {
+            results.push({ fileHash, fileName: item.name, success: true, skipped: true });
+            continue;
+          }
+
+          const destPathLocal = categoryManager.translatePath(destPath, manager.clientType, item.instanceId);
+
+          await moveOperationManager.queueMove({
+            hash: fileHash,
+            instanceId: item.instanceId,
+            name: item.name,
+            clientType: manager.clientType,
+            sourcePathRemote: sourcePath,
+            destPathLocal,
+            destPathRemote: destPath,
+            totalSize: item.complete ? item.size : (item.sizeDownloaded || item.size),
+            isMultiFile: clientMeta.hasCapability(manager.clientType, 'multiFile') && (item.multiFile || false),
+            categoryName: null
+          });
+
+          results.push({ fileHash, fileName: item.name, success: true, instanceId: item.instanceId });
+          context.log(`Queued move for ${item.name} -> ${destPath}`);
+        } catch (err) {
+          context.log(`Move failed for ${item.name}: ${err.message}`);
+          results.push({ fileHash, fileName: item.name, success: false, error: err.message });
+        }
+      }
+
+      await this.broadcastItemsUpdate(context);
+
+      const successCount = results.filter(r => r.success).length;
+      context.send({
+        type: 'batch-move-complete',
+        results,
+        message: `Moving ${successCount}/${reqItems.length} files to ${destPath}`
+      });
+      context.log(`Batch move: ${successCount}/${reqItems.length} queued to ${destPath}`);
+    } catch (err) {
+      context.log('Batch move error:', err);
+      context.send({ type: 'error', message: 'Batch move failed: ' + err.message });
     }
   }
 

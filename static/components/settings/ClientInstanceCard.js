@@ -30,7 +30,11 @@ const { createElement: h } = React;
 const ClientInstanceCard = ({ client, clientIndex, totalClients, onMove, onEdit, onToggle, onRemove, onTest, isTesting, testResult, instanceStatus }) => {
   const typeLabel = TYPE_LABELS[client.type] || client.type;
   const isEnabled = client.enabled !== false;
-  const connectionInfo = client.host ? `${client.host}:${client.port}` : 'Not configured';
+  const connectionInfo = client.mode === 'scgi-socket'
+    ? `SCGI Socket: ${client.socketPath || 'not configured'}`
+    : client.mode === 'scgi'
+      ? `SCGI TCP: ${client.host ? `${client.host}:${client.port}` : 'not configured'}`
+      : client.host ? `${client.host}:${client.port}` : 'Not configured';
 
   // Connection status from live instance data
   const isDisconnectedWithError = instanceStatus && !instanceStatus.connected && instanceStatus.error;

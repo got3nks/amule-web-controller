@@ -478,11 +478,14 @@ class RtorrentManager extends BaseClientManager {
       throw new Error('rtorrent not connected');
     }
 
+    // Parse hash before loading — needed for post-load property setting
+    const { hash, name } = parseMagnetUri(magnetUri);
+
     const rtOptions = this._buildAddOptions(options);
+    if (hash) rtOptions.hash = hash;
     await this.client.addMagnet(magnetUri, rtOptions);
 
     // Track in history
-    const { hash, name } = parseMagnetUri(magnetUri);
     if (hash) {
       this.trackDownload(hash, name || 'Magnet download', null, options.username, rtOptions.label || null);
     }
@@ -499,11 +502,14 @@ class RtorrentManager extends BaseClientManager {
       throw new Error('rtorrent not connected');
     }
 
+    // Parse hash before loading — needed for post-load property setting
+    const { hash, name, size } = parseTorrentBuffer(torrentData);
+
     const rtOptions = this._buildAddOptions(options);
+    if (hash) rtOptions.hash = hash;
     await this.client.addTorrentRaw(torrentData, rtOptions);
 
     // Track in history
-    const { hash, name, size } = parseTorrentBuffer(torrentData);
     if (hash) {
       this.trackDownload(hash, name || 'Torrent download', size, options.username, rtOptions.label || null);
     }

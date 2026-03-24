@@ -726,26 +726,9 @@ class RtorrentHandler {
    * @param {Object} options - Options (label, directory, start, priority)
    */
   async addTorrentRaw(torrentData, options = {}) {
-    // Use load.raw_start for immediate start, load.raw to add paused
     const method = options.start !== false ? 'load.raw_start' : 'load.raw';
-
-    // The raw torrent data needs to be passed as a buffer
-    const params = ['', torrentData];
-
-    // Add custom commands if options provided
-    if (options.label) {
-      params.push(`d.custom1.set="${options.label}"`);
-    }
-    if (options.directory) {
-      params.push(`d.directory.set="${options.directory}"`);
-    }
-    if (options.priority !== undefined && options.priority !== null) {
-      // Priority: 0=off, 1=low, 2=normal, 3=high
-      const validPriority = Math.max(0, Math.min(3, parseInt(options.priority, 10) || 2));
-      params.push(`d.priority.set=${validPriority}`);
-    }
-
-    await this.call(method, params);
+    await this.call(method, ['', torrentData]);
+    await this._applyPostLoadProperties(options);
   }
 
   /**
@@ -755,22 +738,36 @@ class RtorrentHandler {
    */
   async addMagnet(magnetUri, options = {}) {
     const method = options.start !== false ? 'load.start' : 'load.normal';
+    await this.call(method, ['', magnetUri]);
+    await this._applyPostLoadProperties(options);
+  }
 
-    const params = ['', magnetUri];
+  /**
+   * Set label, directory, and priority on a torrent after loading.
+   * Called after load.raw_start / load.start to avoid rTorrent's 4KB
+   * execute arg buffer overflow (exec_file.cc buffer_size = 4096).
+   * @param {Object} options - { hash, label, directory, priority }
+   */
+  async _applyPostLoadProperties(options) {
+    if (!options.hash) return;
+    const hasProps = options.label || options.directory || options.priority !== undefined;
+    if (!hasProps) return;
 
+    const hash = options.hash.toUpperCase();
+    const calls = [];
     if (options.label) {
-      params.push(`d.custom1.set="${options.label}"`);
+      calls.push({ method: 'd.custom1.set', params: [hash, options.label] });
     }
     if (options.directory) {
-      params.push(`d.directory.set="${options.directory}"`);
+      calls.push({ method: 'd.directory.set', params: [hash, options.directory] });
     }
     if (options.priority !== undefined && options.priority !== null) {
-      // Priority: 0=off, 1=low, 2=normal, 3=high
       const validPriority = Math.max(0, Math.min(3, parseInt(options.priority, 10) || 2));
-      params.push(`d.priority.set=${validPriority}`);
+      calls.push({ method: 'd.priority.set', params: [hash, validPriority] });
     }
-
-    await this.call(method, params);
+    if (calls.length > 0) {
+      await this.multicall(calls);
+    }
   }
 
   /**

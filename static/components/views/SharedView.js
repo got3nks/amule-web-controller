@@ -12,7 +12,7 @@ import { itemKey } from '../../utils/itemKey.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useDataFetch } from '../../contexts/DataFetchContext.js';
-import { useViewDeleteModal, useBatchExport, useViewFilters, usePageSelection, useItemActions, useCategoryFilterOptions, useItemContextMenu, useColumnConfig, getSecondarySortConfig, useFileInfoModal, useFileCategoryModal, useFileRenameModal } from '../../hooks/index.js';
+import { useViewDeleteModal, useBatchExport, useViewFilters, usePageSelection, useItemActions, useCategoryFilterOptions, useItemContextMenu, useColumnConfig, getSecondarySortConfig, useFileInfoModal, useFileCategoryModal, useFileMoveModal, useFileRenameModal } from '../../hooks/index.js';
 import { useActions } from '../../contexts/ActionsContext.js';
 import { useStickyToolbar } from '../../contexts/StickyHeaderContext.js';
 import { useCapabilities } from '../../hooks/useCapabilities.js';
@@ -165,6 +165,12 @@ const SharedView = () => {
     dataArray: sharedFiles
   });
 
+  // Move modal
+  const { openMoveModal, handleBatchMove, FileMoveModalElement } = useFileMoveModal({
+    getSelectedHashes,
+    dataArray: sharedFiles
+  });
+
   // ============================================================================
   // ITEM ACTIONS (single + batch)
   // ============================================================================
@@ -210,6 +216,7 @@ const SharedView = () => {
     onShowInfo: handleShowInfo,
     onDelete: hasCap('remove_downloads') ? (item) => handleDeleteClick(item.hash, item.name, item.client || 'amule', item.instanceId) : null,
     onCategoryChange: (item) => openCategoryModal(item.hash, item.name, item.category || 'Default', item.instanceId),
+    onMoveTo: openMoveModal,
     onPause: handlePause,
     onResume: handleResume,
     onStop: handleStop,
@@ -532,6 +539,7 @@ const SharedView = () => {
       hasSelectedBittorrentItems && hasCap('pause_resume') && h(Button, { variant: 'success', onClick: handleBatchResume, icon: 'play', iconSize: 14 }, 'Resume'),
       hasSelectedBittorrentItems && hasCap('pause_resume') && h(Button, { variant: 'secondary', onClick: handleBatchStop, icon: 'stop', iconSize: 14 }, 'Stop'),
       hasCap('assign_categories') && h(Button, { variant: 'orange', onClick: handleBatchSetCategory, icon: 'folder', iconSize: 14 }, 'Edit Category'),
+      hasCap('edit_downloads') && h(Button, { variant: 'cyan', onClick: handleBatchMove, icon: 'folderOpen', iconSize: 14 }, 'Move to...'),
       h(Button, { variant: batchCopyStatus === 'success' ? 'success' : 'purple', onClick: handleBatchExport, disabled: batchCopyStatus === 'success', icon: batchCopyStatus === 'success' ? 'check' : 'share', iconSize: 14 }, batchCopyStatus === 'success' ? 'Copied!' : 'Export Links'),
       hasCap('remove_downloads') && h(Button, { variant: 'danger', onClick: handleBatchDeleteClick, icon: 'trash', iconSize: 14 }, 'Delete')
     ),
@@ -553,6 +561,8 @@ const SharedView = () => {
     FileRenameElement,
 
     FileCategoryModalElement,
+
+    FileMoveModalElement,
 
     h(MobileFilterSheet, {
       show: mobileFilters.showFilterSheet,

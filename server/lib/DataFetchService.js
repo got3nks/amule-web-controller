@@ -127,13 +127,20 @@ class DataFetchService extends BaseModule {
 
     for (const item of items) {
       if (!item.name) continue;
-      // Detect unresolved magnet names: 40-char hex hash with .meta suffix
-      if (!/^[a-fA-F0-9]{40}\.meta$/.test(item.name)) continue;
 
-      const historyEntry = this.downloadHistoryDB.getByHash(item.hash, item.instanceId);
-      if (historyEntry?.filename && historyEntry.filename !== 'Unknown' && historyEntry.filename !== 'Magnet download') {
-        item.name = historyEntry.filename;
-        item.nameResolving = true;
+      // Always set nameResolving explicitly (not undefined) because
+      // JSON.stringify drops undefined values, preventing the delta
+      // engine from clearing the flag on the frontend.
+      if (/^[a-fA-F0-9]{40}\.meta$/.test(item.name)) {
+        const historyEntry = this.downloadHistoryDB.getByHash(item.hash, item.instanceId);
+        if (historyEntry?.filename && historyEntry.filename !== 'Unknown' && historyEntry.filename !== 'Magnet download') {
+          item.name = historyEntry.filename;
+          item.nameResolving = true;
+        } else {
+          item.nameResolving = false;
+        }
+      } else {
+        item.nameResolving = false;
       }
     }
   }

@@ -20,6 +20,7 @@ import { useCapabilities } from './useCapabilities.js';
  * @param {Function} options.onShowInfo - Handler for showing item info (required)
  * @param {Function} options.onDelete - Handler for deleting item (required)
  * @param {Function} options.onCategoryChange - Handler for changing category (optional - shows menu item if provided)
+ * @param {Function} options.onMoveTo - Handler for moving files (optional - shows menu item if provided)
  * @param {Function} options.onPause - Handler for pausing item (optional)
  * @param {Function} options.onResume - Handler for resuming item (optional)
  * @param {Function} options.onStop - Handler for stopping item (optional - rtorrent only)
@@ -40,6 +41,7 @@ export const useItemContextMenu = ({
   onShowInfo,
   onDelete,
   onCategoryChange,
+  onMoveTo,
   onPause,
   onResume,
   onStop,
@@ -93,6 +95,21 @@ export const useItemContextMenu = ({
         iconColor: 'text-orange-600 dark:text-orange-400',
         onClick: () => {
           onCategoryChange(item);
+          closeContextMenu?.();
+        }
+      });
+    }
+
+    // Move to... (gated on ownership + edit_downloads capability)
+    // Hide for clients that can't relocate active downloads (e.g., aMule temp files)
+    const canMoveItem = caps.moveActiveDownloads || item.complete || (item.shared && !item.downloading);
+    if (onMoveTo && canMoveItem && hasCap('edit_downloads') && canMutate && status.key !== 'moving') {
+      menuItems.push({
+        label: 'Move to...',
+        icon: 'folderOpen',
+        iconColor: 'text-teal-600 dark:text-teal-400',
+        onClick: () => {
+          onMoveTo(item);
           closeContextMenu?.();
         }
       });
@@ -200,6 +217,7 @@ export const useItemContextMenu = ({
     onShowInfo,
     canShowInfo,
     onCategoryChange,
+    onMoveTo,
     onPause,
     onResume,
     onStop,

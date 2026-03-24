@@ -354,6 +354,10 @@ export const WebSocketProvider = ({ children }) => {
         }
       },
       'batch-category-changed': () => handleBatchComplete('category change'),
+      'batch-move-complete': () => {
+        const successCount = data.results?.filter(r => r.success && !r.skipped).length || 0;
+        if (successCount > 0) addAppSuccess(`Moving ${successCount} file${successCount !== 1 ? 's' : ''}`);
+      },
       'batch-label-changed': () => handleBatchComplete('label change'),
       'servers-update': () => {
         setDataServers(data.data?.EC_TAG_SERVER || []);

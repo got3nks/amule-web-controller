@@ -47,6 +47,7 @@ const CLIENT_TYPES = {
       removeSharedMustDeleteFiles: true, // removing a shared file requires deleting it from disk (can't just "unshare")
       moveSharedForCategoryChange: true, // shared files must be physically moved for category change (no API to recategorize in-place)
       refreshSharedAfterMove: true,  // needs refreshSharedFiles() after move
+      moveActiveDownloads: false,  // active downloads use temp files managed by aMule — can't be relocated
       pauseBeforeMove: false,      // no file handle release needed
       trackers: false,             // ed2k has no tracker concept
       search: true,                // ed2k search supported
@@ -96,6 +97,7 @@ const CLIENT_TYPES = {
       removeSharedMustDeleteFiles: false,
       moveSharedForCategoryChange: false,
       refreshSharedAfterMove: false,
+      moveActiveDownloads: true,   // can relocate active downloads
       pauseBeforeMove: true,       // must close/stop before file move
       trackers: true,              // has tracker info
       search: false,               // no search API
@@ -162,6 +164,7 @@ const CLIENT_TYPES = {
       removeSharedMustDeleteFiles: false,
       moveSharedForCategoryChange: false,
       refreshSharedAfterMove: false,
+      moveActiveDownloads: true,   // can relocate active downloads
       pauseBeforeMove: true,       // should pause before manual move
       trackers: true,              // has tracker info
       search: false,               // no search API (Prowlarr handles this)
@@ -209,6 +212,7 @@ const CLIENT_TYPES = {
       removeSharedMustDeleteFiles: false,
       moveSharedForCategoryChange: false,
       refreshSharedAfterMove: false,
+      moveActiveDownloads: true,   // can relocate active downloads
       pauseBeforeMove: false,      // Deluge handles move internally
       trackers: true,              // has tracker info
       search: false,               // no search API
@@ -256,6 +260,7 @@ const CLIENT_TYPES = {
       removeSharedMustDeleteFiles: false,
       moveSharedForCategoryChange: false,
       refreshSharedAfterMove: false,
+      moveActiveDownloads: true,     // can relocate active downloads
       pauseBeforeMove: false,        // Transmission handles move internally
       trackers: true,                // has tracker info
       search: false,                 // no search API

@@ -32,6 +32,7 @@ export { useItemContextMenu } from './useItemContextMenu.js';
 export { useColumnConfig, getSecondarySortConfig } from './useColumnConfig.js';
 export { useFileInfoModal } from './useFileInfoModal.js';
 export { useFileCategoryModal } from './useFileCategoryModal.js';
+export { useFileMoveModal } from './useFileMoveModal.js';
 export { useFileRenameModal } from './useFileRenameModal.js';
 export { useNotifications } from './useNotifications.js';
 export { useBitTorrentClientSelector } from './useBitTorrentClientSelector.js';

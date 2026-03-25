@@ -288,7 +288,10 @@ class DelugeManager extends BaseClientManager {
         listenPort: this.cachedListenPort
       };
     } catch (err) {
-      this.log('Error fetching Deluge stats:', logger.errorDetail(err));
+      this.log('❌ Error fetching Deluge stats:', logger.errorDetail(err));
+      this._setConnectionError(err);
+      if (this.client) this.client.connected = false;
+      this.scheduleReconnect(30000);
       return {
         uploadSpeed: 0,
         downloadSpeed: 0,

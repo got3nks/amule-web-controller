@@ -253,6 +253,9 @@ class QbittorrentManager extends BaseClientManager {
       };
     } catch (err) {
       this.log('❌ Error fetching qBittorrent stats:', logger.errorDetail(err));
+      this._setConnectionError(err);
+      if (this.client) this.client.connected = false;
+      this.scheduleReconnect(30000);
       const fallback = this.lastStats || {};
       return {
         uploadSpeed: fallback.up_info_speed || 0,

@@ -216,6 +216,9 @@ class RtorrentManager extends BaseClientManager {
       return stats;
     } catch (err) {
       this.log('❌ Error fetching rtorrent stats:', logger.errorDetail(err));
+      this._setConnectionError(err);
+      this.client = null;
+      this.scheduleReconnect(30000);
       return this.lastStats || { downloadSpeed: 0, uploadSpeed: 0, downloadTotal: 0, uploadTotal: 0 };
     }
   }

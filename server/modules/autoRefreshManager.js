@@ -60,6 +60,9 @@ class AutoRefreshManager extends BaseModule {
         try {
           const stats = await manager.getStats();
 
+          // Skip empty stats (client unresponsive) — don't record zero metrics
+          if (!stats || Object.keys(stats).length === 0) continue;
+
           instanceStats.push({
             instanceId: manager.instanceId,
             clientType: manager.clientType,

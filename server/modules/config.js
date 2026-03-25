@@ -708,9 +708,13 @@ class Config extends BaseModule {
       for (const [i, entry] of config.clients.entries()) {
         const label = entry.name || `${entry.type} #${i + 1}`;
         if (entry.enabled === false) continue;
-        if (!entry.host) errors.push(`${label}: host is required`);
-        if (!entry.port || entry.port < 1 || entry.port > 65535) {
-          errors.push(`${label}: invalid port`);
+        if (entry.mode === 'scgi-socket') {
+          if (!entry.socketPath) errors.push(`${label}: socket path is required`);
+        } else {
+          if (!entry.host) errors.push(`${label}: host is required`);
+          if (!entry.port || entry.port < 1 || entry.port > 65535) {
+            errors.push(`${label}: invalid port`);
+          }
         }
         if (entry.type === 'amule' && !entry.password) {
           // Skip if password comes from env (stripped by removeEnvVars, refilled at runtime)
@@ -763,12 +767,18 @@ class Config extends BaseModule {
     if (Array.isArray(config.clients)) {
       const seen = new Map(); // id → entry name/label
       for (const entry of config.clients) {
-        if (!entry.type || !entry.host || !entry.port) continue;
-        const id = entry.id || instanceId.generateId(entry.type, entry.host, entry.port);
+        if (!entry.type) continue;
+        if (entry.mode === 'scgi-socket') {
+          if (!entry.socketPath) continue;
+        } else if (!entry.host || !entry.port) {
+          continue;
+        }
+        const id = entry.id || instanceId.generateId(entry.type, entry.host, entry.port, entry.socketPath);
+        const label = entry.mode === 'scgi-socket' ? `${entry.type}@${entry.socketPath}` : `${entry.type}@${entry.host}:${entry.port}`;
         if (seen.has(id)) {
-          errors.push(`Duplicate client configuration: "${entry.name || entry.type}" conflicts with "${seen.get(id)}" (same type+host+port → id "${id}")`);
+          errors.push(`Duplicate client configuration: "${entry.name || entry.type}" conflicts with "${seen.get(id)}" (same id "${id}")`);
         } else {
-          seen.set(id, entry.name || `${entry.type}@${entry.host}:${entry.port}`);
+          seen.set(id, entry.name || label);
         }
       }
     }

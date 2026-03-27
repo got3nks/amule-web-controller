@@ -298,10 +298,10 @@ const UserModal = ({ show, mode = 'create', user, onSave, onClose, onRegenerateA
             h('p', { className: 'text-sm' }, 'Administrators have all capabilities implicitly. Individual capability selection is not needed.')
           ),
 
-          // API Key section (edit mode, admin users only)
-          isEdit && isAdmin && h('div', { className: 'pt-2' },
+          // API Key section (edit mode, all users)
+          isEdit && h('div', { className: 'pt-2' },
             h('label', { className: 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1' }, 'API Key'),
-            h('p', { className: 'text-xs text-gray-500 mb-2' }, 'Used for Torznab and qBittorrent-compatible API authentication'),
+            h('p', { className: 'text-xs text-gray-500 mb-2' }, 'Used for REST API, Torznab and qBittorrent-compatible API authentication'),
             apiKey
               ? h('div', { className: 'flex items-center gap-2' },
                   h('code', { className: 'flex-1 text-xs bg-gray-100 dark:bg-gray-900 px-3 py-2 rounded font-mono break-all select-all' }, apiKey),

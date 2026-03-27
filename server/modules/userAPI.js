@@ -253,10 +253,6 @@ class UserAPI extends BaseModule {
       const user = this.userManager.getUser(id);
       if (!user) return response.notFound(res, 'User not found');
 
-      if (!user.is_admin) {
-        return response.badRequest(res, 'API keys are only available for admin users');
-      }
-
       const apiKey = this.userManager.regenerateApiKey(id);
       this.log(`👤 Admin ${req.session.username} regenerated API key for: ${user.username}`);
 

@@ -151,10 +151,7 @@ class UserManager {
     }
 
     const now = Date.now();
-    let apiKey = null;
-    if (isAdmin) {
-      apiKey = crypto.randomBytes(32).toString('hex');
-    }
+    const apiKey = crypto.randomBytes(32).toString('hex');
 
     const insertUser = this.db.prepare(`
       INSERT INTO users (username, password_hash, is_admin, api_key, created_at, updated_at)

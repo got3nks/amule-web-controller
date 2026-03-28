@@ -457,6 +457,38 @@ async function initializeServices() {
 }
 
 // ============================================================================
+// HTTP LISTENER WITH IPv6 FALLBACK
+// ============================================================================
+
+/**
+ * Start the HTTP server with automatic IPv4 fallback.
+ * Tries the configured host (default '::' for dual-stack), falls back to
+ * '0.0.0.0' if IPv6 is not available (EAFNOSUPPORT / EADDRNOTAVAIL).
+ */
+function startServerListen(onReady) {
+  const port = config.PORT;
+  const host = config.HOST;
+
+  const onListening = (boundHost) => {
+    const label = (boundHost === '::' || boundHost === '0.0.0.0') ? 'listening on all interfaces' : `bound to ${boundHost}`;
+    log(`🚀 aMuTorrent web UI running on http://localhost:${port} — ${label}`);
+    log(`📊 WebSocket server ready`);
+    if (onReady) onReady();
+  };
+
+  server.once('error', (err) => {
+    if ((err.code === 'EAFNOSUPPORT' || err.code === 'EADDRNOTAVAIL') && host === '::') {
+      log(`⚠️  IPv6 not available (${err.code}), falling back to 0.0.0.0`);
+      server.listen(port, '0.0.0.0', () => onListening('0.0.0.0'));
+    } else {
+      throw err;
+    }
+  });
+
+  server.listen(port, host, () => onListening(host));
+}
+
+// ============================================================================
 // SERVER STARTUP
 // ============================================================================
 
@@ -499,9 +531,7 @@ async function startServer() {
 
     // In first-run mode, only start HTTP server and WebSocket
     // Don't initialize aMule, GeoIP, or Arr services until configured
-    server.listen(config.PORT, config.HOST, () => {
-      log(`🚀 aMuTorrent web UI running on http://localhost:${config.PORT} — ${config.HOST === '::' ? 'listening on all interfaces' : `bound to ${config.HOST}`}`);
-      log(`📊 WebSocket server ready`);
+    startServerListen(() => {
       log(`⚙️  SETUP MODE - Complete configuration via web interface`);
     });
   } else {
@@ -512,9 +542,7 @@ async function startServer() {
     await initializeServices();
 
     // Start HTTP server
-    server.listen(config.PORT, config.HOST, () => {
-      log(`🚀 aMuTorrent web UI running on http://localhost:${config.PORT} — ${config.HOST === '::' ? 'listening on all interfaces' : `bound to ${config.HOST}`}`);
-      log(`📊 WebSocket server ready`);
+    startServerListen(() => {
       registry.forEach((manager, instanceId) => {
         const cc = config.getClientConfig(instanceId);
         if (cc) log(`🔌 ${cc.name}: ${cc.host}:${cc.port}`);

@@ -1235,10 +1235,7 @@ class Config extends BaseModule {
   }
 
   get HOST() {
-    const host = this.runtimeConfig?.server?.host || '::';
-    // 0.0.0.0 (IPv4-only) breaks healthchecks that resolve localhost to ::1
-    // Use :: (dual-stack) for the "all interfaces" case
-    return host === '0.0.0.0' ? '::' : host;
+    return this.runtimeConfig?.server?.host || '::';
   }
 
   get SONARR_URL() {

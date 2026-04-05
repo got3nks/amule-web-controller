@@ -14,6 +14,7 @@ import FlagIcon from '../components/common/FlagIcon.js';
 import { formatBytes, formatSpeed, formatLastSeenComplete, getTimeBasedColor, formatRatio, formatTimeAgo, formatDateTime, formatETASeconds } from './formatters.js';
 import { makeFilterHeaderRender } from './tableHelpers.js';
 import { STATUS_DISPLAY_MAP, getItemStatusInfo, formatSourceDisplay, getSeederColorClass, getClientSoftware, getIpString, isBittorrentClient } from './downloadHelpers.js';
+import { UPLOAD_STATE_LABELS } from './constants.js';
 
 const { createElement: h } = React;
 
@@ -533,6 +534,17 @@ export const buildUploadSpeedColumn = ({
     const activeUploads = showActiveUploads ? (item.peers || []).filter(p => p.uploadRate > 0).length : 0;
     const isDisabled = typeof disabled === 'function' ? disabled(item) : disabled;
     const isClickable = onClick && !isDisabled;
+
+    // Show upload state label for non-active peers (queued, connecting, etc.)
+    if (ulSpeed <= 0 && item.uploadState !== undefined && item.uploadState !== 0) {
+      const stateLabel = UPLOAD_STATE_LABELS[item.uploadState];
+      if (stateLabel) {
+        return h('span', { className: 'text-xs flex items-center gap-1 text-amber-600 dark:text-amber-400' },
+          h(Icon, { name: 'clock', size: 12 }),
+          stateLabel
+        );
+      }
+    }
 
     if (ulSpeed <= 0 && activeUploads === 0) {
       return h('span', { className: 'text-xs' }, '-');

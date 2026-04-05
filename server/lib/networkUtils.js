@@ -28,18 +28,24 @@ function isValidIP(ip) {
  * Maps numeric client ID to human-readable name
  */
 const CLIENT_SOFTWARE_LABELS = {
-  0: 'aMule',
-  1: 'eMule',
-  2: 'eMule Compat',
-  3: 'xMule',
-  4: 'lMule',
-  5: 'aMule',
-  6: 'Shareaza',
-  7: 'Old MLDonkey',
-  8: 'Old MLDonkey',
-  9: 'Old MLDonkey',
-  10: 'MLDonkey',
-  0xff: 'Unknown'
+  0x00: 'eMule',           // SO_EMULE
+  0x01: 'cDonkey',         // SO_CDONKEY
+  0x02: '(l/x)Mule',      // SO_LXMULE
+  0x03: 'aMule',           // SO_AMULE
+  0x04: 'Shareaza',        // SO_SHAREAZA
+  0x05: 'eMule+',          // SO_EMULEPLUS
+  0x06: 'HydraNode',       // SO_HYDRANODE
+  0x0a: 'MLDonkey',        // SO_NEW2_MLDONKEY
+  0x14: 'lphant',          // SO_LPHANT
+  0x28: 'Shareaza',        // SO_NEW2_SHAREAZA
+  0x32: 'eDonkeyHybrid',   // SO_EDONKEYHYBRID
+  0x33: 'eDonkey',         // SO_EDONKEY
+  0x34: 'Old MLDonkey',    // SO_MLDONKEY
+  0x35: 'eMule',           // SO_OLDEMULE
+  0x36: 'Unknown',         // SO_UNKNOWN
+  0x44: 'Shareaza',        // SO_NEW_SHAREAZA
+  0x98: 'MLDonkey',        // SO_NEW_MLDONKEY
+  0xff: 'eMule Compatible' // SO_COMPAT_UNK
 };
 
 /**

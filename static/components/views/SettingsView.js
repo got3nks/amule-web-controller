@@ -16,6 +16,7 @@ import { useAppState } from '../../contexts/AppStateContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { LoadingSpinner, AlertBox, IconButton, Input, Select, Button, Icon, Portal } from '../common/index.js';
 import DirectoryBrowserModal from '../modals/DirectoryBrowserModal.js';
+import SharedDirsModal from '../modals/SharedDirsModal.js';
 import { TYPE_LABELS } from '../settings/ClientInstanceModal.js';
 import {
   ConfigSection,
@@ -93,6 +94,9 @@ const SettingsView = () => {
       setOpenSections(prev => ({ ...prev, [key]: false }));
     }
   };
+  // Shared dirs modal state (for aMule instance cards)
+  const [sharedDirsModal, setSharedDirsModal] = useState({ show: false, instanceId: null });
+
   const [showScriptBrowser, setShowScriptBrowser] = useState(false);
   const [interfaces, setInterfaces] = useState([{ value: '0.0.0.0', label: 'All Interfaces (0.0.0.0)' }]);
 
@@ -601,6 +605,9 @@ const SettingsView = () => {
             onToggle: handleToggleClient,
             onRemove: removeInstance,
             onTest: handleTestClient,
+            onSharedDirs: client.type === 'amule'
+              ? (instanceId) => setSharedDirsModal({ show: true, instanceId })
+              : undefined,
             isTesting,
             testResult: clientTestResults[clientIndex],
             instanceStatus: instances[client.id] || null
@@ -1110,6 +1117,13 @@ const SettingsView = () => {
         updateField('eventScripting', 'scriptPath', filePath);
       },
       onClose: () => setShowScriptBrowser(false)
+    }),
+
+    // Shared dirs modal (for aMule instance cards)
+    h(SharedDirsModal, {
+      show: sharedDirsModal.show,
+      onClose: () => setSharedDirsModal({ show: false, instanceId: null }),
+      initialInstanceId: sharedDirsModal.instanceId
     }),
 
     // Test summary

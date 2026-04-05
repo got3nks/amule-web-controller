@@ -62,6 +62,55 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
   const chartInstance = useRef(null);
   const [chartReady, setChartReady] = useState(false);
 
+  // Crosshair hover state — ref for sync plugin access, state for React render
+  const [hoveredIndex, setHoveredIndex] = useState(null);
+  const hoveredIndexRef = useRef(null);
+  const sampledDataRef = useRef([]);
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
+
+  // Chart.js plugin: vertical crosshair line at hover/touch position
+  const crosshairPluginRef = useRef({
+    id: 'crosshair',
+    afterEvent(chart, args) {
+      const event = args.event;
+      if (event.type === 'mouseout' || event.type === 'touchend') {
+        if (hoveredIndexRef.current !== null) {
+          hoveredIndexRef.current = null;
+          setHoveredIndex(null);
+          args.changed = true;
+        }
+        return;
+      }
+      const elements = chart.getElementsAtEventForMode(event, 'index', { intersect: false }, false);
+      const newIndex = elements.length > 0 ? elements[0].index : null;
+      if (newIndex !== hoveredIndexRef.current) {
+        hoveredIndexRef.current = newIndex;
+        setHoveredIndex(newIndex);
+        args.changed = true;
+      }
+    },
+    afterDraw(chart) {
+      const index = hoveredIndexRef.current;
+      if (index == null) return;
+      const meta = chart.getDatasetMeta(0);
+      if (!meta.data[index]) return;
+      const x = meta.data[index].x;
+      const { top, bottom } = chart.chartArea;
+      const ctx = chart.ctx;
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(x, top);
+      ctx.lineTo(x, bottom);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = themeRef.current === 'dark'
+        ? 'rgba(209, 213, 219, 0.5)'
+        : 'rgba(107, 114, 128, 0.5)';
+      ctx.stroke();
+      ctx.restore();
+    }
+  });
+
   // Get client connection status from context
   const { ed2kConnected, bittorrentConnected } = useClientFilter();
   const { instances } = useStaticData();
@@ -98,6 +147,7 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
 
     // Downsample data - 288 points max (1 per 5 mins for 24h)
     const sampledData = downsampleData(speedData.data, selectedNetwork, 288);
+    sampledDataRef.current = sampledData;
 
     const labels = sampledData.map(d => {
       const date = new Date(d.timestamp);
@@ -111,20 +161,18 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
     const uploadData = sampledData.map(d => d.uploadSpeed || 0);
     const downloadData = sampledData.map(d => d.downloadSpeed || 0);
 
-    // If chart exists, update data and theme colors
+    // If chart exists, update data
     if (chartInstance.current) {
       chartInstance.current.data.labels = labels;
       chartInstance.current.data.datasets[0].data = uploadData;
       chartInstance.current.data.datasets[1].data = downloadData;
-      // Update tooltip colors for theme
-      const isDark = theme === 'dark';
-      chartInstance.current.options.plugins.tooltip.backgroundColor = isDark ? '#1f2937' : '#ffffff';
-      chartInstance.current.options.plugins.tooltip.titleColor = isDark ? '#e5e7eb' : '#1f2937';
-      chartInstance.current.options.plugins.tooltip.bodyColor = isDark ? '#e5e7eb' : '#1f2937';
-      chartInstance.current.options.plugins.tooltip.borderColor = isDark ? '#374151' : '#e5e7eb';
       chartInstance.current.update('none');
       return;
     }
+
+    // Creating a new chart — clear any stale hover state
+    hoveredIndexRef.current = null;
+    setHoveredIndex(null);
 
     // Create new chart
     const ctx = canvasRef.current.getContext('2d');
@@ -160,38 +208,21 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
+        events: ['mousemove', 'mouseout', 'touchstart', 'touchmove', 'touchend'],
         interaction: {
           mode: 'index',
           intersect: false
         },
         plugins: {
-          legend: {
-            display: false
-          },
-          tooltip: {
-            enabled: true,
-            backgroundColor: theme === 'dark' ? '#1f2937' : '#ffffff',
-            titleColor: theme === 'dark' ? '#e5e7eb' : '#1f2937',
-            bodyColor: theme === 'dark' ? '#e5e7eb' : '#1f2937',
-            borderColor: theme === 'dark' ? '#374151' : '#e5e7eb',
-            borderWidth: 1,
-            callbacks: {
-              label: function(context) {
-                return context.dataset.label + ': ' + formatSpeed(context.parsed.y);
-              }
-            }
-          }
+          legend: { display: false },
+          tooltip: { enabled: false }
         },
         scales: {
-          x: {
-            display: false
-          },
-          y: {
-            display: false,
-            beginAtZero: true
-          }
+          x: { display: false },
+          y: { display: false, beginAtZero: true }
         }
-      }
+      },
+      plugins: [crosshairPluginRef.current]
     });
 
     return () => {
@@ -320,6 +351,14 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
     }, h(ClientIcon, { clientType: 'bittorrent', size: 16 }))
   );
 
+  // Determine displayed speeds: hovered historical point or live current
+  const hoveredPoint = hoveredIndex != null ? sampledDataRef.current[hoveredIndex] : null;
+  const displayUpload = hoveredPoint ? hoveredPoint.uploadSpeed : uploadSpeed;
+  const displayDownload = hoveredPoint ? hoveredPoint.downloadSpeed : downloadSpeed;
+  const hoveredTime = hoveredPoint
+    ? new Date(hoveredPoint.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+    : null;
+
   // Check if data is loading
   const isLoading = !speedData?.data || !stats;
 
@@ -338,7 +377,7 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
       },
         h('canvas', {
           ref: canvasRef,
-          style: { width: '100%', height: '100%', maxWidth: '100%' }
+          style: { width: '100%', height: '100%', maxWidth: '100%', touchAction: 'none' }
         })
       ),
       // Empty placeholder when loading (outer overlay handles the spinner)
@@ -360,8 +399,9 @@ const MobileSpeedWidget = ({ speedData, stats, theme }) => {
             h('div', { className: 'h-3 w-12 bg-gray-200 dark:bg-gray-600 rounded' })
           )
         : h('div', { className: 'flex items-center gap-3' },
-            h('span', { className: 'text-xs font-semibold text-green-600 dark:text-green-400' }, `↑ ${formatSpeed(uploadSpeed)}`),
-            h('span', { className: 'text-xs font-semibold text-blue-600 dark:text-blue-400' }, `↓ ${formatSpeed(downloadSpeed)}`)
+            hoveredTime && h('span', { className: 'text-xs font-medium text-gray-500 dark:text-gray-400' }, hoveredTime),
+            h('span', { className: 'text-xs font-semibold text-green-600 dark:text-green-400' }, `↑ ${formatSpeed(displayUpload)}`),
+            h('span', { className: 'text-xs font-semibold text-blue-600 dark:text-blue-400' }, `↓ ${formatSpeed(displayDownload)}`)
           )
     )
   );

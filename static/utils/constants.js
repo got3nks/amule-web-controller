@@ -4,6 +4,18 @@
  * Configuration values and constants used throughout the application
  */
 
+// aMule upload state labels (from EC_UPLOAD_STATE in ECDefs.js)
+export const UPLOAD_STATE_LABELS = {
+  0: null,            // US_UPLOADING — show speed instead
+  1: 'Queued',        // US_ONUPLOADQUEUE
+  2: 'Callback',      // US_WAITCALLBACK
+  3: 'Connecting',    // US_CONNECTING
+  4: 'Pending',       // US_PENDING
+  5: 'Low ID',        // US_LOWTOLOWIP
+  6: 'Banned',        // US_BANNED
+  7: 'Error',         // US_ERROR
+};
+
 // Pagination
 export const PAGE_SIZE_DESKTOP = 100;
 export const PAGE_SIZE_MOBILE = 10;

@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.1] - Upload Peers, Chart Improvements & Fixes
+
+### ✨ Added
+
+- **Queued uploads in Uploads view** — shows queued, connecting, and pending aMule upload peers (not just active uploaders). Upload state labels (e.g. "Queued", "Connecting") shown with clock icon when peer has no active transfer
+- **Shared Dirs button in Settings** — aMule client cards show a "Shared Dirs" button when connected, opening the Shared Dirs modal pre-selected to that instance
+- **Chart crosshair interaction (mobile)** — home speed widget replaces the obstructive tooltip with a vertical crosshair line; hovering/touching shows historical speed + timestamp in the status bar, reverting to live speeds on release
+- **Chart tooltip timestamps (Statistics)** — 7-day and 30-day chart tooltips now show `DD/MM HH:MM` instead of just `DD/MM`
+
+### 🐛 Fixed
+
+- **eMule client software labels** — `CLIENT_SOFTWARE_LABELS` mapping corrected to match aMule source `EClientSoftware` enum (18 client types); SO_EMULE=0 was incorrectly mapped to "aMule" instead of "eMule"
+
+### 📦 Dependencies
+
+- **amule-ec-node** — updated with authentication salt fix (leading zeros)
+
+---
+
 ## [3.6.0] - Custom Save Path, aMule Shared Directory Management & Improvements
 
 ### ✨ Added

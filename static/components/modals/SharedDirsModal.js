@@ -16,14 +16,25 @@ const { createElement: h, useState, useEffect, useCallback } = React;
 /**
  * @param {boolean} show
  * @param {function} onClose
+ * @param {string} [initialInstanceId] - Pre-select this instance when opened from Settings
  */
-const SharedDirsModal = ({ show, onClose }) => {
+const SharedDirsModal = ({ show, onClose, initialInstanceId = null }) => {
+  // When opened with a specific instance (e.g. from Settings card), use external control
+  const [controlledId, setControlledId] = useState(initialInstanceId);
+  useEffect(() => {
+    if (initialInstanceId) setControlledId(initialInstanceId);
+  }, [initialInstanceId]);
+
+  const selectorOptions = initialInstanceId
+    ? { selectedId: controlledId, onSelect: setControlledId }
+    : {};
+
   const {
     connectedInstances: amuleInstances,
     showSelector: showAmuleSelector,
     selectedId: instanceId,
     selectInstance: selectAmuleInstance
-  } = useAmuleInstanceSelector();
+  } = useAmuleInstanceSelector(selectorOptions);
 
   // State
   const [loading, setLoading] = useState(false);

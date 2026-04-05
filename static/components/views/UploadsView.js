@@ -7,7 +7,7 @@
 
 import React from 'https://esm.sh/react@18.2.0';
 import { Icon, Table, FlagIcon, MobileCardHeader, Select, ContextMenu, MoreButton, EmptyState, ItemMobileCard, MobileSortButton, ExpandableSearch, FilterInput, MobileFilterPills, MobileFilterSheet, MobileFilterButton, TrackerLabel } from '../common/index.js';
-import { formatBytes, formatSpeed, getClientSoftware, getIpString, getRowHighlightClass, DEFAULT_SORT_CONFIG, DEFAULT_SECONDARY_SORT_CONFIG, formatTitleCount, buildFileNameColumn, buildSizeColumn, buildUploadSpeedColumn, buildUploadTotalColumn, buildClientColumn, buildCategoryColumn, VIEW_TITLE_STYLES, createCategoryLabelFilter, createTrackerFilter, isBittorrentClient } from '../../utils/index.js';
+import { formatBytes, formatSpeed, getClientSoftware, getIpString, getRowHighlightClass, DEFAULT_SORT_CONFIG, DEFAULT_SECONDARY_SORT_CONFIG, formatTitleCount, buildFileNameColumn, buildSizeColumn, buildUploadSpeedColumn, buildUploadTotalColumn, buildClientColumn, buildCategoryColumn, VIEW_TITLE_STYLES, createCategoryLabelFilter, createTrackerFilter, isBittorrentClient, UPLOAD_STATE_LABELS } from '../../utils/index.js';
 import { useLiveData } from '../../contexts/LiveDataContext.js';
 import { useStaticData } from '../../contexts/StaticDataContext.js';
 import { useViewFilters, useCategoryFilterOptions, useColumnConfig, getSecondarySortConfig, useFileInfoModal } from '../../hooks/index.js';
@@ -28,9 +28,9 @@ const UploadsView = () => {
   // ============================================================================
   // DERIVED DATA
   // ============================================================================
-  // Flatten upload peers from all items
+  // Flatten upload peers from all items (active + queued for aMule)
   const uploadPeers = useMemo(() => dataItems.flatMap(item =>
-    (item.peers || []).filter(p => p.uploadRate > 0).map(peer => ({
+    (item.peers || []).filter(p => p.uploadRate > 0 || p.role === 'upload').map(peer => ({
       ...peer,
       // Parent item fields
       name: item.name,
@@ -239,14 +239,22 @@ const UploadsView = () => {
             item.uploadSession > 0 && h('span', { className: 'text-gray-500 dark:text-gray-400' }, 'Session:'),
             item.uploadSession > 0 && h('span', null, formatBytes(item.uploadSession))
           ),
-          // Row 3: Speed + Client + Tracker
+          // Row 3: Speed (or upload state) + Client + Tracker
           h('div', { className: 'flex items-center gap-2 text-gray-700 dark:text-gray-300 flex-wrap' },
-            h('span', { className: 'font-mono flex items-center gap-1 text-green-600 dark:text-green-400' },
-              (item.uploadRate || 0) > 0
-                ? h('span', { className: 'arrow-animated arrow-up' }, h(Icon, { name: 'arrowUp', size: 12 }))
-                : h(Icon, { name: 'arrowUp', size: 12 }),
-              formatSpeed(item.uploadRate || 0)
-            ),
+            (item.uploadRate || 0) > 0
+              ? h('span', { className: 'font-mono flex items-center gap-1 text-green-600 dark:text-green-400' },
+                  h('span', { className: 'arrow-animated arrow-up' }, h(Icon, { name: 'arrowUp', size: 12 })),
+                  formatSpeed(item.uploadRate || 0)
+                )
+              : (item.uploadState !== undefined && item.uploadState !== 0 && UPLOAD_STATE_LABELS[item.uploadState])
+                ? h('span', { className: 'flex items-center gap-1 text-amber-600 dark:text-amber-400' },
+                    h(Icon, { name: 'clock', size: 12 }),
+                    UPLOAD_STATE_LABELS[item.uploadState]
+                  )
+                : h('span', { className: 'font-mono flex items-center gap-1 text-green-600 dark:text-green-400' },
+                    h(Icon, { name: 'arrowUp', size: 12 }),
+                    formatSpeed(0)
+                  ),
             h('span', { className: 'text-gray-400' }, '·'),
             h('span', null,
               isBittorrent || !item.software || item.software === 'Unknown'

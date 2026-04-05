@@ -24,6 +24,9 @@ const ClientSpeedChart = ({ speedData, networkType, theme, historicalRange }) =>
   const canvasRef = useRef(null);
   const chartInstance = useRef(null);
   const [chartReady, setChartReady] = useState(false);
+  const timestampsRef = useRef([]);
+  const rangeRef = useRef(historicalRange);
+  rangeRef.current = historicalRange;
 
   // Load Chart.js library on mount
   useEffect(() => {
@@ -88,6 +91,15 @@ const ClientSpeedChart = ({ speedData, networkType, theme, historicalRange }) =>
             borderColor: isDark ? '#374151' : '#e5e7eb',
             borderWidth: 1,
             callbacks: {
+              title: function(items) {
+                if (!items.length) return '';
+                const ts = timestampsRef.current[items[0].dataIndex];
+                if (!ts) return items[0].label;
+                const d = new Date(ts);
+                if (rangeRef.current === '24h') return items[0].label;
+                return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })
+                  + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+              },
               label: function(context) {
                 return context.dataset.label + ': ' + formatSpeed(context.parsed.y);
               }
@@ -159,6 +171,8 @@ const ClientSpeedChart = ({ speedData, networkType, theme, historicalRange }) =>
         });
       }
     });
+
+    timestampsRef.current = speedData.data.map(d => d.timestamp);
 
     // Get network-type-specific data keys (e.g. 'ed2kUploadSpeed', 'bittorrentUploadSpeed')
     const uploadSpeedKey = `${networkType}UploadSpeed`;

@@ -27,7 +27,7 @@ const { createElement: h } = React;
  * @param {boolean} isTesting - Whether a test is currently running
  * @param {Object} testResult - Per-instance test result
  */
-const ClientInstanceCard = ({ client, clientIndex, totalClients, onMove, onEdit, onToggle, onRemove, onTest, isTesting, testResult, instanceStatus }) => {
+const ClientInstanceCard = ({ client, clientIndex, totalClients, onMove, onEdit, onToggle, onRemove, onTest, onSharedDirs, isTesting, testResult, instanceStatus }) => {
   const typeLabel = TYPE_LABELS[client.type] || client.type;
   const isEnabled = client.enabled !== false;
   const connectionInfo = client.mode === 'scgi-socket'
@@ -74,13 +74,17 @@ const ClientInstanceCard = ({ client, clientIndex, totalClients, onMove, onEdit,
       })
     ),
 
-    // Connection info + color dot
+    // Connection info + color dot + shared dirs button
     h('div', { className: 'flex items-center gap-2 mb-1' },
       client.color && h('span', {
         className: 'w-3 h-3 rounded-full flex-shrink-0',
         style: { backgroundColor: client.color }
       }),
-      h('span', { className: 'text-sm text-gray-600 dark:text-gray-400' }, connectionInfo)
+      h('span', { className: 'text-sm text-gray-600 dark:text-gray-400' }, connectionInfo),
+      onSharedDirs && instanceStatus?.connected && h('button', {
+        onClick: () => onSharedDirs(client.id),
+        className: 'ml-auto flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded-lg bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/50 transition-colors'
+      }, h(Icon, { name: 'folder', size: 12 }), 'Shared Dirs')
     ),
 
     // Connection status line (from live instance data)
